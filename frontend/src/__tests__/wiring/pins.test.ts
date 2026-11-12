@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { safeStorage } from "../../safeStorage";
 import { PINS_KEY, WiringPins, parsePins } from "../../ui/wiring/wiringPins";
 import { agentNode, buildGraph, DEFAULT_CHOICES, topicNode } from "../../wiring/graph";
-import { layout, reroute } from "../../wiring/layout";
+import { layout, MARGIN, reroute } from "../../wiring/layout";
 import { wiring } from "./fixtures";
 
 const graph = () => buildGraph(wiring(), DEFAULT_CHOICES);
@@ -33,10 +33,19 @@ describe("a box moved by hand", () => {
         expect(placed.height).toBeGreaterThanOrEqual(900 + watch.h);
     });
 
-    it("is never put off the top or the left of the drawing", () => {
+    it("may be put left of and above the drawing's own corner, which then begins there", () => {
+        const plain = layout(graph());
+        expect([plain.left, plain.top]).toEqual([0, 0]);
+
         const placed = layout(graph(), false, new Map([[topicNode("air/alarms"), { x: -50, y: -9 }]]));
 
-        expect(placed.placed.find(p => p.node.id === topicNode("air/alarms"))).toMatchObject({ x: 0, y: 0 });
+        expect(placed.placed.find(p => p.node.id === topicNode("air/alarms"))).toMatchObject({
+            x: -50,
+            y: -9,
+        });
+        // With the margin round it, as on every other side.
+        expect([placed.left, placed.top]).toEqual([-50 - MARGIN, -9 - MARGIN]);
+        expect([placed.width, placed.height]).toEqual([plain.width, plain.height]);
     });
 
     it("takes its lines with it when it moves again", () => {

@@ -35,6 +35,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **The Wiring graph opens fitted to its frame, and can be zoomed and moved about.** It opens from its frame's
+  corner, shown smaller when it is larger than the frame so the whole of it is seen, down to where its words can
+  still be read, and is fitted again as agents come and go or the window changes size, though never under a box as
+  it is moved. Its zoom stands over a corner of the frame: Zoom out, a slider, Zoom in, the percentage and Fit; the
+  wheel, or a pinch on a trackpad, zooms about the pointer. The graph is moved about by a drag on its empty
+  background, never out of sight, and a box can be put anywhere, left of and above where the graph began too. A
+  view set by hand is kept in this browser for each grouping, whatever the graph becomes, until Fit or Reset
+  layout, which is offered once a box was moved or the graph was zoomed or moved about. A box the keyboard gives
+  the focus is brought into the frame. The choices above the graph are set apart by what they are about: how it is
+  grouped, what is shown, and what can be done.
 - **The Wiring graph centres its columns on each other.** A short column stands beside the middle of a long one
   instead of at its top, within its machine's band when grouped, so an agent sits level with what it publishes and
   reads and the lines between them run flatter. A box moved by hand stays where it was put.

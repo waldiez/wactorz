@@ -9,6 +9,10 @@
  * box; one that moves further drags it, the lines following, and chooses
  * nothing. Where it is let go is handed on to be kept as a pin. The keys move
  * it `KEY_STEP` at a time, so a box can be moved without a pointer.
+ *
+ * A box's place is in the drawing's own pixels. Where the drawing is shown
+ * larger or smaller than life, the pointer's travel on the screen is divided
+ * by that scale, so the box stays under the pointer.
  */
 import type { Pin, Placed } from "../../wiring/layout";
 
@@ -31,6 +35,8 @@ export interface Mover {
     moving(placed: Placed): void;
     /** The box was let go, or stepped by a key, at `pin`: keep it there. */
     moved(placed: Placed, pin: Pin): void;
+    /** How much larger than life the drawing is shown. */
+    scale(): number;
 }
 
 /** Whether a press just dragged `box`, so the click it ends in chooses nothing. Asked once. */
@@ -41,8 +47,8 @@ export function wasDragged(box: HTMLElement): boolean {
 }
 
 function place(box: HTMLElement, placed: Placed, x: number, y: number): void {
-    placed.x = Math.max(0, x);
-    placed.y = Math.max(0, y);
+    placed.x = x;
+    placed.y = y;
     box.style.left = `${placed.x}px`;
     box.style.top = `${placed.y}px`;
 }
@@ -65,7 +71,8 @@ export function movable(box: HTMLElement, placed: Placed, mover: Mover): void {
             }
             dragging = true;
             box.classList.add("dragging");
-            place(box, placed, start.left + dx, start.top + dy);
+            const scale = mover.scale();
+            place(box, placed, start.left + dx / scale, start.top + dy / scale);
             mover.moving(placed);
         };
         const end = (): void => {

@@ -14,8 +14,7 @@
  * named for a screen reader as any button is; they come in reading order,
  * column by column, so Tab walks the graph left to right. The lines are
  * drawing only, hidden from assistive technology: what joins what is said in
- * the selection's details, and in full by the list view. The drawing keeps
- * its size and scrolls inside its frame when it is larger than the screen.
+ * the selection's details, and in full by the list view.
  *
  * Each line ends in a handle on the side of the box it meets, drawn over the
  * boxes: a filled dot where it leaves, a ring where it arrives, in the line's
@@ -25,10 +24,17 @@
  *
  * A box can be moved by hand (`wiringDrag`): dragged, or stepped with Alt and
  * an arrow key. The view keeps where it was put as a pin.
+ *
+ * The drawing is seen through its frame, which cuts off what lies outside
+ * it. How large it is shown, and where in the frame, is the host's to say
+ * (`wiringZoom`): the drawing itself is always laid out and drawn at its own
+ * size, from its own corner, and a box may be put anywhere, left of and
+ * above that corner too.
  */
 import { boxLines, type GraphNode } from "../../wiring/graph";
 import {
     extent,
+    LOOP_DROP,
     reroute,
     type Lane,
     type Layout,
@@ -38,6 +44,7 @@ import {
 } from "../../wiring/layout";
 import { el, pressed } from "../dom";
 import { movable, wasDragged } from "./wiringDrag";
+import type { Shown } from "./wiringZoom";
 
 const SVG = "http://www.w3.org/2000/svg";
 
@@ -52,6 +59,10 @@ export interface GraphHost {
     select(id: string): void;
     /** A node was moved by hand, to `pin`: keep it there. */
     moved(id: string, pin: Pin): void;
+    /** How much larger than life the drawing is shown. */
+    scale(): number;
+    /** The drawing was built, or has grown under a box being dragged: show it at its zoom. */
+    shown(shown: Shown): void;
 }
 
 /** The word a screen reader is told before a node's name: what it is. */
@@ -131,7 +142,7 @@ export function linePath(r: Pick<Routed, "x1" | "y1" | "x2" | "y2" | "backwards"
         const bend = Math.max(40, (r.x2 - r.x1) / 2);
         return `M ${r.x1} ${r.y1} C ${r.x1 + bend} ${r.y1}, ${r.x2 - bend} ${r.y2}, ${r.x2} ${r.y2}`;
     }
-    const drop = Math.max(r.y1, r.y2) + 60;
+    const drop = Math.max(r.y1, r.y2) + LOOP_DROP;
     return `M ${r.x1} ${r.y1} C ${r.x1 + 80} ${drop}, ${r.x2 - 80} ${drop}, ${r.x2} ${r.y2}`;
 }
 
@@ -316,9 +327,14 @@ class Marks {
     }
 }
 
+/** How far in from the drawing's sides a machine's band begins and ends, in pixels. */
+const LANE_INSET = 8;
+
 /** A machine's band, labelled, behind its nodes. */
-function laneBand(lane: Lane): HTMLElement {
+function laneBand(lane: Lane, left: number): HTMLElement {
     const band = el("div", "af-wire-lane");
+    // From where the drawing begins, which a box put left of its corner moves.
+    band.style.left = `${left + LANE_INSET}px`;
     band.style.top = `${lane.y}px`;
     band.style.height = `${lane.h}px`;
     band.append(el("span", "af-wire-lane-name", lane.machine || OUTSIDE_LANE));
@@ -333,7 +349,11 @@ function placedButton(p: Placed, host: GraphHost, redraw: () => void): HTMLButto
     box.style.top = `${p.y}px`;
     box.style.width = `${p.w}px`;
     box.style.height = `${p.h}px`;
-    movable(box, p, { moving: redraw, moved: (_p, pin) => host.moved(p.node.id, pin) });
+    movable(box, p, {
+        moving: redraw,
+        moved: (_p, pin) => host.moved(p.node.id, pin),
+        scale: () => host.scale(),
+    });
     return box;
 }
 
@@ -355,29 +375,31 @@ function boxes(layout: Layout, host: GraphHost, marks: Marks, redraw: () => void
 }
 
 /**
- * The drawing of `layout`, in a frame that scrolls when it is larger than the
- * screen. While a box is dragged its lines follow it, and the drawing grows
- * to hold it.
+ * The drawing of `layout`, in its frame. While a box is dragged its lines
+ * follow it, and the drawing grows to hold it.
  */
 export function buildGraph(layout: Layout, host: GraphHost): HTMLElement {
     const frame = el("div", "af-wire-frame");
     const canvas = el("div", "af-wire-canvas");
     const selected = host.selected();
     canvas.classList.toggle("choosing", selected !== "");
-    const size = (width: number, height: number): void => {
-        canvas.style.width = `${width}px`;
-        canvas.style.height = `${height}px`;
+    const size = (covers: Pick<Layout, "left" | "top" | "width" | "height">, moving = false): void => {
+        canvas.style.width = `${covers.width}px`;
+        canvas.style.height = `${covers.height}px`;
+        host.shown({ frame, canvas, ...covers, moving });
     };
-    size(layout.width, layout.height);
+    size(layout);
     const marks = new Marks(layout, selected);
     const redraw = (): void => {
-        const grown = extent(layout.placed, layout.width, layout.height);
-        size(grown.width, grown.height);
-        marks.redraw({ ...layout, ...grown, routed: reroute(layout) });
+        const routed = reroute(layout);
+        const grown = extent(layout.placed, layout.width, layout.height, routed);
+        // Only a box being dragged draws again in place: its scale holds until it is let go.
+        size(grown, true);
+        marks.redraw({ ...layout, ...grown, routed });
     };
     canvas.appendChild(marks.lines);
     if (layout.lanes.length > 1) {
-        canvas.append(...layout.lanes.map(laneBand));
+        canvas.append(...layout.lanes.map(lane => laneBand(lane, layout.left)));
     }
     canvas.append(...boxes(layout, host, marks, redraw));
     canvas.appendChild(marks.handles);

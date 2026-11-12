@@ -25,6 +25,7 @@ import {
     HANDLE_GAP,
     HANDLE_INSET,
     heightOf,
+    LOOP_DROP,
     layout,
     reroute,
     type Layout,
@@ -82,6 +83,9 @@ describe("the layout", () => {
         const placed = layout(graph);
         expect(placed.routed).toHaveLength(graph.edges.length);
         expect(placed.routed.filter(r => r.backwards).map(r => r.edge.to)).toEqual([agentNode("a")]);
+        // The drawing is tall enough to hold the loop the line running back makes beneath its ends.
+        const back = placed.routed.find(r => r.backwards)!;
+        expect(placed.height).toBeGreaterThanOrEqual(Math.max(back.y1, back.y2) + LOOP_DROP);
     });
 
     it("lays out an agent reading its own topic with the topic after it", () => {

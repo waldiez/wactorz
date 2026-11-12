@@ -227,6 +227,12 @@ def test_the_warning_shows_its_topic_alone_and_the_list_says_it_too(
     dashboard.assert_accessible("the wiring, as a list")
 
 
+#: Where a box stands in the drawing, in the drawing's own pixels, and how large the drawing is shown.
+#: The graph is fitted to its frame, and fitted again when a dragged box makes it larger, so a place on
+#: the screen is not a box's place: its place is what the layout holds.
+_PLACE = "box => ({top: parseFloat(box.style.top), scale: box.getBoundingClientRect().width / box.offsetWidth})"
+
+
 @pytest.mark.usefixtures("installed")
 def test_a_box_dragged_stays_where_it_was_put(dashboard: browser.Dashboard) -> None:
     _opened(dashboard)
@@ -234,21 +240,25 @@ def test_a_box_dragged_stays_where_it_was_put(dashboard: browser.Dashboard) -> N
     pong.scroll_into_view_if_needed()
     start = pong.bounding_box()
     assert start is not None
+    before = pong.evaluate(_PLACE)
     mouse = dashboard.page.mouse
 
     mouse.move(start["x"] + 20, start["y"] + 10)
     mouse.down()
     mouse.move(start["x"] + 60, start["y"] + 70, steps=5)
+    held = _node(dashboard, "Agent e2e-pong").bounding_box()
     mouse.up()
 
-    moved = _node(dashboard, "Agent e2e-pong").bounding_box()
-    assert moved is not None and abs(moved["y"] - start["y"] - 60) <= 2, (start, moved)
+    # Under the pointer for as long as it is held, at whatever size the drawing is shown.
+    assert held is not None and abs(held["y"] - start["y"] - 60) <= 2, (start, held)
+    moved = _node(dashboard, "Agent e2e-pong").evaluate(_PLACE)
+    assert abs(moved["top"] - before["top"] - 60 / before["scale"]) <= 2, (before, moved)
     # The drag chose nothing; the place is kept in this browser.
     assert _node(dashboard, "Agent e2e-pong").get_attribute("aria-pressed") == "false"
     dashboard.reload()
     _opened(dashboard)
-    again = _node(dashboard, "Agent e2e-pong").bounding_box()
-    assert again is not None and abs(again["y"] - moved["y"]) <= 2, (moved, again)
+    again = _node(dashboard, "Agent e2e-pong").evaluate(_PLACE)
+    assert abs(again["top"] - moved["top"]) <= 1, (moved, again)
 
     _view(dashboard).get_by_role("button", name="Reset layout").click()
     waiting.until(

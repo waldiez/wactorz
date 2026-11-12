@@ -74,6 +74,8 @@ export const ROW_GAP = 22;
 export const LANE_HEADER = 28;
 /** The margin around the whole drawing. */
 export const MARGIN = 24;
+/** How far beneath its lower end a line running backwards loops. */
+export const LOOP_DROP = 60;
 
 /** A node, placed: its top-left corner. */
 export interface Placed {
@@ -119,6 +121,12 @@ export interface Layout {
     placed: Placed[];
     routed: Routed[];
     lanes: Lane[];
+    /**
+     * Where the drawing begins: nothing, unless a person put a box left of
+     * or above where the layout begins, when it is that far the other way.
+     */
+    left: number;
+    top: number;
     width: number;
     height: number;
 }
@@ -345,15 +353,24 @@ export function reroute(drawing: Pick<Layout, "placed" | "routed">): Routed[] {
     );
 }
 
-/** How large the drawing must be to hold every box, wherever it stands, with the margin round it. */
+/**
+ * What the drawing must cover to hold every box, wherever it stands, and
+ * the loop of every line of `routed` that runs backwards, with the margin
+ * round them: at least `width` by `height` from its own corner, and as far
+ * left of and above that corner as a box was put.
+ */
 export function extent(
     placed: readonly Placed[],
     width: number,
     height: number,
-): { width: number; height: number } {
+    routed: readonly Routed[] = [],
+): Pick<Layout, "left" | "top" | "width" | "height"> {
+    const loops = routed.filter(r => r.backwards).map(r => Math.max(r.y1, r.y2) + LOOP_DROP + MARGIN);
     return {
+        left: Math.min(0, ...placed.map(p => p.x - MARGIN)),
+        top: Math.min(0, ...placed.map(p => p.y - MARGIN)),
         width: Math.max(width, ...placed.map(p => p.x + p.w + MARGIN)),
-        height: Math.max(height, ...placed.map(p => p.y + p.h + MARGIN)),
+        height: Math.max(height, ...placed.map(p => p.y + p.h + MARGIN), ...loops),
     };
 }
 
@@ -390,8 +407,8 @@ export function layout(graph: Graph, grouped = false, pins: Pins = new Map()): L
                 const pin = pins.get(node.id);
                 placed.push({
                     node,
-                    x: pin ? Math.max(0, pin.x) : MARGIN + c * (widest + COLUMN_GAP) + (widest - w) / 2,
-                    y: pin ? Math.max(0, pin.y) : y,
+                    x: pin ? pin.x : MARGIN + c * (widest + COLUMN_GAP) + (widest - w) / 2,
+                    y: pin ? pin.y : y,
                     w,
                     h,
                     column: c,
@@ -406,5 +423,5 @@ export function layout(graph: Graph, grouped = false, pins: Pins = new Map()): L
     const at = new Map(placed.map(p => [p.node.id, p]));
     const routed = routes(graph.edges, at);
     const width = MARGIN * 2 + Math.max(1, cols.length) * (widest + COLUMN_GAP) - COLUMN_GAP;
-    return { placed, routed, lanes, ...extent(placed, width, top + MARGIN) };
+    return { placed, routed, lanes, ...extent(placed, width, top + MARGIN, routed) };
 }

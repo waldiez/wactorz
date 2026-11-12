@@ -61,18 +61,38 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 16px;
+  gap: 8px 20px;
   font-size: 13px;
   color: rgba(255, 255, 255, 0.85);
 }
+/* One set of choices about one thing, named first: how it is grouped, what is shown. */
 .af-wire-segment {
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
+.af-wire-segment + .af-wire-segment {
+  padding-left: 20px;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+.af-wire-segment .af-wire-toggle + .af-wire-toggle {
+  margin-left: 10px;
+}
 .af-wire-segment-label {
-  margin-right: 4px;
+  margin-right: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: rgba(255, 255, 255, 0.65);
+}
+/* What can be done, apart from the choices, at the end of the row. */
+.af-wire-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
 }
 .af-wire-segment-btn,
 .af-wire-btn {
@@ -115,17 +135,96 @@
   flex-direction: column;
   gap: 8px;
 }
-/* The drawing keeps its size; the frame scrolls when it is larger than the screen. */
-.af-wire-frame {
+/* The drawing's frame, with the zoom standing over its corner. */
+.af-wire-drawing {
+  position: relative;
   flex: 1;
   min-height: 240px;
-  overflow: auto;
+  display: flex;
+}
+/* The drawing is seen through its frame, which never scrolls: what lies outside is cut off, and brought in
+   by moving the drawing, by its background or the wheel (ui/wiring/wiringZoom.ts). A finger on it moves the
+   drawing, not the page. */
+.af-wire-frame {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: clip;
+  touch-action: none;
   border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.02);
+  cursor: grab;
 }
+.af-wire-frame.panning {
+  cursor: grabbing;
+  user-select: none;
+}
+/* The drawing keeps its own size, and is scaled and shifted from its corner into the frame. */
 .af-wire-canvas {
-  position: relative;
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+/* Over the frame's lower left corner. */
+.af-wire-zoom {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: #161b25;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.af-wire-zoom-btn {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.af-wire-zoom-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+.af-wire-zoom-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.af-wire-zoom-btn.fit {
+  margin-left: 2px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0 6px 6px 0;
+}
+.af-wire-zoom-btn.fit[aria-pressed="true"] {
+  color: #93c5fd;
+}
+.af-wire-zoom-slider {
+  width: 110px;
+  margin: 0 2px;
+  accent-color: #60a5fa;
+  cursor: pointer;
+}
+.af-wire-zoom-level {
+  min-width: 4.5ch;
+  text-align: right;
+  padding-right: 4px;
+  font-variant-numeric: tabular-nums;
 }
 .af-wire-lines {
   position: absolute;

@@ -9,9 +9,15 @@
  * It draws what `WiringData` hands it and asks the server nothing itself.
  * Above the drawing: the warnings, counted over the whole wiring, each a
  * button that shows only the topics with that warning, in their context;
- * grouping by machine; whether outside sources and the system's own agents
- * are shown; and the list in place of the graph. A redraw keeps the focus on
- * the control that had it and the drawing where it was scrolled.
+ * then the choices, set apart by what they are about: how it is grouped,
+ * what is shown, and what can be done (the boxes put back, the list in place
+ * of the graph, a read). How large the drawing is shown (`wiringZoom`) is
+ * set over a corner of the drawing itself.
+ *
+ * A wiring read again while a pointer is held down in the view is not drawn
+ * until it is let go: drawing replaces what is on the page, and the slider
+ * or the box being dragged would be taken from under the pointer. A redraw
+ * keeps the focus on the control that had it.
  */
 import {
     buildGraph as buildModel,
@@ -30,9 +36,13 @@ import { buildDetail } from "./wiringDetail";
 import { buildGraph } from "./wiringGraph";
 import { buildList } from "./wiringList";
 import { WiringPins } from "./wiringPins";
+import { WiringZoom, type Shown } from "./wiringZoom";
 
 /** Below this width the list is shown in place of the graph. */
 export const NARROW = "(max-width: 720px)";
+
+/** What ends a pointer being held down in the view: let go, taken away by the browser, or the page left. */
+const RELEASES = ["pointerup", "pointercancel", "blur"] as const;
 
 /** How each warning's button reads, for a count. */
 export function warningLabel(kind: WarningKind, count: number): string {
@@ -86,10 +96,22 @@ export class WiringView {
     private _selected = "";
     /** Where boxes were moved by hand, kept in this browser. */
     private readonly _pins = new WiringPins();
+    /** How large the drawing is shown: fitted, or as set by hand and kept in this browser. */
+    private readonly _zoom = new WiringZoom(() => this._renderToolbar(this._state.wiring !== null));
     private readonly _unsubscribe: () => void;
     /** The narrow screen's query, heard so a turn or a resize across it swaps graph and list at once. */
     private readonly _narrow = narrowQuery();
     private readonly _onWidth = (): void => this._render();
+    /** Whether a pointer is held down in the view, and whether a wiring read meanwhile waits to be drawn. */
+    private _held = false;
+    private _waiting = false;
+    private readonly _onRelease = (): void => {
+        this._held = false;
+        if (this._waiting) {
+            this._waiting = false;
+            this._render();
+        }
+    };
 
     constructor(private readonly data: WiringData) {
         this._state = data.state;
@@ -100,12 +122,22 @@ export class WiringView {
             el("p", "af-wire-subtitle", "Who publishes what, who reads it, and where the data stops."),
         );
         heading.append(title, this._chips);
+        this._toolbar.setAttribute("role", "group");
         this._root.append(heading, this._toolbar, this._status, this._body);
         this._unsubscribe = data.subscribe(state => {
             this._state = state;
-            this._render();
+            if (this._held) {
+                this._waiting = true;
+            } else {
+                this._render();
+            }
         });
         this._narrow?.addEventListener?.("change", this._onWidth);
+        this._root.addEventListener("pointerdown", () => (this._held = true));
+        // Let go anywhere, the page left included: a release outside the view is still a release.
+        for (const release of RELEASES) {
+            window.addEventListener(release, this._onRelease);
+        }
     }
 
     /** The view, drawn from what is held, and the wiring read again. */
@@ -119,6 +151,10 @@ export class WiringView {
     destroy(): void {
         this._unsubscribe();
         this._narrow?.removeEventListener?.("change", this._onWidth);
+        for (const release of RELEASES) {
+            window.removeEventListener(release, this._onRelease);
+        }
+        this._zoom.destroy();
     }
 
     /** Select the node `id`, or nothing with "". */
@@ -133,8 +169,7 @@ export class WiringView {
 
     private _render(): void {
         const focused = this._focusKey();
-        const scrolled = this._root.querySelector(".af-wire-frame");
-        const scroll = scrolled ? { left: scrolled.scrollLeft, top: scrolled.scrollTop } : null;
+        this._zoom.group(this._grouped);
         this._status.textContent = statusText(this._state);
         const wiring = this._state.wiring;
         this._renderChips(wiring);
@@ -143,11 +178,8 @@ export class WiringView {
         if (wiring) {
             this._renderWiring(wiring);
         }
-        const frame = this._root.querySelector(".af-wire-frame");
-        if (frame && scroll) {
-            frame.scrollLeft = scroll.left;
-            frame.scrollTop = scroll.top;
-        }
+        // In the page now, so its frame has a size to fit the drawing to.
+        this._zoom.refit();
         this._refocus(focused);
     }
 
@@ -175,22 +207,31 @@ export class WiringView {
     private _renderToolbar(any: boolean): void {
         this._toolbar.replaceChildren();
         if (any) {
-            this._toolbar.append(
-                this._grouping(),
-                this._toggle(
-                    "Outside sources",
-                    this._choices.outside,
-                    on => (this._choices = { ...this._choices, outside: on }),
-                ),
-                this._toggle(
-                    "System agents",
-                    this._choices.system,
-                    on => (this._choices = { ...this._choices, system: on }),
-                ),
-                ...this._drawingButtons(),
-            );
+            this._toolbar.append(this._grouping(), this._showing());
         }
-        this._toolbar.append(this._refreshButton());
+        const actions = el("div", "af-wire-actions");
+        actions.append(...(any ? this._drawingButtons() : []), this._refreshButton());
+        this._toolbar.append(actions);
+    }
+
+    /** What is shown: the outside sources, and the system's own agents. */
+    private _showing(): HTMLElement {
+        const group = labelled(el("div", "af-wire-segment"), "Show");
+        group.setAttribute("role", "group");
+        group.append(
+            el("span", "af-wire-segment-label", "Show"),
+            this._toggle(
+                "Outside sources",
+                this._choices.outside,
+                on => (this._choices = { ...this._choices, outside: on }),
+            ),
+            this._toggle(
+                "System agents",
+                this._choices.system,
+                on => (this._choices = { ...this._choices, system: on }),
+            ),
+        );
+        return group;
     }
 
     /** Group by machine, or not. */
@@ -214,17 +255,21 @@ export class WiringView {
         return group;
     }
 
-    /** On a wide screen: the boxes put back where the layout puts them, when any was moved, and the list instead. */
-    private _drawingButtons(): HTMLButtonElement[] {
+    /**
+     * On a wide screen: the boxes put back where the layout puts them and the drawing fitted again, when
+     * a box was moved or the drawing was zoomed or moved about; and the list instead.
+     */
+    private _drawingButtons(): HTMLElement[] {
         if (isNarrow()) {
             return [];
         }
-        const buttons: HTMLButtonElement[] = [];
-        if (!this._asList && this._pins.any(this._grouped)) {
+        const buttons: HTMLElement[] = [];
+        if (!this._asList && (this._pins.any(this._grouped) || !this._zoom.fitted())) {
             const reset = button("af-wire-btn", "Reset layout");
             reset.dataset["key"] = "reset";
             reset.addEventListener("click", () => {
                 this._pins.clear(this._grouped);
+                this._zoom.fit();
                 this._render();
             });
             buttons.push(reset);
@@ -274,15 +319,20 @@ export class WiringView {
             selected: () => this._selected,
             select: (id: string) => this.select(id),
             moved: (id: string, pin: Pin) => this._pinned(id, pin),
+            scale: () => this._zoom.scale(),
+            shown: (shown: Shown) => this._zoom.show(shown),
         };
         const main = el("div", "af-wire-main");
         if (this._asList || isNarrow()) {
             main.append(buildList(graph, wiring, host));
         } else {
-            main.append(
+            // The zoom stands over a corner of the frame, beside the drawing it holds: it never moves with it.
+            const drawing = el("div", "af-wire-drawing");
+            drawing.append(
                 buildGraph(layout(graph, this._grouped, this._pins.of(this._grouped)), host),
-                this._legend(),
+                this._zoom.controls(),
             );
+            main.append(drawing, this._legend());
         }
         const selected: GraphNode | null = graph.nodes.find(n => n.id === this._selected) ?? null;
         this._body.append(main, buildDetail(selected, wiring, graph));
@@ -291,6 +341,7 @@ export class WiringView {
     /** Keep a box where it was put, and draw again so everything else follows it. */
     private _pinned(id: string, pin: Pin): void {
         this._pins.set(this._grouped, id, pin);
+        this._zoom.moved();
         this._render();
     }
 
@@ -319,7 +370,13 @@ export class WiringView {
             item.append(el("span", "af-wire-legend-key"), el("span", "", text));
             legend.append(item);
         }
-        legend.append(el("li", "af-wire-legend-hint", "Drag a box to move it, or Alt and an arrow key."));
+        legend.append(
+            el(
+                "li",
+                "af-wire-legend-hint",
+                "Drag a box or the background · the wheel zooms · Alt + arrows move a box",
+            ),
+        );
         return legend;
     }
 
@@ -339,6 +396,7 @@ export class WiringView {
         const found = key.startsWith("node:")
             ? this._root.querySelector<HTMLElement>(`[data-node="${CSS.escape(key.slice(5))}"]`)
             : this._root.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`);
-        found?.focus();
+        // The focus comes back to what had it, where it stands: the page is not scrolled to it.
+        found?.focus({ preventScroll: true });
     }
 }

@@ -75,6 +75,21 @@ describe("the Wiring view", () => {
         expect(root.querySelector(".af-wire-lines")?.getAttribute("aria-hidden")).toBe("true");
     });
 
+    it("sets its choices apart by what they are about, with what can be done after them", async () => {
+        narrow(false);
+        const { root } = await open();
+        const options = byRole(root, "group", "Wiring options");
+        const within = (group: string, role: string): string[] =>
+            allByRole(byRole(options, "group", group), role).map(nameOf);
+
+        expect(within("Group by", "button")).toEqual(["Machine", "None"]);
+        expect(within("Show", "checkbox")).toEqual(["Outside sources", "System agents"]);
+        const after = allByRole(options, "button")
+            .map(nameOf)
+            .filter(name => !["Machine", "None"].includes(name));
+        expect(after).toEqual(["View as list", "Refresh"]);
+    });
+
     it("hides the system's own agents until asked to show them", async () => {
         narrow(false);
         const { root } = await open();
@@ -94,11 +109,15 @@ describe("the Wiring view", () => {
 
         // A real button answers Enter and Space itself; the browser journey presses them.
         kitchen.focus();
+        const focused = vi.spyOn(HTMLElement.prototype, "focus");
         kitchen.click();
 
         const again = node(root, "Topic air/kitchen/score");
         expect(again.getAttribute("aria-pressed")).toBe("true");
         expect(document.activeElement).toBe(again);
+        // The focus comes back without scrolling the drawing to it: the view stays where it was.
+        expect(focused).toHaveBeenLastCalledWith({ preventScroll: true });
+        focused.mockRestore();
         const detail = byRole(root, "region", "Selected");
         expect(detail.textContent).toContain("Published bydetect");
         expect(detail.textContent).toContain("Read bywatch");

@@ -63,6 +63,8 @@ export interface WiringTopic {
     outside: boolean;
     /** Whether it is what a model on trial publishes. */
     shadow: boolean;
+    /** Whether the dashboard itself reads it: its feed does, or a panel. */
+    dashboard: boolean;
     /** Whether main keeps payloads from where it is, so its fields can be known. */
     sampled: boolean;
     /** The fields it carries, by name, with their types; null when nothing is known. */

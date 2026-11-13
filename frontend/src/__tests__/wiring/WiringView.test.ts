@@ -15,7 +15,7 @@ import { WiringData } from "../../ui/wiring/wiringData";
 import { KEY_STEP } from "../../ui/wiring/wiringDrag";
 import { WiringPins } from "../../ui/wiring/wiringPins";
 import { statusText, warningLabel, WiringView } from "../../ui/wiring/WiringView";
-import { fieldsText, payloadText, warningSentence } from "../../ui/wiring/wiringDetail";
+import { fieldsText, payloadText, readersText, warningSentence } from "../../ui/wiring/wiringDetail";
 import {
     HANDLE_RADIUS,
     HANDLE_RADIUS_LIT,
@@ -250,6 +250,48 @@ describe("the Wiring view", () => {
         expect(byRole(root, "region", "Selected").textContent).toContain("Published by1 hidden");
         // The count above is of the whole wiring, hidden or not.
         expect(byRole(root, "button", "1 topic nobody reads")).toBeTruthy();
+    });
+
+    it("names the dashboard as the reader of a topic its feed or a panel reads", async () => {
+        narrow(false);
+        const fed = {
+            agents: [agent("bridge", { publishes: ["homeassistant/state_changes"] })],
+            topics: [topic("homeassistant/state_changes", { producers: ["bridge"], dashboard: true })],
+            sources: [],
+            warnings: [],
+        };
+        const { root } = await open({ ok: true, value: fed });
+
+        const box = node(root, "Topic homeassistant/state_changes");
+        expect(nameOf(box)).toContain("the dashboard reads this");
+        expect(nameOf(box)).not.toContain("nobody");
+        box.click();
+        expect(byRole(root, "region", "Selected").textContent).toContain("Read bythe dashboard");
+        byRole(root, "button", "View as list").click();
+        expect(byRole(root, "button", "bridge → homeassistant/state_changes → the dashboard")).toBeTruthy();
+    });
+
+    it("names the dashboard in the list after the agents that read the topic too, shown or hidden", async () => {
+        narrow(false);
+        const shared = {
+            agents: [
+                agent("bridge", { publishes: ["air/hall/state", "air/attic/state"] }),
+                agent("watch", { subscribes: ["air/hall/state"] }),
+                agent("main", { subscribes: ["air/attic/state"] }),
+            ],
+            topics: [
+                topic("air/hall/state", { producers: ["bridge"], consumers: ["watch"], dashboard: true }),
+                topic("air/attic/state", { producers: ["bridge"], consumers: ["main"], dashboard: true }),
+            ],
+            sources: [],
+            warnings: [],
+        };
+        const { root } = await open({ ok: true, value: shared });
+
+        byRole(root, "button", "View as list").click();
+
+        expect(byRole(root, "button", "bridge → air/hall/state → watch, the dashboard")).toBeTruthy();
+        expect(byRole(root, "button", "bridge → air/attic/state → hidden, the dashboard")).toBeTruthy();
     });
 
     it("swaps graph and list at once when the screen narrows or widens", async () => {
@@ -626,6 +668,13 @@ describe("what the view says", () => {
         expect(statusText({ ...base, status: "ready", wiring: wiring(), readAt: Date.now() })).toBe(
             "Read now.",
         );
+    });
+
+    it("of a topic's readers, the dashboard after the agents", () => {
+        const both = topic("x", { consumers: ["watch", "app"], dashboard: true });
+        expect(readersText(["watch"], both)).toBe("watch, and 1 hidden, and the dashboard");
+        expect(readersText([], topic("x", { dashboard: true }))).toBe("the dashboard");
+        expect(readersText([], topic("x"))).toBe("none");
     });
 
     it("of a topic's fields and payload, whatever is known of them", () => {

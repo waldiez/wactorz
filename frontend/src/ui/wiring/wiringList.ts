@@ -16,7 +16,10 @@ import { button, el, list, pressed } from "../dom";
 import { namerOf, warningSentence } from "./wiringDetail";
 import type { GraphHost } from "./wiringGraph";
 
-/** What one topic's row says: who the graph shows publishing it, then the topic, then who reads it. */
+/**
+ * What one topic's row says: who the graph shows publishing it, then the
+ * topic, then who reads it, the dashboard after the agents where it reads too.
+ */
 export function flowText(graph: Graph, node: GraphNode): string {
     const topic = node.topic;
     if (!topic) {
@@ -27,7 +30,9 @@ export function flowText(graph: Graph, node: GraphNode): string {
     const end = (shown: string[], all: string[], none: string): string =>
         shown.join(", ") || (all.length ? "hidden" : none);
     const from = topic.outside ? "outside" : end(publishers, topic.producers, "nothing");
-    return `${from} → ${topic.topic} → ${end(readers, topic.consumers, "nobody")}`;
+    const agents = end(readers, topic.consumers, topic.dashboard ? "" : "nobody");
+    const to = topic.dashboard ? [agents, "the dashboard"].filter(Boolean).join(", ") : agents;
+    return `${from} → ${topic.topic} → ${to}`;
 }
 
 /** One row of the list: a button choosing `id`, found again after a redraw by `key`. */

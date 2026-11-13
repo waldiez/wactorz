@@ -318,13 +318,13 @@ function agentLines(node: GraphNode, agent: WiringAgent): string[] {
     return lines;
 }
 
-/** What a topic's box says: its name, and whether it is on trial or nobody reads it. */
+/** What a topic's box says: its name, and whether it is on trial, or who reads it when no agent does. */
 function topicLines(node: GraphNode, topic: WiringTopic): string[] {
     if (topic.shadow) {
         return [node.label, "on trial"];
     }
     if (topic.producers.length && !topic.consumers.length) {
-        return [node.label, "nobody reads this"];
+        return [node.label, topic.dashboard ? "the dashboard reads this" : "nobody reads this"];
     }
     return [node.label];
 }

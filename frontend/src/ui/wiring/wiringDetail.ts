@@ -57,6 +57,16 @@ export function endsText(shown: readonly string[], all: readonly string[]): stri
     return named ? `${named}, and ${hidden} hidden` : `${hidden} hidden`;
 }
 
+/** Who reads a topic: the agents shown, and the dashboard where its feed or a panel does. */
+export function readersText(shown: readonly string[], topic: WiringTopic): string {
+    if (!topic.dashboard) {
+        return endsText(shown, topic.consumers);
+    }
+    return topic.consumers.length
+        ? `${endsText(shown, topic.consumers)}, and the dashboard`
+        : "the dashboard";
+}
+
 /** What is known of the fields a topic carries, in words. */
 export function fieldsText(topic: WiringTopic): string {
     if (topic.fields && Object.keys(topic.fields).length) {
@@ -87,7 +97,7 @@ function topicDetail(topic: WiringTopic, ends: { publishers: string[]; readers: 
             "Published by",
             topic.outside ? "outside the system" : endsText(ends.publishers, topic.producers),
         ),
-        row("Read by", endsText(ends.readers, topic.consumers)),
+        row("Read by", readersText(ends.readers, topic)),
         row("Fields", fieldsText(topic)),
     );
     if (topic.shadow) {

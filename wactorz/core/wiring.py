@@ -11,7 +11,9 @@ Three things look wrong:
 
 - **a topic nobody reads**: an agent publishes it, and no agent subscribes;
   what a model on trial publishes (under the ``shadow`` root) is for the trial, and
-  is marked as such instead;
+  is marked as such instead, and so is a topic the dashboard reads: its feed
+  and its panels are readers that hold no contract, so whoever serves the
+  dashboard says which topics those are (`DashboardReads`);
 - **a subscriber with no producer**: an agent reads a topic no agent publishes
   and nothing has been seen on, outside the world's own roots (`WORLD_ROOTS`),
   where a sensor, Home Assistant or a script is expected to publish;
@@ -41,6 +43,13 @@ EXAMPLE_MAX_CHARS = 2048
 
 #: A model's pointers as the store has them: ``{"active": 3, "shadow": 4}``, None where unset.
 Pointers = Callable[[str], Mapping[str, int | None]]
+#: Whether the dashboard reads a topic, as whoever serves the dashboard knows it.
+DashboardReads = Callable[[str], bool]
+
+
+def no_dashboard(_topic: str) -> bool:
+    """What a caller with no dashboard to speak for says: it reads nothing."""
+    return False
 
 
 def root_of(topic: str) -> str:
@@ -184,6 +193,7 @@ def _published_topics(
     kept: list[TopicContract],
     published: Mapping[str, list[TopicContract]],
     outside: Mapping[str, Mapping[str, Any]],
+    dashboard: DashboardReads,
 ) -> _Found:
     """The topics agents publish, with their readers; one nobody reads, or that misses a field, is a warning."""
     topics: list[dict[str, Any]] = []
@@ -195,6 +205,7 @@ def _published_topics(
         named = [agent_id(p) for p in producers]
         # What a model on trial publishes is for the trial: nobody reading it is no warning.
         trial = root_of(topic) == SHADOW
+        shown = dashboard(topic)
         topics.append(
             {
                 "topic": topic,
@@ -202,11 +213,12 @@ def _published_topics(
                 "consumers": [agent_id(c) for c in consumers],
                 "outside": False,
                 "shadow": trial,
+                "dashboard": shown,
                 "sampled": True,
                 **known,
             }
         )
-        if not consumers and not trial:
+        if not consumers and not trial and not shown:
             warnings.append({"kind": "unread", "topic": topic, "producers": named})
         warnings.extend(_mismatches(topic, known, consumers))
     return topics, warnings
@@ -216,6 +228,7 @@ def _outside_topics(
     kept: list[TopicContract],
     published: Mapping[str, list[TopicContract]],
     outside: Mapping[str, Mapping[str, Any]],
+    dashboard: DashboardReads,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[tuple[str, str]]]:
     """The topics seen from outside that agents read, and each (agent, subscription) they fill."""
     topics: list[dict[str, Any]] = []
@@ -233,6 +246,7 @@ def _outside_topics(
                 "consumers": [agent_id(c) for c in consumers],
                 "outside": True,
                 "shadow": False,
+                "dashboard": dashboard(topic),
                 "sampled": True,
                 **known,
             }
@@ -272,6 +286,8 @@ def _unfilled_subscriptions(
                 "consumers": readers,
                 "outside": world,
                 "shadow": False,
+                # A filter nothing was seen on names no one topic the dashboard could be asked about.
+                "dashboard": False,
                 "sampled": root_of(pattern) in SAMPLED_ROOTS,
                 "fields": None,
                 "fields_from": None,
@@ -290,16 +306,18 @@ def wiring(
     *,
     pointers: Pointers,
     asked: Mapping[str, Mapping[str, Any]],
+    dashboard: DashboardReads = no_dashboard,
 ) -> dict[str, Any]:
     """The graph of ``contracts``, with the payloads seen from ``outside``, by topic.
 
-    ``pointers`` says where a model's pointers stand, and ``asked`` what each
-    agent, by id, has asked a person (`wactorz.web.questions.asked_by`).
+    ``pointers`` says where a model's pointers stand, ``asked`` what each
+    agent, by id, has asked a person (`wactorz.web.questions.asked_by`), and
+    ``dashboard`` whether the dashboard reads a topic, as it travels.
     """
     kept = list(contracts)
     published = _published(kept)
-    ours, ours_warned = _published_topics(kept, published, outside)
-    theirs, theirs_warned, filled = _outside_topics(kept, published, outside)
+    ours, ours_warned = _published_topics(kept, published, outside, dashboard)
+    theirs, theirs_warned, filled = _outside_topics(kept, published, outside, dashboard)
     unfilled, unfilled_warned = _unfilled_subscriptions(kept, published, filled)
     topics = [*ours, *theirs, *unfilled]
     sources: dict[str, list[str]] = {}

@@ -573,11 +573,11 @@ Who publishes what, who reads it, and where the data stops: the agents and the t
   ],
   "topics": [
     {"topic": "anomalies/ahu-1", "producers": ["…"], "consumers": ["…"], "outside": false, "shadow": false,
-     "sampled": true,
+     "dashboard": false, "sampled": true,
      "fields": {"ts": "float", "score": "float"}, "fields_from": "seen",
      "example": {"ts": 1760000000.0, "score": 0.2}, "seen_at": 1760000002.1},
     {"topic": "sensors/ahu-1/state", "producers": [], "consumers": ["…"], "outside": true, "shadow": false,
-     "sampled": true,
+     "dashboard": false, "sampled": true,
      "fields": {"temp": "float", "fan": "float"}, "fields_from": "seen", "example": {"temp": 17.4, "fan": 0.62},
      "seen_at": 1760000001.0}
   ],
@@ -599,7 +599,9 @@ What a topic carries is the fields of the last payload seen on it, from its prod
 
 `shadow` marks what a model on trial publishes, under `shadow/` in front of the agent's own topic (see `GET /api/models/{name}/trial`).
 
-The warnings: `unread`, a topic an agent publishes that no agent reads (the dashboard may still show it; a `shadow` topic is never one); `no_producer`, a subscription outside the world's roots that no agent publishes and nothing was seen on; `field_mismatch`, a field an agent declares it reads (`consumes_schema`) that the topic does not carry. A field declared as `any` names nothing, and a topic nothing is known about raises no mismatch.
+`dashboard` marks a topic the dashboard itself reads: one this server relays to browsers, which is the activity feed's Home Assistant state changes (`homeassistant/state_changes`) and whatever an extension panel declares in its `topics`. The dashboard is a reader that holds no contract, so it is not among `consumers`.
+
+The warnings: `unread`, a topic an agent publishes that no agent reads (a `shadow` topic is never one, nor is one the `dashboard` reads); `no_producer`, a subscription outside the world's roots that no agent publishes and nothing was seen on; `field_mismatch`, a field an agent declares it reads (`consumes_schema`) that the topic does not carry. A field declared as `any` names nothing, and a topic nothing is known about raises no mismatch.
 
 `503` when no actor system runs in the monitor's process: the registry is main's.
 

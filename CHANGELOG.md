@@ -140,7 +140,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **A Wiring tab on the dashboard.** `#/wiring` draws `GET /api/wiring`: the agents and the topics between them, left to
   right as the data flows, with the topics fed from outside grouped by root, what a model on trial publishes dashed,
   a reader missing a field in red with the fields named on its box, and an Operator box joined to each agent waiting
-  on an answer. The warnings are counted above it, each a button that shows only the topics with that warning and
+  on an answer. A topic no agent reads says so on its box, or says that the dashboard reads it. The warnings are
+  counted above it, each a button that shows only the topics with that warning and
   what is joined to them. It groups by machine or not, hides or shows outside sources and the system's own agents
   (hidden at first), and shows a list in place of the graph, which is what a phone shows. Choosing a box says what it
   publishes, reads and serves, the fields a topic carries and the last payload seen on it, and each warning as a
@@ -152,8 +153,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`GET /api/wiring`: who publishes what, who reads it, and where the data stops.** The agents and the topics between
   them, from main's topic registry: each topic's producers and readers, the fields of the last payload seen on it with
   the payload and when it came, the topics fed from outside the system grouped by root, the models each agent serves
-  with where their pointers stand, and what each agent has asked a person. It warns of a topic nobody reads, a
-  subscription nothing publishes outside the world's roots, and a field an agent declares it reads that its topic does
+  with where their pointers stand, and what each agent has asked a person. It warns of a topic nobody reads (what
+  the dashboard reads itself, such as Home Assistant's state changes for its feed or a panel's topics, is marked
+  `dashboard` and is not one), a subscription nothing publishes outside the world's roots, and a field an agent declares it reads that its topic does
   not carry, including a topic a sensor or a bridge feeds: main now keeps the last payload on each topic under
   `sensors/`, `custom/` and `agents/+/data/` that an agent reads and none publishes. What an agent sends with
   `Actor.publish` is recorded on its contract too, as a generated agent's publishes are, so a topic it never declared

@@ -31,6 +31,7 @@ export function topic(name: string, over: Partial<WiringTopic> = {}): WiringTopi
         consumers: [],
         outside: false,
         shadow: false,
+        dashboard: false,
         sampled: true,
         fields: null,
         fields_from: null,

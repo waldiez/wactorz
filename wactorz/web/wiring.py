@@ -2,8 +2,10 @@
 """``GET /api/wiring``: who publishes what, who reads it, and where the data stops.
 
 The graph is `wactorz.core.wiring`'s, read from main's topic registry at the
-time of asking, with where each served model's pointers stand and what each
-agent has asked a person. The registry lives in main, so a monitor with no
+time of asking, with where each served model's pointers stand, what each
+agent has asked a person, and which topics the dashboard itself reads: what
+this server relays to browsers (`wactorz.web.relay`), its feed's and its
+panels' topics among them. The registry lives in main, so a monitor with no
 actor system in its process has nothing to show and says so.
 """
 
@@ -19,7 +21,7 @@ from ..core.artifacts import ArtifactError, ArtifactStore
 from ..core.paths import resolve_state_dir
 from ..core.topics import display_topic
 from ..core.wiring import wiring
-from . import runtime
+from . import relay, runtime
 from .questions import asked_by
 
 #: Why there is no wiring to show.
@@ -63,6 +65,7 @@ async def wiring_handler(_request: web.Request) -> web.Response:
         bus.registry.outside_samples(),
         pointers=lambda name: stands.get(name, {}),
         asked=asked_by(),
+        dashboard=relay.is_relayed,
     )
     return web.json_response(displayed(graph), dumps=_dumps)
 

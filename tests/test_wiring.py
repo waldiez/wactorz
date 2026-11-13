@@ -35,7 +35,7 @@ from wactorz.core.manifests import AgentManifest
 from wactorz.core.paths import resolve_state_dir
 from wactorz.core.topic_bus import OUTSIDE_TOPICS_KEPT, TopicBus, TopicContract, TopicRegistry
 from wactorz.core.wiring import EXAMPLE_MAX_CHARS, wiring
-from wactorz.web import questions, runtime
+from wactorz.web import questions, relay, runtime
 from wactorz.web.app import build_app
 from wactorz.web.wiring import NO_REGISTRY, pointers_of
 
@@ -47,6 +47,10 @@ DRIFT = str(uuid.UUID(int=3))
 
 def _no_pointers(_name: str) -> dict[str, int | None]:
     return {}
+
+
+def _the_feed(topic: str) -> bool:
+    return topic == "homeassistant/state_changes"
 
 
 def _graph(
@@ -120,6 +124,28 @@ class TestTheGraph:
         assert _topic(graph, "shadow/anomalies/ahu-1")["shadow"] is True
         assert _topic(graph, "anomalies/ahu-1")["shadow"] is False
         assert ("unread", "shadow/anomalies/ahu-1") not in _kinds(graph)
+
+    def test_a_topic_the_dashboard_reads_is_marked_and_not_unread(self) -> None:
+        bridge = scorer(publishes=["homeassistant/state_changes", "anomalies/ahu-1"])
+
+        graph = _graph(bridge, dashboard=_the_feed)
+
+        assert _topic(graph, "homeassistant/state_changes")["dashboard"] is True
+        assert _topic(graph, "anomalies/ahu-1")["dashboard"] is False
+        assert _kinds(graph) == [("unread", "anomalies/ahu-1")]
+
+    def test_a_topic_from_outside_says_whether_the_dashboard_reads_it_too(self) -> None:
+        reader = watch(subscribes=["homeassistant/state_changes"])
+        seen = {"homeassistant/state_changes": {"fields": {}, "example": {}, "at": 1.0}}
+
+        graph = _graph(reader, outside=seen, dashboard=_the_feed)
+
+        assert _topic(graph, "homeassistant/state_changes")["dashboard"] is True
+
+    def test_a_subscription_nothing_fills_is_not_the_dashboards(self) -> None:
+        graph = _graph(watch(subscribes=["homeassistant/state_changes"]), dashboard=_the_feed)
+
+        assert _topic(graph, "homeassistant/state_changes")["dashboard"] is False
 
     def test_a_subscription_under_a_world_root_is_an_outside_source_not_a_warning(self) -> None:
         graph = _graph(scorer(), watch())
@@ -679,6 +705,26 @@ class TestTheRoute:
         assert graph["agents"][0]["models"] == [
             {"key": "model", "name": "ahu-scorer", "active": None, "shadow": None}
         ]
+
+    async def test_what_the_server_relays_to_browsers_is_read_by_the_dashboard(
+        self,
+        client: TestClient[web.Request, web.Application],
+        bus: TopicBus,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(runtime, "system", object())
+        monkeypatch.setattr(relay, "_followed", ())
+        relay.follow(["air/+/state"])
+        bus.register_contract(
+            scorer(publishes=["homeassistant/state_changes", "air/hall/state", "anomalies/ahu-1"])
+        )
+
+        response = await client.get("/api/wiring", headers={"X-API-Key": KEY})
+
+        graph = await response.json()
+        assert _topic(graph, "homeassistant/state_changes")["dashboard"] is True
+        assert _topic(graph, "air/hall/state")["dashboard"] is True
+        assert _kinds(graph) == [("unread", "anomalies/ahu-1")]
 
     async def test_a_payload_json_cannot_say_is_said_as_text(
         self,

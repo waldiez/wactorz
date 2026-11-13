@@ -274,6 +274,30 @@ class TestDelete:
         assert main.deleted == ["weather"]
         assert runtime.is_deleted("a1") and runtime.state["agents"] == {}
 
+    async def test_an_agent_here_that_has_not_reported_yet_is_deleted_under_its_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Listed from the moment it is registered, with no record until its
+        # first heartbeat: main finds agents by name, so the id will not do.
+        main = _Main()
+        monkeypatch.setattr(runtime, "registry", _Registry(_Actor("a1", "comfort")))
+        monkeypatch.setattr(lifecycle, "find_main_actor", lambda _r: main)
+
+        routed = await lifecycle.delete_agent("a1")
+
+        assert routed == "via main.delete_spawned_agent('comfort')"
+        assert main.deleted == ["comfort"]
+
+    async def test_a_protected_actor_that_has_not_reported_yet_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = _Main()
+        monkeypatch.setattr(runtime, "registry", _Registry(_Actor("a1", "main", protected=True)))
+        monkeypatch.setattr(lifecycle, "find_main_actor", lambda _r: main)
+
+        assert await lifecycle.delete_agent("a1") == lifecycle.REFUSED_PROTECTED
+        assert main.deleted == [] and not runtime.is_deleted("a1")
+
     async def test_the_agent_deleted_is_the_one_its_id_names(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

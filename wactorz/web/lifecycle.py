@@ -306,6 +306,10 @@ def _node_of(main_actor: Any, agent_id: str, reported: str) -> str | None:
     return reported or None
 
 
+#: What `delete_agent` answers for an actor that may not be deleted.
+REFUSED_PROTECTED = "refused-protected"
+
+
 async def delete_agent(agent_id: str) -> str:
     """Delete an agent properly regardless of whether it lives locally on this
     process or on a remote node. Returns a short status string for logs.
@@ -324,17 +328,21 @@ async def delete_agent(agent_id: str) -> str:
       4. Clear retained messages so old heartbeats don't come back on reconnect.
     """
     record = runtime.state["agents"].get(agent_id) or {}
-    name = record.get("name") or agent_id
+    # An agent of this process is listed from the moment it is registered, and
+    # has no record here until its first heartbeat: its name is then the live
+    # actor's. Main finds an agent by name, so the id in its place deletes
+    # nothing and withdraws the manifest of an agent that goes on running.
+    here = runtime.registry.get(agent_id) if runtime.registry else None
+    name = record.get("name") or (here.name if here is not None else agent_id)
     node = (record.get("node") or "").strip()
 
-    # REST refuses to delete a protected actor; this path did not, so the same
-    # request over the WebSocket deleted system agents the API 403s. The check
-    # reads the live actor rather than `record`, because the dashboard entry is
-    # built from heartbeats and a remote agent can claim whatever it likes.
-    actor = runtime.registry.find_by_name(name) if runtime.registry else None
+    # The check reads the live actor rather than `record`, because the dashboard
+    # entry is built from heartbeats and a remote agent can claim whatever it
+    # likes.
+    actor = here or (runtime.registry.find_by_name(name) if runtime.registry else None)
     if actor is not None and getattr(actor, "protected", False):
         logger.warning("[lifecycle] Refusing to delete protected actor '%s'.", name)
-        return "refused-protected"
+        return REFUSED_PROTECTED
 
     runtime.mark_deleted(agent_id)
     runtime.state["agents"].pop(agent_id, None)

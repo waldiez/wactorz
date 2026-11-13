@@ -534,6 +534,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Deleting an agent that has only just started really deletes it.** An agent of the server's own process shows on
+  the dashboard from the moment it is registered, a few seconds before its first heartbeat. Deleted in that time,
+  from its card or with `DELETE /api/actors/{id}`, it was answered "stopping" and went on running: its card came
+  back, and only its manifest had been withdrawn. It is now stopped and removed like any other. A protected agent
+  deleted in that same time is refused, and `DELETE /api/actors/{id}` answers `403` whenever the delete was
+  refused, instead of `200`.
+
 - **An agent on a node can be stopped and started again.** A stop used to be a slow delete: the node forgot the agent,
   and a few heartbeats later the server took it for crashed and removed its config, so neither `/start` (which refused
   agents on nodes) nor `/agents restart` (which the node answered "not running here") could bring it back, and a node

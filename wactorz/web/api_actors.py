@@ -78,6 +78,9 @@ async def delete_actor_handler(request: web.Request) -> Response:
     if record.get("protected"):
         return web.json_response({"error": "actor is protected"}, status=403)
     routed = await lifecycle.delete_agent(actor_id)
+    if routed == lifecycle.REFUSED_PROTECTED:
+        # The record above is built from heartbeats; the live actor has the last word.
+        return web.json_response({"error": "actor is protected"}, status=403)
     await cost.settled_totals()
     await ws.broadcast(
         {"type": events.DELETE_AGENT_FRAME, "agent_id": actor_id, "state": events.snapshot()}

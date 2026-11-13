@@ -336,7 +336,7 @@ lock: ## Re-resolve uv.lock after changing dependencies in pyproject.toml (needs
 # Advisories the audit passes over, each with the reason. Pillow fixes these in
 # 13.0, which needs Python 3.11, so the lock keeps 12.3 for Python 3.10 alone and
 # no fixed release exists there; every other Python, the images included, locks
-# 13. The ones after those are the same case: more for Pillow 12.3, then
+# 13. The ones after those are the same case: more for Pillow 12.3, and
 # filelock's, fixed in 4.2.1, which needs 3.11 too, so 3.10 keeps the 4.0 line
 # (only torch, an optional dependency, pulls it in). Remove them when Python
 # 3.10 is dropped or a fix reaches it.
@@ -358,7 +358,7 @@ AUDIT_IGNORE := GHSA-65qm-jvmh-6pqg GHSA-vx6w-vv9f-6gvg GHSA-58r4-6rv3-gfh8 \
 	GHSA-m462-7rxw-wvpg GHSA-rfpc-qcw5-3pc4 GHSA-69hj-f68j-2879 \
 	GHSA-8mx5-7m5m-r77g GHSA-9c4x-gm8v-wgc4 GHSA-fq56-3cx3-fjxp \
 	GHSA-cwqr-hh33-gh44 GHSA-9j6q-wvj5-jgjg GHSA-6627-m3xw-93mp \
-	GHSA-fj95-fr6c-h845
+	GHSA-fj95-fr6c-h845 GHSA-wqgw-9xfh-qf2g GHSA-xcvg-w56q-r89m
 
 audit: ## Known vulnerabilities in the locked dependencies (needs uv)
 	$(require-uv)

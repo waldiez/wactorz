@@ -32,6 +32,7 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.config import CONFIG, DeployTarget
 from wactorz.core.actor import Message, MessageType
 from wactorz.core.node_operations import command_for
+from wactorz.core.paths import resolve_state_dir
 
 
 def _versions_off_loop() -> dict[str, str]:
@@ -132,7 +133,15 @@ def conn_fixture(installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch) -> 
     async def _kwargs(payload: dict[str, Any]) -> dict[str, Any]:
         return {"host": payload.get("host")}
 
+    async def _no_wheel() -> None:
+        # Left to itself a deploy builds a wheel of this checkout with pip, which
+        # is a build backend fetched and a subprocess per test. The tests of
+        # which code is sent say what they deploy from; the build has its own.
+        return None
+
     monkeypatch.setattr(installer, "_ssh_kwargs", _kwargs)
+    monkeypatch.setattr(installer, "_build_wheel", _no_wheel)
+    monkeypatch.setattr(installer, "_installed_wheel", _no_wheel)
     monkeypatch.setattr(installer_agent.asyncssh, "connect", lambda **_kw: conn)
     monkeypatch.setattr(installer, "_log_remote", lambda _message: None)
     return conn
@@ -1183,6 +1192,107 @@ def _yes_then_no(installer: InstallerAgent) -> Any:
         return len(seen) > 1
 
     return _can_run
+
+
+class TestTheWheelOfThisCheckout:
+    """Which wheel a deploy sends when it runs from a source tree.
+
+    `pip wheel` is faked: a real build fetches a build backend and takes as long
+    as the machine and the network allow, and what is under test is what the
+    installer makes of its answer.
+    """
+
+    def _checkout(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """Stand the installer's module in a source tree of its own, and say where that is."""
+        root = tmp_path.resolve()
+        module = root / "wactorz" / "agents" / "installer_agent.py"
+        monkeypatch.setattr(installer_agent, "__file__", str(module))
+        (root / "pyproject.toml").write_text("", encoding="utf-8")
+        return root
+
+    async def test_the_wheel_pip_built_is_the_one_sent(
+        self, installer: InstallerAgent, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = self._checkout(tmp_path, monkeypatch)
+        ran: list[list[str]] = []
+
+        def _run(argv: list[str], **_kw: Any) -> SimpleNamespace:
+            ran.append(argv)
+            out = Path(argv[argv.index("-w") + 1])
+            out.mkdir()
+            (out / f"wactorz-{__version__}-py3-none-any.whl").write_bytes(b"")
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", _run)
+
+        wheel = await installer._build_wheel()
+
+        assert wheel == root / "dist" / f"wactorz-{__version__}-py3-none-any.whl"
+        assert ran == [
+            [sys.executable, "-m", "pip", "wheel", str(root), "--no-deps", "-w", str(root / "dist")]
+        ]
+
+    async def test_a_build_that_fails_sends_none(
+        self, installer: InstallerAgent, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._checkout(tmp_path, monkeypatch)
+        monkeypatch.setattr(subprocess, "run", lambda *_a, **_kw: SimpleNamespace(returncode=1))
+
+        assert await installer._build_wheel() is None
+
+    async def test_a_wheel_of_another_version_is_not_taken_for_this_one(
+        self, installer: InstallerAgent, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = self._checkout(tmp_path, monkeypatch)
+        (root / "dist").mkdir()
+        (root / "dist" / "wactorz-0.0.1-py3-none-any.whl").write_bytes(b"")
+        monkeypatch.setattr(subprocess, "run", lambda *_a, **_kw: SimpleNamespace(returncode=0))
+
+        assert await installer._build_wheel() is None
+
+    async def test_away_from_a_source_tree_nothing_is_built(
+        self, installer: InstallerAgent, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = self._checkout(tmp_path, monkeypatch)
+        (root / "pyproject.toml").unlink()
+
+        def _unexpected(*_a: Any, **_kw: Any) -> None:
+            raise AssertionError("pip was run with no source tree to build")
+
+        monkeypatch.setattr(subprocess, "run", _unexpected)
+
+        assert await installer._build_wheel() is None
+
+
+class TestTheWheelOfThisInstall:
+    async def test_an_install_from_a_package_index_has_none_to_send(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            installer_agent, "installed_from_a_direct_reference", lambda _name: False
+        )
+
+        assert await installer._installed_wheel() is None
+
+    async def test_an_install_from_a_branch_or_a_folder_is_packed_under_the_state_folder(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        packed: list[tuple[str, Path]] = []
+
+        def _pack(name: str, directory: Path) -> Path:
+            packed.append((name, directory))
+            return directory / "wactorz.whl"
+
+        monkeypatch.setattr(
+            installer_agent, "installed_from_a_direct_reference", lambda _name: True
+        )
+        monkeypatch.setattr(installer_agent, "wheel_of_installed", _pack)
+
+        wheel = await installer._installed_wheel()
+
+        directory = Path(resolve_state_dir()) / "node_wheel"
+        assert packed == [("wactorz", directory)]
+        assert wheel == directory / "wactorz.whl"
 
 
 class TestRemoteLog:

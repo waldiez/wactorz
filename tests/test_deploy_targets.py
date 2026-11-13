@@ -658,8 +658,16 @@ async def _deploy_with_home(installer, targets, monkeypatch, home: str) -> _Fake
         # asks it has its own tests.
         return None
 
+    async def _no_wheel() -> None:
+        # Left to itself a deploy builds a wheel of this checkout with pip, which
+        # is a build backend fetched and a subprocess per test; which code is
+        # sent has its own tests.
+        return None
+
     monkeypatch.setattr(installer, "_known_hosts", _known_hosts)
     monkeypatch.setattr(installer, "_check_node_account", _account)
+    monkeypatch.setattr(installer, "_build_wheel", _no_wheel)
+    monkeypatch.setattr(installer, "_installed_wheel", _no_wheel)
     monkeypatch.setattr(installer_module.asyncssh, "connect", lambda **_kw: conn)
     monkeypatch.setattr(installer, "_persist_node_info", lambda **_kw: None)
 

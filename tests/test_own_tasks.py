@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A run on a loop it shares with a host stops its own tasks and leaves the host's,
 whenever the host started them."""
 

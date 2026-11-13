@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An interrupted state save must not destroy the state it was replacing.
 
 Writing in place truncates the file first, so a crash partway through left a
@@ -12,6 +13,7 @@ key, not the one being written.
 
 import pickle
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -53,7 +55,7 @@ class TestWritePickle:
         assert pickle.loads(target.read_bytes()) == {"generation": 1}
 
 
-def _on_disk(tmp_path: Path, agent: str) -> dict:
+def _on_disk(tmp_path: Path, agent: str) -> dict[str, Any]:
     """What a restart would read for ``agent``."""
     return read_state_file(tmp_path / agent / "state.pkl").values
 
@@ -117,7 +119,7 @@ class TestPickleStore:
 class TestLegacyActorPath:
     async def test_a_failed_persist_keeps_every_other_key(self, tmp_path: Path) -> None:
         class _Agent(Actor):
-            async def handle_message(self, message):  # pragma: no cover
+            async def handle_message(self, message) -> None:  # pragma: no cover
                 return None
 
         agent = _Agent(name="worker")

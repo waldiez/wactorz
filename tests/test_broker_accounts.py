@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Each node's broker account, and the access list that pens it in.
 
 The account's password is derived rather than stored, so these tests pin what
@@ -24,7 +25,7 @@ import pytest
 
 from wactorz import broker_certificates, config
 from wactorz.config import DeployTarget
-from wactorz.core import broker_accounts, broker_tls, node_signing
+from wactorz.core import broker_accounts, broker_tls, node_signing, topics
 
 NODES = ("rpi-garage", "rpi-kitchen")
 
@@ -158,6 +159,34 @@ class TestTheAccessList:
             "topic write main/reply/#",
         ]
 
+    def test_a_node_gets_what_its_library_agents_publish_about_themselves(self) -> None:
+        # A pipeline's tick, a drift alarm a rule on the node may act on, a trial's answers.
+        kitchen = _block(broker_accounts.acl_text(NODES, ["wactorz"]), "rpi-kitchen")
+
+        assert "topic readwrite pipelines/#" in kitchen
+        assert "topic readwrite models/+/drift" in kitchen
+        assert "topic readwrite shadow/#" in kitchen
+
+    def test_under_a_namespace_own_rules_move_and_world_ones_stay(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(topics, "NAMESPACE", "lab")
+        kitchen = _block(broker_accounts.acl_text(NODES, ["wactorz"]), "rpi-kitchen")
+
+        for rule in (
+            "topic readwrite lab/nodes/rpi-kitchen/#",
+            "topic readwrite lab/agents/#",
+            "topic deny lab/agents/+/commands",
+            "topic write lab/main/llm_request",
+            "topic readwrite lab/pipelines/#",
+            "topic readwrite lab/models/+/drift",
+            "topic readwrite lab/shadow/#",
+            "topic readwrite sensors/#",
+            "topic read homeassistant/state_changes/#",
+        ):
+            assert rule in kitchen.splitlines(), rule
+        assert " agents/" not in kitchen and " nodes/" not in kitchen
+
     def test_a_node_gets_the_conventional_data_topics(self) -> None:
         kitchen = _block(broker_accounts.acl_text(NODES, ["wactorz"]), "rpi-kitchen")
 
@@ -228,11 +257,35 @@ class TestTheDataTopicsSetting:
         assert broker_accounts.parse_node_topics("") == []
 
     @pytest.mark.parametrize(
-        "topic", ["#", "nodes/other/#", "agents/#", "main/reply/#", "system/#", "$SYS/#"]
+        "topic",
+        [
+            "#",
+            "nodes/other/#",
+            "agents/#",
+            "main/reply/#",
+            "system/#",
+            "$SYS/#",
+            "models/air/active",
+            "pipelines/#",
+            "shadow/#",
+            # Another install's namespace, or this one's.
+            "other/agents/#",
+            "lab/nodes/rpi/#",
+            # Every namespace at once.
+            "+/#",
+            "+/+/x",
+            "+/agents/#",
+        ],
     )
     def test_a_filter_that_would_take_a_fence_down_is_refused(self, topic: str) -> None:
         with pytest.raises(ValueError, match="would give every node"):
             broker_accounts.parse_node_topics(topic)
+
+    @pytest.mark.parametrize(
+        "topic", ["zigbee2mqtt/#", "weather/#", "+/temperature", "home/system/#", "sensors/agents"]
+    )
+    def test_a_filter_that_only_names_a_root_as_a_word_is_taken(self, topic: str) -> None:
+        assert broker_accounts.parse_node_topics(topic) == [(topic, "readwrite")]
 
     @pytest.mark.parametrize("topic", ["a b/#", "a/#/b", "a#", "x/\ntopic readwrite #"])
     def test_a_filter_that_could_not_be_one_rule_is_refused(self, topic: str) -> None:

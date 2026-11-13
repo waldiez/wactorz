@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """TLS for connections to the MQTT broker.
 
 Off unless ``MQTT_TLS`` turns it on, so an install that has never set it connects

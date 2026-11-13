@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Signal handling and the readiness banner.
 
 The signal path is the one that decides whether `docker stop` unwinds or kills

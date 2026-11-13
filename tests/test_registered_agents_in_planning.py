@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A developer's registered agent is a building block for main and the planner.
 
 Declared with ``@wactorz.agent`` and registered, an agent is something chat
@@ -5,8 +6,6 @@ can ask, main can start, and the planner places as a pipeline step, with
 nothing more declared than the decorator says. The IMU example is the agent
 under test, with a small model trained in the test.
 """
-
-from __future__ import annotations
 
 import importlib
 import json
@@ -99,7 +98,7 @@ class _Registry:
     input_schema={"value": "float"},
     output_schema={"value": "float"},
 )
-def probe(reading: dict) -> dict:
+def probe(reading: dict[str, Any]) -> dict[str, Any]:
     return reading
 
 

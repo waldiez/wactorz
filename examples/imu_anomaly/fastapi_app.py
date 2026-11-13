@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The detector inside a FastAPI app: one process, one event loop, both servers.
 
 The web app owns the loop and the signals. Wactorz runs on that loop as a
@@ -19,6 +20,7 @@ The dashboard stays on 8888; `web=False` would leave it off.
 """
 
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
 from agent import detect
@@ -31,7 +33,7 @@ AGENT = "imu-anomaly"
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     task = asyncio.create_task(wactorz.serve(agents=[detect], minimal=True, state_dir=STATE_DIR))
     # A start that is refused raises inside the task; look once, so the app
     # refuses to start rather than reporting it when it stops.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The seam between the chat surfaces and whatever answers them.
 
 A person types somewhere -- the dashboard, the REST API, the terminal, Discord,
@@ -40,7 +41,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 from .agents.lookup import MAIN_ACTOR_NAME
 from .agents.main.commands import registry as main_command_registry
 from .agents.main.commands.dispatch import REWRITES, Form
-from .core.actor import Actor, ActorState
+from .core.actor import Actor, ActorState, declared_topics
 from .core.task_text import reply_text, task_payload
 from .core.turns import acting_as
 from .errors import StartupError
@@ -227,6 +228,7 @@ class MainOrchestrator:
         return cast("MainActor", actor)
 
     async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
+        """Answer through main: in full from a trusted channel, restricted from any other."""
         main = self._main()
         if is_trusted(channel):
             return await main.process_user_input(text)
@@ -240,6 +242,9 @@ class MainOrchestrator:
         user: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[str]:
+        """Stream main's answer, labelled by the agent each piece comes from; a channel that is
+        not trusted gets the restricted answer, whole.
+        """
         main = self._main()
         if not is_trusted(channel):
             yield await main.process_user_input_restricted(text)
@@ -253,6 +258,7 @@ class MainOrchestrator:
             yield str(chunk)
 
     def commands(self) -> frozenset[str]:
+        """The slash commands main answers."""
         return main_commands()
 
     def command_forms(self) -> list[Form]:
@@ -307,13 +313,9 @@ def _declared_topics(actor: Actor) -> tuple[tuple[str, ...], tuple[str, ...]]:
         publishes = (spec.publishes,) if spec.publishes else ()
         return tuple(spec.subscribes), publishes
     cls = type(actor)
-    return _topic_tuple(getattr(cls, "SUBSCRIBES", ())), _topic_tuple(getattr(cls, "PUBLISHES", ()))
-
-
-def _topic_tuple(value: Any) -> tuple[str, ...]:
-    if isinstance(value, str):
-        return (value,) if value else ()
-    return tuple(str(topic) for topic in value or ())
+    return declared_topics(getattr(cls, "SUBSCRIBES", ())), declared_topics(
+        getattr(cls, "PUBLISHES", ())
+    )
 
 
 def _split_mention(text: str) -> tuple[str, str]:
@@ -341,6 +343,9 @@ class DirectOrchestrator:
         self._timeout = timeout
 
     async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
+        """Answer a slash command, or pass a message that starts with ``@agent`` to that agent;
+        anything else is answered with how to address one, since no model reads it.
+        """
         stripped = text.strip()
         if stripped.startswith("/"):
             return self._command(stripped)
@@ -362,14 +367,19 @@ class DirectOrchestrator:
         user: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[str]:
+        """The answer :meth:`handle_turn` gives, whole, after a note when attachments came that
+        nothing will read.
+        """
         if attachments:
             yield "[note] attachments not sent: no model runs in this profile to read them.\n"
         yield await self.handle_turn(text, channel=channel, user=user)
 
     def commands(self) -> frozenset[str]:
+        """The few slash commands this profile answers without a model."""
         return DIRECT_COMMANDS
 
     def command_forms(self) -> list[Form]:
+        """The ways to type this profile's commands, with what each does."""
         return list(DIRECT_FORMS)
 
     async def _ask(self, name: str, rest: str) -> str:

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A provider that answers deterministically, for end-to-end runs and demos.
 
 Not a mock: it is a real ``LLMProvider`` reached through the ordinary factory, so
@@ -22,6 +23,7 @@ script whose answers read well. The provider is the same either way.
 
 import json
 from collections.abc import AsyncGenerator, Mapping
+from typing import Any
 
 from ...prompts.main_actor_prompts import (
     FACTS_EXTRACT_MARKER,
@@ -71,17 +73,17 @@ class FakeProvider(LLMProvider):
         if intent not in INTENTS:
             msg = f"intent must be one of {INTENTS}, got {intent!r}"
             raise ValueError(msg)
-        self.model = model or "fake"
-        self.script = dict(script or {})
+        self.model: str = model or "fake"
+        self.script: dict[str, str] = dict(script or {})
         self.intent = intent
         #: Every (system, messages) pair this provider was asked, in order. A
         #: scenario asserting "the model was asked at all" needs this; without it
         #: a silent no-call and a silent empty answer look identical.
-        self.calls: list[tuple[str, list[dict]]] = []
+        self.calls: list[tuple[str, list[dict[str, Any]]]] = []
 
     # ── The contract-bound answers ──────────────────────────────────────────
 
-    def _answer(self, messages: list[dict], system: str) -> str:
+    def _answer(self, messages: list[dict[str, Any]], system: str) -> str:
         """What this request gets, decided by which call site is asking."""
         self.calls.append((system, list(messages)))
         if system.startswith(INTENT_CLASSIFIER_MARKER):
@@ -104,20 +106,20 @@ class FakeProvider(LLMProvider):
     # ── Provider surface ────────────────────────────────────────────────────
 
     async def _complete(
-        self, messages: list[dict], system: str = "", **kwargs: object
-    ) -> tuple[str, dict]:
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: object
+    ) -> tuple[str, dict[str, Any]]:
         text = self._answer(messages, system)
         return text, _usage(messages, system, text)
 
     async def _stream(
-        self, messages: list[dict], system: str = "", **kwargs: object
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: object
     ) -> AsyncGenerator[str, None]:
         text = self._answer(messages, system)
         for start in range(0, len(text), CHUNK_SIZE):
             yield text[start : start + CHUNK_SIZE]
 
 
-def _last_user_text(messages: list[dict]) -> str:
+def _last_user_text(messages: list[dict[str, Any]]) -> str:
     """The most recent user turn, flattened to text.
 
     Content may be a list of blocks once attachments are involved, so the text
@@ -152,7 +154,7 @@ def _tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def _usage(messages: list[dict], system: str, reply: str) -> dict:
+def _usage(messages: list[dict[str, Any]], system: str, reply: str) -> dict[str, Any]:
     """The usage shape every provider returns, with a non-zero cost."""
     prompt_text = system + " ".join(str(m.get("content", "")) for m in messages)
     input_tokens = _tokens(prompt_text)

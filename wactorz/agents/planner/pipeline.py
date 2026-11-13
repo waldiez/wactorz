@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The reactive-pipeline path: standing rules that outlive the request.
 
 A pipeline request produces persistent agents rather than a one-shot answer, so
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ... import plugins
 from ...config import CONFIG
+from ...core import topic_bus
 from ...core.actor import ask_through
 from ...core.artifacts import ArtifactError, ArtifactStore, summary
 from ...core.paths import resolve_state_dir
@@ -44,7 +46,7 @@ if TYPE_CHECKING:
 else:
     _Host = object
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class PipelineMixin(_Host):
@@ -514,9 +516,7 @@ class PipelineMixin(_Host):
         topic_bus_section = ""
         topic_samples_section = ""
         try:
-            from ...core.topic_bus import get_topic_bus
-
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus and bus.registry.all_contracts():
                 topic_bus_section = bus.to_planner_context()
                 logger.info(
@@ -533,7 +533,7 @@ class PipelineMixin(_Host):
                             example = info.get("example", {})
                             fields = info.get("fields", {})
                             sample_lines.append(
-                                f"  Topic: {topic}  (published by {contract.name})\n"
+                                f"  Topic: {topic}  (published by {bus.registry.label(contract)})\n"
                                 f"    Fields: {fields}\n"
                                 f"    Example payload: {example}"
                             )

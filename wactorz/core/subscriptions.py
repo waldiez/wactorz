@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every subscription an actor holds, carried on one MQTT connection.
 
 An actor that subscribes to several topics holds one authenticated session for
@@ -16,8 +17,6 @@ supervisor to restart. A host that can repair a program in place overrides
 :meth:`SubscriptionHub._record_failure` -- see the dynamic agent's listener.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -32,7 +31,7 @@ from .mqtt import AGENT_SESSION_EXPIRY_SECONDS, agent_client_id, mqtt_client
 from .topic_bus import topic_matches
 from .turns import outside_any_turn
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Consecutive callback failures before the binding is dropped and the actor fails.
 MAX_CONSECUTIVE_FAILURES = 5
@@ -103,17 +102,18 @@ class Binding:
         self.topic = topic
         self.callback = callback
         self.concurrency = concurrency
-        self.queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
-        self.workers: list[asyncio.Task] = []
+        self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=maxsize)
+        self.workers: list[asyncio.Task[Any]] = []
         #: Messages discarded because the callback fell behind, for the log.
-        self.dropped = 0
+        self.dropped: int = 0
 
     @property
-    def worker(self) -> asyncio.Task | None:
+    def worker(self) -> asyncio.Task[Any] | None:
         """The first worker, for callers that know of one."""
         return self.workers[0] if self.workers else None
 
-    def live_workers(self) -> list[asyncio.Task]:
+    def live_workers(self) -> list[asyncio.Task[Any]]:
+        """The binding's workers that have not ended."""
         return [w for w in self.workers if not w.done()]
 
     def offer(self, payload: Any) -> bool:
@@ -164,15 +164,15 @@ class SubscriptionHub:
         #: filter, and keying by topic would silently drop the first.
         self._bindings: list[Binding] = []
         self._client: Any = None
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[Any] | None = None
         #: Subscriptions sent on the live connection and not yet acknowledged,
         #: held so none is collected part-way through.
-        self._subscribing: set[asyncio.Task] = set()
+        self._subscribing: set[asyncio.Task[Any]] = set()
         self._warned = [False]
         #: Consecutive failures per topic, for the budget `_record_failure` keeps.
         self._failures: dict[str, int] = {}
 
-    def bind(self, topic: str, callback: Any, *, concurrency: int = 1) -> asyncio.Task | None:
+    def bind(self, topic: str, callback: Any, *, concurrency: int = 1) -> asyncio.Task[Any] | None:
         """Register a subscription, returning the hub task if this call started it.
 
         The caller tracks that task on the actor so stopping the actor stops the
@@ -444,18 +444,8 @@ class SubscriptionHub:
 def is_durable_actor(actor: Any) -> bool:
     """Whether this actor's id survives a restart, and so can hold a session.
 
-    A named actor derives its id from its name, so the same agent reconnects as
-    the same client and resumes what the broker held. An anonymous one gets a
-    fresh id every incarnation, so a session kept under the old id is
-    unreachable -- durability there is not harmful, it is meaningless.
-
-    This asks whether the id is name-derived, not whether it is stable. An
-    actor constructed with an explicit `actor_id` that happens to be stable is
-    classified as not durable. That is the safe direction -- a clean session
-    and no broker state -- but such an actor forgoes durability it could in
-    principle have had.
+    The hub's half of `has_stable_id`, which says what makes an id stable.
     """
-    from .actor import has_derived_id  # circular import: core.actor imports this module
+    from .actor import has_stable_id  # circular import: core.actor imports this module
 
-    name = getattr(actor, "name", "") or ""
-    return has_derived_id(name, str(getattr(actor, "actor_id", "")))
+    return has_stable_id(actor)

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Agent lifecycle: retained-state purges and deletion.
 
 Deleting an agent has to clear every place its state lingers — retained MQTT
@@ -10,43 +11,99 @@ import json
 import logging
 import time
 from collections.abc import Coroutine
+from dataclasses import dataclass
 from typing import Any
 
 from ..agents.lookup import find_main_actor
+from ..agents.main.spawn_registry import SpawnRegistry, placed_on
 from ..core.node_signing import signed_publish_kwargs
-from ..core.topics import RETAINED_AGENT_LEAVES
+from ..core.topics import RETAINED_AGENT_LEAVES, agent_topic, node_topic
 from . import events, runtime
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
-async def dispatch_command(agent_id: str, command: str, sender: str) -> str:
-    """Run a lifecycle command against an agent. Returns how it was routed.
+@dataclass(frozen=True)
+class Dispatched:
+    """How a lifecycle command went: the way it took, and what to tell whoever asked.
 
-    Local actors are driven in process. Publishing to the broker so an object we
-    already hold can rediscover itself over the network is left over from when the
-    dashboard ran as a separate process, and it meant the command was silently
-    dropped whenever the broker was down while the caller still reported success.
+    ``route`` is ``"local"`` for an actor driven in this process, ``"node"`` for
+    one main asked its node about, ``"broker"`` for one reached on its own
+    commands topic, ``"refused"`` when it was declined, and ``""`` when it could
+    not be delivered at all. ``detail`` says why, where there is more to say
+    than the route.
+    """
 
-    MQTT remains the route to agents on remote nodes, which have no local object.
-    Returns ``""`` when the command could not be delivered at all, and
-    ``"refused"`` when the actor declined it.
+    route: str
+    detail: str = ""
+
+    @property
+    def done(self) -> bool:
+        """Whether the command was carried out, or sent to where it is."""
+        return self.route not in ("", "refused")
+
+
+def _on_node(main_actor: Any, agent_id: str) -> tuple[str, str] | None:
+    """The name and node of the agent ``agent_id``, when it runs on a node; else None.
+
+    From main's spawn registry by the agent's id, which says which agent of a
+    name is meant; for one main did not spawn, from what its heartbeats report.
+    """
+    entry = main_actor._get_spawn_registry().by_id(agent_id) if main_actor is not None else None
+    if entry is not None:
+        node = placed_on(entry)
+        return (str(entry["name"]), node) if node else None
+    record = runtime.state["agents"].get(agent_id) or {}
+    node = placed_on({"node": str(record.get("node") or "").strip()})
+    name = str(record.get("name") or "")
+    return (name, node) if node and name else None
+
+
+async def _through_main(
+    main_actor: Any, agent_id: str, name: str, node: str, command: str
+) -> Dispatched:
+    """Ask main to stop or start ``name`` on ``node``, which is how an agent there is reached."""
+    if main_actor is None:
+        return Dispatched(
+            "",
+            f"'{name}' runs on node '{node}', where it is stopped and started through main, "
+            "and main is not running in this process.",
+        )
+    ask = main_actor.stop_agent_on_node if command == "stop" else main_actor.start_agent_on_node
+    outcome = await ask(name, node, agent_id)
+    return Dispatched("node" if outcome.sent else "refused", outcome.message)
+
+
+async def dispatch_command(agent_id: str, command: str, sender: str) -> Dispatched:
+    """Run a lifecycle command against an agent, and say how it went.
+
+    An actor in this process is driven directly. One on a node is stopped and
+    started by main, which asks the node and remembers the stop: the agent's own
+    commands topic is not a way to it, since a node's agents do not listen
+    there. Any other agent, one that connects to the broker for itself from
+    another process, is sent the command on that topic.
     """
     actor = None
+    main_actor = None
     if runtime.registry is not None:
         actor = runtime.registry.get(agent_id) or runtime.registry.find_by_name(agent_id)
+        main_actor = find_main_actor(runtime.registry)
 
     if actor is not None:
         # apply_command, not stop() directly: it releases the actor from
         # supervision first, without which the watchdog restarts it ~35s later.
-        return "local" if await actor.apply_command(command) else "refused"
+        return Dispatched("local" if await actor.apply_command(command) else "refused")
+
+    placed = _on_node(main_actor, agent_id)
+    if placed is not None and command in ("stop", "start"):
+        return await _through_main(main_actor, agent_id, *placed, command)
 
     if runtime.mqtt_client_ref is None:
         logger.warning("[cmd] %s is not local and no broker is available", agent_id[:8])
-        return ""
+        return Dispatched("")
     try:
         await runtime.mqtt_client_ref.publish(
-            f"agents/{agent_id}/commands",
+            agent_topic(agent_id, "commands"),
             json.dumps({"command": command, "sender": sender, "timestamp": time.time()}),
             # This is the monitor's own client, which applies none of
             # MQTTPublisher's topic classification, so the QoS has to be said
@@ -56,8 +113,8 @@ async def dispatch_command(agent_id: str, command: str, sender: str) -> str:
         )
     except Exception as exc:
         logger.warning("[cmd] publish to %s failed: %s", agent_id[:8], exc)
-        return ""
-    return "broker"
+        return Dispatched("")
+    return Dispatched("broker")
 
 
 #: What the dashboard should show once a command has been accepted. `start`
@@ -65,8 +122,8 @@ async def dispatch_command(agent_id: str, command: str, sender: str) -> str:
 _REPORTED_STATE = {"stop": "stopped"}
 
 
-async def run_command(agent_id: str, command: str, sender: str) -> str:
-    """Run a lifecycle command *and* tell everyone watching. Returns the routing.
+async def run_command(agent_id: str, command: str, sender: str) -> Dispatched:
+    """Run a lifecycle command *and* tell everyone watching. Returns how it went.
 
     The bookkeeping around a command used to live only in the WebSocket handler,
     so a command given over REST executed and then said nothing: no feed entry,
@@ -88,7 +145,7 @@ async def run_command(agent_id: str, command: str, sender: str) -> str:
     from .ws import broadcast
 
     routed = await dispatch_command(agent_id, command, sender)
-    if not routed or routed == "refused":
+    if not routed.done:
         return routed
 
     events.add_log(
@@ -136,7 +193,7 @@ async def purge_agent_retained(agent_id: str) -> None:
     if not runtime.mqtt_client_ref:
         return
     for metric in RETAINED_AGENT_LEAVES:
-        topic = f"agents/{agent_id}/{metric}"
+        topic = agent_topic(agent_id, metric)
         try:
             # QoS 1: a lost purge leaves a stale retained message behind, and a
             # stale retained spawn brings the agent back on the node's next
@@ -155,7 +212,7 @@ async def purge_node_desired_state(node: str) -> None:
     """
     if not runtime.mqtt_client_ref or not node:
         return
-    topic = f"nodes/{node}/desired_state"
+    topic = node_topic(node, "desired_state")
     try:
         await runtime.mqtt_client_ref.publish(topic, b"", retain=True, qos=1)
     except Exception as e:
@@ -163,54 +220,52 @@ async def purge_node_desired_state(node: str) -> None:
 
 
 def _withdrawn_on_offline_nodes(
-    main_actor: Any, registry: dict[str, Any], agent: str | None
+    main_actor: Any, entries: list[dict[str, Any]]
 ) -> list[tuple[str, str]]:
-    """(agent, node) for each withdrawn agent whose node is not online right now."""
+    """(agent, node) for each of the withdrawn ``entries`` whose node is not online right now."""
     withdrawn: list[tuple[str, str]] = []
-    for name, cfg in registry.items():
-        if agent and name != agent:
-            continue
-        node = (cfg.get("node") or "").strip()
+    for cfg in entries:
+        node = placed_on(cfg)
         if node and not main_actor.nodes.is_online(node):
-            withdrawn.append((name, node))
+            withdrawn.append((cfg["name"], node))
     return withdrawn
 
 
-async def purge_spawn_reconcile(agent: str | None = None) -> None:
+async def purge_spawn_reconcile(agent: str | None = None, actor_id: str | None = None) -> None:
     """Tear down the agent-respawn state behind a spawn-registry clear.
 
     Shared by the "spawns" and "all" reset scopes so both behave identically:
       1. clear the kv-backed registry through the live main actor — an uncached
-         recall("_spawned_agents") then returns empty and a later checkpoint
+         recall of the registry then returns empty and a later checkpoint
          can't rewrite the cleared set back to disk; and
       2. fix the retained nodes/{node}/desired_state so a reconnecting runner
          can't reconcile cleared agents back.
 
     For a global clear (agent is None) every affected node's desired_state is
     blanked. For a single-agent clear it is REPUBLISHED from the reduced registry
-    so sibling agents still on that node survive.
+    so sibling agents still on that node survive. ``actor_id`` says which of the
+    agents called ``agent`` it is, where the name is in more than one place.
 
     Must run BEFORE reset_spawns()/reset_all() wipe the kv on disk — it reads the
     registry to learn which nodes are affected.
     """
     main_actor = find_main_actor(runtime.registry)
-    reg = {}
-    if main_actor is not None:
-        reg = main_actor._get_spawn_registry() or {}
+    reg = main_actor._get_spawn_registry() if main_actor is not None else SpawnRegistry()
+    withdrawn = reg.named(agent) if agent else list(reg)
+    if actor_id:
+        withdrawn = [cfg for cfg in withdrawn if cfg["actor_id"] == actor_id]
 
     # Affected nodes: live heartbeats ∪ registry (covers offline nodes).
     node_names: set[str] = set(runtime.state["nodes"].keys())
-    for name, cfg in reg.items():
-        if agent and name != agent:
-            continue
-        n = (cfg.get("node") or "").strip()
-        if n:
-            node_names.add(n)
+    node_names |= {n for cfg in withdrawn if (n := placed_on(cfg))}
 
     # Clear the live registry through the actor's own persistence.
-    if main_actor is not None and main_actor.recall("_spawned_agents", None) is not None:
-        kept = {k: v for k, v in reg.items() if k != agent} if agent else {}
-        main_actor.persist("_spawned_agents", kept)
+    if main_actor is not None:
+        if agent:
+            for cfg in withdrawn:
+                main_actor._remove_from_spawn_registry(agent, actor_id=cfg["actor_id"])
+        else:
+            main_actor._clear_spawn_registry()
 
     if agent and main_actor is not None:
         # Republish from the reduced registry so siblings on the node survive.
@@ -232,11 +287,27 @@ async def purge_spawn_reconcile(agent: str | None = None) -> None:
     if main_actor is not None:
         await asyncio.gather(
             *[
-                main_actor._mqtt_publish(f"nodes/{node}/stop", {"name": name}, qos=1)
-                for name, node in _withdrawn_on_offline_nodes(main_actor, reg, agent)
+                main_actor._mqtt_publish(node_topic(node, "stop"), {"name": name}, qos=1)
+                for name, node in _withdrawn_on_offline_nodes(main_actor, withdrawn)
             ],
             return_exceptions=True,
         )
+
+
+def _node_of(main_actor: Any, agent_id: str, reported: str) -> str | None:
+    """Which agent of its name ``agent_id`` is, as `delete_spawned_agent` takes it.
+
+    The node main's spawn registry keeps it on, "" for main; for an agent the
+    registry does not keep, the node its heartbeats report, or None.
+    """
+    entry = main_actor._get_spawn_registry().by_id(agent_id)
+    if entry is not None:
+        return placed_on(entry)
+    return reported or None
+
+
+#: What `delete_agent` answers for an actor that may not be deleted.
+REFUSED_PROTECTED = "refused-protected"
 
 
 async def delete_agent(agent_id: str) -> str:
@@ -257,17 +328,21 @@ async def delete_agent(agent_id: str) -> str:
       4. Clear retained messages so old heartbeats don't come back on reconnect.
     """
     record = runtime.state["agents"].get(agent_id) or {}
-    name = record.get("name") or agent_id
+    # An agent of this process is listed from the moment it is registered, and
+    # has no record here until its first heartbeat: its name is then the live
+    # actor's. Main finds an agent by name, so the id in its place deletes
+    # nothing and withdraws the manifest of an agent that goes on running.
+    here = runtime.registry.get(agent_id) if runtime.registry else None
+    name = record.get("name") or (here.name if here is not None else agent_id)
     node = (record.get("node") or "").strip()
 
-    # REST refuses to delete a protected actor; this path did not, so the same
-    # request over the WebSocket deleted system agents the API 403s. The check
-    # reads the live actor rather than `record`, because the dashboard entry is
-    # built from heartbeats and a remote agent can claim whatever it likes.
-    actor = runtime.registry.find_by_name(name) if runtime.registry else None
+    # The check reads the live actor rather than `record`, because the dashboard
+    # entry is built from heartbeats and a remote agent can claim whatever it
+    # likes.
+    actor = here or (runtime.registry.find_by_name(name) if runtime.registry else None)
     if actor is not None and getattr(actor, "protected", False):
         logger.warning("[lifecycle] Refusing to delete protected actor '%s'.", name)
-        return "refused-protected"
+        return REFUSED_PROTECTED
 
     runtime.mark_deleted(agent_id)
     runtime.state["agents"].pop(agent_id, None)
@@ -280,7 +355,7 @@ async def delete_agent(agent_id: str) -> str:
         main_actor = find_main_actor(runtime.registry)
         if main_actor is not None:
             try:
-                await main_actor.delete_spawned_agent(name)
+                await main_actor.delete_spawned_agent(name, _node_of(main_actor, agent_id, node))
                 routed = f"via main.delete_spawned_agent({name!r})"
             except Exception as e:
                 logger.warning(
@@ -313,22 +388,22 @@ async def delete_agent(agent_id: str) -> str:
                 # not there to publish it.
                 stop_payload = json.dumps({"name": name})
                 await runtime.mqtt_client_ref.publish(
-                    f"nodes/{node}/stop",
+                    node_topic(node, "stop"),
                     stop_payload,
                     qos=1,
-                    **signed_publish_kwargs(f"nodes/{node}/stop", stop_payload),
+                    **signed_publish_kwargs(node_topic(node, "stop"), stop_payload),
                 )
-                routed = f"via nodes/{node}/stop"
+                routed = f"via {node_topic(node, 'stop')}"
             except Exception as e:
-                logger.warning("[delete] nodes/%s/stop publish failed: %s", node, e)
+                logger.warning("[delete] %s publish failed: %s", node_topic(node, "stop"), e)
         else:
             try:
                 await runtime.mqtt_client_ref.publish(
-                    f"agents/{agent_id}/commands",
+                    agent_topic(agent_id, "commands"),
                     json.dumps({"command": "stop", "sender": "monitor", "timestamp": time.time()}),
                     qos=1,
                 )
-                routed = f"via agents/{agent_id}/commands"
+                routed = f"via {agent_topic(agent_id, 'commands')}"
             except Exception as e:
                 logger.warning("[delete] commands publish failed: %s", e)
 

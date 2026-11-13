@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """ActorRegistry - Central registry and message router for all actors.
 ActorSystem orchestrates startup, shutdown, and actor lifecycle.
 Supervisor implements Erlang/OTP-style supervision trees.
@@ -33,6 +34,7 @@ from .actor import (
 )
 from .mqtt_publisher import MQTTPublisher
 from .paths import resolve_state_dir
+from .topic_bus import TopicBus, init_topic_bus
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +110,7 @@ class SupervisedSpec:
         return self._restart_task is not None and not self._restart_task.done()
 
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class ActorRegistry:
@@ -291,6 +293,29 @@ class ActorRegistry:
 HELD_REPORTS = 100
 
 
+async def start_registered(registry: ActorRegistry, actor: Actor) -> None:
+    """Register ``actor`` with ``registry`` and start it, or leave it neither if the start fails.
+
+    `Actor.start` marks the actor running before ``on_start`` and starts its
+    loops last, so a start that fails part-way would leave it listed as running
+    with nothing running, held by nothing that would stop it. Any failure of
+    the start, a cancellation included, stops the actor and takes it back out of
+    the registry, each tried on its own so that one failing does not skip the
+    other, and the start's own exception is then raised as it was. Registration
+    itself is not wound back from: an actor that cannot be registered was never
+    listed.
+    """
+    await registry.register(actor)
+    try:
+        await actor.start()
+    except BaseException:
+        with contextlib.suppress(Exception):
+            await actor.stop()
+        with contextlib.suppress(Exception):
+            await registry.unregister(actor.actor_id)
+        raise
+
+
 class Supervisor:
     """OTP-inspired supervision tree node.
 
@@ -319,13 +344,13 @@ class Supervisor:
         registry: ActorRegistry,
         inject_fn: Callable[[Actor], None],
         poll_interval: float = 2.0,
-    ):
+    ) -> None:
         self._registry = registry
         self._inject = inject_fn  # sets MQTT client + broker/port on actor
         self._poll_interval = poll_interval  # seconds between liveness checks
         self._specs: dict[str, SupervisedSpec] = {}  # name → spec (ordered)
         self._order: list[str] = []  # insertion order for REST_FOR_ONE
-        self._watch_task: asyncio.Task | None = None
+        self._watch_task: asyncio.Task[Any] | None = None
         self._lock = asyncio.Lock()
         #: Reports main's mailbox had no room for, oldest first, handed over
         #: again at each check. Bounded: a main that never reads must not be a
@@ -392,7 +417,7 @@ class Supervisor:
         spec.actor = actor
         actor.supervisor_id = str(id(self))
 
-    def release(self, name: str):
+    def release(self, name: str) -> None:
         """Voluntarily remove an actor from supervision — the Erlang 'unlink' equivalent.
 
         Call this BEFORE sending a stop or delete command to an actor so the
@@ -557,7 +582,7 @@ class Supervisor:
 
     # ── Startup ───────────────────────────────────────────────────────────────
 
-    async def start(self):
+    async def start(self) -> None:
         """Spawn all supervised actors and start the watch loop."""
         for name, spec in self._entries():
             actor = await self._spawn_actor(name, spec)
@@ -584,7 +609,7 @@ class Supervisor:
     SLOW_RETRY_DELAY = 300.0  # seconds
     MAX_SLOW_RETRY_DELAY = 3600.0  # seconds
 
-    async def _watch_loop(self):
+    async def _watch_loop(self) -> None:
         """Poll supervised actors for failure and start their restarts.
 
         Detection runs under the lock; restarts run as tasks of their own. A
@@ -721,7 +746,7 @@ class Supervisor:
 
     # ── Strategy application ─────────────────────────────────────────────────
 
-    async def _apply_strategy(self, crashed_name: str, crashed_spec: SupervisedSpec):
+    async def _apply_strategy(self, crashed_name: str, crashed_spec: SupervisedSpec) -> None:
         """Restart the actors the strategy calls for.
 
         Skipped: retired specs -- deliberately stopped or deleted, and restarting
@@ -812,7 +837,7 @@ class Supervisor:
             )
         return min(spec.restart_delay * 2 ** max(spec.crash_streak - 1, 0), self.MAX_RESTART_DELAY)
 
-    async def _restart_one(self, name: str, spec: SupervisedSpec, crashed: bool = True):
+    async def _restart_one(self, name: str, spec: SupervisedSpec, crashed: bool = True) -> None:
         """Restart one actor, after a delay that grows while it keeps crashing.
 
         The old actor is stopped before the wait, not after it. A FAILED actor
@@ -906,17 +931,8 @@ class Supervisor:
         actor = await made if inspect.isawaitable(made) else made
         self._inject(actor)
         actor.supervisor_id = str(id(self))
-        await self._registry.register(actor)
-        try:
-            await actor.start()
-        except BaseException:
-            # Cancellation included: registered but never handed back, the actor
-            # is held by nothing that would stop it.
-            with contextlib.suppress(Exception):
-                await actor.stop()
-            with contextlib.suppress(Exception):
-                await self._registry.unregister(actor.actor_id)
-            raise
+        # Registered but never handed back if its start fails: wound back here.
+        await start_registered(self._registry, actor)
         logger.debug("[Supervisor] Spawned '%s' (%s).", name, actor.actor_id[:8])
         return actor
 
@@ -928,7 +944,7 @@ class Supervisor:
         """
         return self._specs.get(name) is spec and not spec.retired
 
-    async def _stop_actor(self, name: str, spec: SupervisedSpec):
+    async def _stop_actor(self, name: str, spec: SupervisedSpec) -> None:
         """Stop an actor gracefully, unregister it, swallow errors."""
         actor = spec.actor
         if actor is None:
@@ -962,7 +978,7 @@ class Supervisor:
         while self._held_reports and main.offer(self._held_reports[0]):
             self._held_reports.popleft()
 
-    async def _notify_main(self, message: str, severity: str = "critical"):
+    async def _notify_main(self, message: str, severity: str = "critical") -> None:
         """Send a supervision event to MainActor via the actor message queue.
 
         Uses MessageType.TASK with _monitor_notification=True so main's
@@ -1032,7 +1048,7 @@ class Supervisor:
         """
         return self._watch_task is not None and not self._watch_task.done()
 
-    def status(self) -> list[dict]:
+    def status(self) -> list[dict[str, Any]]:
         """Return a snapshot of all supervised actors for dashboard/CLI."""
         result = []
         for name, spec in self._entries():
@@ -1052,7 +1068,7 @@ class Supervisor:
             )
         return result
 
-    async def stop(self):
+    async def stop(self) -> None:
         """Stop supervising, then stop every supervised actor."""
         if self._watch_task and self._watch_task is not asyncio.current_task():
             # Awaited, not just cancelled: restarts now run outside the lock, so
@@ -1097,8 +1113,8 @@ class ActorSystem:
 
     def __init__(
         self, mqtt_broker: str = "localhost", mqtt_port: int = 1883, state_dir: str | None = None
-    ):
-        self.registry = ActorRegistry()
+    ) -> None:
+        self.registry: ActorRegistry = ActorRegistry()
         self._mqtt_broker = mqtt_broker
         self._mqtt_port = mqtt_port
         self._mqtt_client = None
@@ -1110,9 +1126,9 @@ class ActorSystem:
         # Created in start(), which is the first point an MQTT client exists to
         # give it. Declared here so the attribute is not conjured into being
         # halfway through the object's life.
-        self.topic_bus = None
+        self.topic_bus: TopicBus | None = None
 
-    def _inject(self, actor: Actor):
+    def _inject(self, actor: Actor) -> None:
         """Inject MQTT client + broker/port into an actor so it can publish and subscribe."""
         actor._mqtt_client = self._mqtt_client
         actor._mqtt_broker = self._mqtt_broker
@@ -1127,7 +1143,7 @@ class ActorSystem:
             self.registry._supervisor_ref = self._supervisor
         return self._supervisor
 
-    def mqtt_status(self) -> dict:
+    def mqtt_status(self) -> dict[str, Any]:
         """Return current MQTT publisher health — useful for dashboard and /nodes."""
         if self._mqtt_client is None:
             return {"connected": False, "queue_depth": 0, "available": False}
@@ -1138,7 +1154,7 @@ class ActorSystem:
             "client_id": getattr(self._mqtt_client, "_client_id", "?"),
         }
 
-    async def start(self, *initial_actors: Actor):
+    async def start(self, *initial_actors: Actor) -> None:
         """Bring the system up: MQTT, topic bus, the given actors, supervision."""
         self._running = True
 
@@ -1149,8 +1165,6 @@ class ActorSystem:
         )
 
         # ── Initialise TopicBus (reactive pub/sub coordination layer) ─────
-        from .topic_bus import init_topic_bus
-
         self.topic_bus = init_topic_bus(
             mqtt_client=self._mqtt_client,
             mqtt_broker=self._mqtt_broker,
@@ -1158,25 +1172,29 @@ class ActorSystem:
         )
         logger.info("[ActorSystem] TopicBus initialised")
 
+        # As `Supervisor.start` does: an actor whose start fails is wound back and
+        # its error raised; those started before it run on, for `stop_all`.
         for actor in initial_actors:
             self._inject(actor)
-            await self.registry.register(actor)
-            await actor.start()
+            await start_registered(self.registry, actor)
 
         logger.info("[ActorSystem] Started with %s actors.", len(initial_actors))
 
-    async def spawn(self, actor_class: type[Actor], **kwargs) -> Actor:
-        """Spawn and register a new actor in the system."""
+    async def spawn(self, actor_class: type[Actor], **kwargs: Any) -> Actor:
+        """Build an actor of ``actor_class`` with ``kwargs``, register it and start it.
+
+        A start that fails leaves the actor stopped and out of the registry, and
+        raises what it failed with; see :func:`start_registered`.
+        """
         actor = actor_class(**kwargs)
         self._inject(actor)
-        await self.registry.register(actor)
-        await actor.start()
+        await start_registered(self.registry, actor)
         return actor
 
-    async def stop_all(self):
+    async def stop_all(self) -> None:
         """Shut everything down in reverse: supervisor, actors, then MQTT."""
         self._running = False
-        self.stopping = True
+        self.stopping: bool = True
         # Stop supervisor first so it doesn't try to restart actors we're about to stop
         if self._supervisor:
             await self._supervisor.stop()
@@ -1188,7 +1206,7 @@ class ActorSystem:
         gc.collect()  # break aiomqtt↔paho ref cycle while loop is open
         logger.info("[ActorSystem] All actors stopped.")
 
-    async def run_forever(self):
+    async def run_forever(self) -> None:
         """Block until the system is stopped or interrupted.
 
         A cancellation stops everything and is then raised on: the caller

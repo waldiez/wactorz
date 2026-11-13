@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Getting a turn's attachments from the chat path into the model request.
 
 Two things are being pinned here. The first is that the blocks arrive at all —
@@ -35,8 +36,8 @@ class RecordingProvider(LLMProvider):
         return self._blocks
 
     async def _complete(
-        self, messages: list[dict], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict]:
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         self.sent = messages
         return "ok", {"input_tokens": 1, "output_tokens": 1, "cost_usd": 0.0}
 
@@ -59,7 +60,9 @@ def agent_fixture(tmp_path: Path) -> LLMAgent:
     )
 
 
-def _blocks(name: str = "shot.png", data: bytes = PNG, mime: str = "image/png") -> list[dict]:
+def _blocks(
+    name: str = "shot.png", data: bytes = PNG, mime: str = "image/png"
+) -> list[dict[str, Any]]:
     ref = {"id": "a" * 32, "name": name, "mime": mime, "size": len(data)}
     return attachments.to_blocks([ref], lambda _file_id: data)
 

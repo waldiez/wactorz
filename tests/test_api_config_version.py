@@ -1,6 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
 """The dashboard is told which Wactorz is answering it."""
 
 import json
+from typing import Any
 
 from aiohttp import web
 
@@ -18,7 +20,7 @@ class _Request:
         self.app = web.Application()
 
 
-async def _config() -> dict:
+async def _config() -> dict[str, Any]:
     response = await api_system.config_handler(_Request())  # type: ignore[arg-type]
     body = response.body
     assert isinstance(body, bytes)

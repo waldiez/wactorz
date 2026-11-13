@@ -236,11 +236,38 @@ An agent the deployment brings — a function declared with `@wactorz.agent`, an
 {"name": "imu-anomaly", "node": "rpi-kitchen", "type": "module", "target": "imu_anomaly.agent:detect", "options": {"threshold": 4.0}}
 ```
 
-Main sends the agent's code with the spawn: the folder its module is in, `.py` files only, which the node writes under `~/wactorz/state/..bundles/`, checks against the hash the signed spawn names, and imports the agent from. The packages it lists in `requires={"packages": [...]}` are installed first. **An agent's own code has to live in that folder**: one that imports code of the main machine's from anywhere else is refused before it moves, naming the import — see *Using Wactorz as a library*. A node that has the package installed itself, with the target named in `WACTORZ_AGENTS` or as a `wactorz.agents` entry point, builds it from that and is sent no code; the targets it can build and whether it takes code (`code_bundles`) are in its manifest. A node from before this release takes no code, and main refuses to move a library agent there until it is deployed again. On the node the agent runs as it does on main, with no model: `me.llm` is `None` there. The models it names with `models=` (or `MODELS` on a class) go with it as artifacts: main pins them when it sends the agent, and the node fetches them before it builds it, as for any agent whose spawn names artifacts. *Using Wactorz as a library* has the rest.
+Main sends the agent's code with the spawn: the folder its module is in, `.py` files only, which the node writes under `~/wactorz/state/..bundles/`, checks against the hash the signed spawn names, and imports the agent from. The packages it lists in `requires={"packages": [...]}` are installed first. **An agent's own code has to live in that folder**: one that imports code of the main machine's from anywhere else is refused before it moves, naming the import — see *Using Wactorz as a library*. A node that has the package installed itself, with the target named in `WACTORZ_AGENTS`, or as a `wactorz.agents` entry point of a package in its own `WACTORZ_EXTENSIONS` (`DEPLOY_<NODE>_EXTENSIONS` on main, since `/deploy` writes the node's `.env`), builds it from that and is sent no code; the targets it can build and whether it takes code (`code_bundles`) are in its manifest. A node from before this release takes no code, and main refuses to move a library agent there until it is deployed again. On the node the agent runs as it does on main, with no model: `me.llm` is `None` there. The models it names with `models=` (or `MODELS` on a class) go with it as artifacts: main pins them when it sends the agent, and the node fetches them before it builds it, as for any agent whose spawn names artifacts. *Using Wactorz as a library* has the rest.
 
-> **ℹ replace flag** — If an agent with the same name is already running on the node, the spawn is ignored by default. Pass `"replace": true` in the config to stop the old instance and spawn fresh.
+An agent on a node runs under the id main keeps for it, which it keeps across restarts and moves; the node says it does so (`actor_ids`) in its manifest. A node from before ids were kept gives an agent the id derived from its name. Main gives a new agent there that id, and refuses to send it an agent that already has an id of its own, saying to deploy the node again.
+
+> **ℹ replace flag** — If an agent with the same name is already running on the node, the spawn is ignored by default. Pass `"replace": true` in the config to stop the old instance and spawn fresh. If the name runs on another host instead, `"replace": true` moves it to this node and `"alongside": true` runs a second one here (see *Two agents of one name* in the agents guide); with neither, nothing is spawned.
 
 ---
+
+## Stopping and starting an agent on a node
+
+An agent on a node is stopped and started the way one on the server is: the
+buttons on its card, `POST /api/actors/<id>/stop` and `/start`, or in chat
+`/agents stop <agent>`, `/start <agent>` and `/agents restart <agent>` (with
+`<agent>@<node>` where a name runs in more than one place).
+
+| | What happens |
+|---|---|
+| **Stop** | The node stops the agent and keeps its state file. The server keeps the agent's config, remembers that it is stopped, and takes it out of the list the node starts from. |
+| **While stopped** | It stays stopped through a reboot of the node and a restart of the server, and is not taken for an agent that crashed. Its card stays, as stopped. It cannot be moved until it is started. |
+| **Start** | The server sends the agent to its node again from the config it kept, and the agent resumes from the state file there. |
+| **Restart** | A running agent is stopped and started in place by its node; a stopped one is started. |
+| **Delete** | Removes the config, the state file and the stop with them. |
+
+The server sends a stop or a start and does not wait for the node, so what it
+answers is that the command was sent. It says so when it was not: the node is
+not online, runs another release, or the agent is one the server did not spawn
+and so keeps no config for (such an agent can be stopped, and not started
+again from here). The dashboard shows that as a line in chat. If the node then
+fails to start the agent, the feed says why, as for any spawn.
+
+All of it goes through the node's own control topics, which a node deployed by
+an earlier release already understands, so nothing needs deploying again.
 
 ## Automated deploy from chat
 
@@ -364,9 +391,11 @@ Only for a node main does not know at all, such as one that was down when main
 started, is a withdrawal taken at once. What else a node can publish under
 another agent's topics, such as its status or logs, is taken as given.
 
-That includes tasks. A task on `agents/by-name/<name>/task` reaches the agent of
-that name on whichever node runs it, and any node may publish one, so an agent
-on a node is asked by whoever publishes there, another node included. Its
+That includes tasks. A task on `agents/at/<node>/<name>/task` reaches the agent
+of that name on that node, and one on `agents/by-name/<name>/task`, which nodes
+from before tasks went by node still use, the agent of that name on every node
+that runs it. Any node may publish either, so an agent on a node is asked by
+whoever publishes there, another node included. Its
 `handle_task` should treat the payload as untrusted input, as it would text from
 the web: check what it acts on, and never run or install what a task names.
 
@@ -376,14 +405,21 @@ compose's `mqtt-certs`; the add-ons offer them as `node_topics` and
 
 | Setting | What it does |
 | ------- | ------------ |
-| `WACTORZ_NODE_TOPICS` | More data topics for every node, comma-separated: `zigbee2mqtt/#, read:weather/#`. A filter prefixed `read:` may be read and not written. One under `nodes/`, `agents/`, `main/`, `system/` or `$` is refused, with a message, because it would open for every node what the list exists to close. |
+| `WACTORZ_NODE_TOPICS` | More data topics for every node, comma-separated: `zigbee2mqtt/#, read:weather/#`. A filter prefixed `read:` may be read and not written. One that reaches Wactorz's own topics (`agents/`, `nodes/`, `main/`, `system/`, `models/`, `pipelines/`, `shadow/`), bare or under another install's namespace (`other/agents/#`), or `#` or `$`, is refused, with a message, because it would open for every node what the list exists to close. Do not add another install's namespace as a data topic: `other/#` cannot be told from any other prefix. |
 | `WACTORZ_BROKER_ACCOUNTS` | Other accounts on this broker that keep all of it, comma-separated: `homeassistant, zigbee2mqtt`. The server's own account (`MQTT_USERNAME`) is always one of them. |
 
 **An agent on a node that uses a topic outside the list gets no error.** The
 broker drops the publish and delivers nothing to the subscription, which is how
-MQTT refuses, so the agent looks idle rather than broken. If an agent that works
-on the server goes quiet on a node, add its topic prefix to
-`WACTORZ_NODE_TOPICS`.
+MQTT refuses, so the agent looks idle rather than broken. The server says so
+instead: an agent's manifest names the topics it publishes and subscribes to,
+and for each one the list refuses its node, a notice in chat and a line in the
+log name the agent, the node and the topic, with the entry to add to
+`WACTORZ_NODE_TOPICS` (`read:` in front of one that is only subscribed to). A
+topic every node is kept from, such as another node's or `agents/+/commands`,
+cannot be added, and the notice says the agent has to use another. This is said
+only where the server writes the list: on a broker it does not write the files
+for, it cannot know what a node may use, so if an agent that works on the server
+goes quiet on a node there, look at that broker's own rules.
 
 **List every other account once a node is deployed.** Mosquitto gives an account
 the list does not mention no access at all, so with a node deployed, Home
@@ -656,9 +692,51 @@ sent all the same and starts when the node does; the chat says so.
 
 ---
 
+## Two installs on one broker
+
+Two Wactorz installs that share a broker -- a dev instance pointed at the house
+broker, say -- share every control topic unless one of them has a namespace: each
+hears the other's agents and nodes, and either can drive them. Main says so in
+chat when it hears another install's health on its own topics.
+
+Set `WACTORZ_NAMESPACE` to one word on at least one of them (the add-ons offer it as
+`namespace`):
+
+```bash
+WACTORZ_NAMESPACE=dev
+```
+
+Wactorz's own topics then go under it -- `dev/agents/...`, `dev/nodes/...`,
+`dev/main/...`, `dev/system/...`, `dev/models/...`, `dev/pipelines/...`,
+`dev/shadow/...` -- and the node access list with them. The topics that describe the
+world (`sensors/`, `home/`, `custom/`, `schedule/`, `homeassistant/`) stay shared, so
+both installs read the same sensors. Agent programs, library agents' configs, panels
+and the dashboard keep writing Wactorz's topics bare: the server, `AgentAPI` and
+`Actor` put the namespace on and take it off, and a recorder files what it records
+under the bare name. A program that opens its own broker connection does not get that.
+
+The value is one topic level: no spaces, none of `/ + # $`, and not the name of a
+root. Main and a node refuse to start on one that cannot be used, and say why. Empty
+is no namespace.
+
+**Changing it is a deploy.** After setting, renaming or clearing a namespace, run
+`/deploy` for every node: a node is told its namespace in its `.env`, and one on
+another namespace than main's publishes where main does not listen. Main says in chat
+when it hears one of its own nodes on another namespace. Retained topics from before
+are left on the broker, since another install may own what is under them; main logs
+once when it finds its own manifest there, and one can be cleared with
+`mosquitto_pub -r -n -t <topic>`.
+
+**It is enforced where Wactorz writes the access list:** the compose broker and the
+add-ons' embedded broker. On a broker Wactorz does not run (the official Mosquitto
+add-on, an external one), nodes have no access list, and two installs sharing it are
+kept apart by their topics alone.
+
 ## MQTT topics
 
 The runner subscribes to a set of control topics scoped to its node name, and publishes heartbeats for itself and all its agents.
+Under a namespace (see [Two installs on one broker](#two-installs-on-one-broker)), every
+topic in this section starts with it.
 
 | Topic | Direction | Description |
 |-------|-----------|-------------|
@@ -677,10 +755,17 @@ The runner subscribes to a set of control topics scoped to its node name, and pu
 | `nodes/{name}/code_return` | ← runner | The program, quoting the token it was asked with. |
 | `nodes/{name}/reset` | → runner | Clear one agent's chat, state or counters here, or every agent's, as main has cleared its own records. Payload: `{"scope": "chat" \| "state" \| "metrics", "agent": "..." or null, "request": "..."}`. Signed. |
 | `nodes/{name}/reset_done` | ← runner | The reset done, quoting `request` and naming the agents it cleared (`"cleared": [...]`); a scope the node does not reach into is answered with none. |
-| `nodes/{name}/reply/{id}` | ← runner | Reply routing for `agent.send_to()` calls originating on this node. |
+| `nodes/{name}/swap_model` | → runner | Have an agent here serve another version of a model it names, because the pointer its pin follows moved. Payload: `{"agent": "...", "key": "...", "entry": {pinned artifact}, "token": "..."}`. The node fetches the version as it fetched the first, swaps it in place, and keeps the old one if the new one will not load. Signed. |
+| `nodes/{name}/swap_ack` | ← runner | How the swap went, quoting the token: `{"ok": true}` with `from` and `to`, or `{"ok": false, "reason": "..."}`. |
+| `nodes/{name}/data_file` | ← runner | A recorded file is on its way on `blob_return`: `{"source": "...", "path": "<source>/<yyyy>/<mm>/<dd>/<hh>.parquet", "sha256": "...", "size": n}`. Sent for each file a recorder here closes; sent again if main does not answer. |
+| `nodes/{name}/data_ack` | → runner | Main kept the file under its own data directory, or could not: `{"sha256": "...", "ok": true}` or `{"ok": false, "reason": "..."}`. Signed. |
+| `nodes/{name}/reply/{id}` | ← runner | Replies to what this node asks main, such as an LLM call. |
+| `agents/at/{name}/{agent}/reply/{id}` | ← runner | The reply to an `agent.send_to()` sent by an agent on this node. |
 | `agents/{id}/heartbeat` | ← agent | Per-agent heartbeat every 10 s. Includes `"node": "{name}"` field. |
 | `agents/{id}/logs` | ← agent | Log messages from `agent.log()` and `agent.alert()`. |
-| `agents/by-name/{name}/task` | → agent | Task addressed to a named agent on any node. Runner routes to local agents by name. Any node may publish one, so its payload is untrusted input. |
+| `agents/at/{name}/+/task` | → agent | A task for an agent on this node, by its name. Any node may publish one, so its payload is untrusted input. The node's manifest says `"tasks_by_node": true`. |
+| `agents/by-name/+/task` | → agent | A task by name alone, from a sender that addresses no node; every node running the name takes it. Untrusted input, as above. |
+| `agents/+/manifest` | → runner | Every agent's retained manifest, read for where agents run, so `agent.send_to("name@node")` from this node reaches the right one. An agent here stamps its own with `"node"` and `"tasks_by_node": true`. |
 
 
 ### Why a repair travels in two steps

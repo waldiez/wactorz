@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`on_delete`: what an agent removes when it is deleted rather than stopped.
 
 A stop is expected to be undone, so it keeps state. A delete promises no trace

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A streamed reply loses its action blocks however it is cut into chunks.
 
 Main runs the blocks once the reply is whole; the user is sent the text around

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One-time interactive OAuth login for the Google Calendar / Gmail agents.
 
 Run once per machine to mint the OAuth token the agents reuse. It opens a browser
@@ -22,7 +23,9 @@ from ..core.integrations.gmail_mcp import GmailMcpClient
 from ..core.integrations.google_calendar_mcp import GoogleCalendarMcpClient
 
 
-async def _login_one(label: str, client, configured: bool) -> bool:
+async def _login_one(
+    label: str, client: GmailMcpClient | GoogleCalendarMcpClient, configured: bool
+) -> bool:
     if not configured:
         print(f"{label}: skipped — no {label.upper()}_MCP_CLIENT_ID/SECRET set.")
         return True

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The sign-in page, and the two routes behind it.
 
 Server-rendered on purpose. The dashboard bundle is behind the gate, so the
@@ -12,14 +13,15 @@ logged in are the same state) and why the origin gate is enough — see
 `auth.UNGUARDED_PATHS`.
 """
 
-import hmac
 import logging
+import secrets
 
 from aiohttp import web
 
 from . import auth, origins, sessions, throttle
+from .static_site import csp_policy
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 Response = web.Response | web.StreamResponse
 
@@ -109,6 +111,14 @@ _PAGE = """<!doctype html>
     <button type="submit">Sign in</button>
   </form>
 </main>
+<script nonce="{nonce}">
+  // The address's #... never reaches the server, so the server's `next` lacks
+  // it: carry the view the browser was opening (#/models/x) through the sign-in.
+  document.querySelector("form").addEventListener("submit", function (event) {{
+    var next = event.target.elements.namedItem("next");
+    if (location.hash) next.value = next.value.split("#")[0] + location.hash;
+  }});
+</script>
 </body>
 </html>
 """
@@ -135,6 +145,9 @@ def _escape(value: str) -> str:
 
 
 def _page(next_value: str, message: str, status: int = 200) -> web.Response:
+    # The dashboard's policy: the page's own script runs by its nonce, and a
+    # script injected into the page does not.
+    nonce = secrets.token_urlsafe(16)
     return web.Response(
         # Anything but 200 is the page saying no, so the message carries the
         # colour rather than a separate flag the two callers could disagree on.
@@ -142,12 +155,13 @@ def _page(next_value: str, message: str, status: int = 200) -> web.Response:
             next_value=_escape(next_value),
             message=message,
             message_class="" if status == 200 else "error",
+            nonce=nonce,
         ),
         content_type="text/html",
         status=status,
         # A login page a proxy has cached, or a browser re-shows from history
         # after signing out, is a page that lies about the state of the server.
-        headers={"Cache-Control": "no-store"},
+        headers={"Cache-Control": "no-store", "Content-Security-Policy": csp_policy(nonce)},
     )
 
 
@@ -168,11 +182,13 @@ async def login_page_handler(request: web.Request) -> Response:
     code = request.query.get("code", "")
     if code and sessions.codes.redeem(code):
         response = web.HTTPFound(target)
-        _set_session_cookie(request, response, sessions.store.create())
+        _set_session_cookie(request, response, await sessions.store.started())
         logger.info("[auth] signed in with the startup link")
         raise response
 
-    if auth.is_authorized(request, CONFIG.api_key):
+    # Not the header's key: this page needs none, so answering one here would
+    # be a way to test guesses that nothing counts.
+    if auth.needs_no_key(request, CONFIG.api_key):
         raise web.HTTPFound(target)
     message = (
         "That sign-in link has been used or has expired."
@@ -198,7 +214,7 @@ async def login_submit_handler(request: web.Request) -> Response:
     form = await request.post()
     presented = str(form.get("key", ""))
     target = auth.safe_next(str(form.get("next", "/")))
-    caller = origins.client_address(request) or "an unknown address"
+    caller = origins.client_address(request) or throttle.UNKNOWN_ADDRESS
 
     throttle.throttle.prune()
     waiting = throttle.throttle.retry_after(caller)
@@ -208,7 +224,7 @@ async def login_submit_handler(request: web.Request) -> Response:
         logger.warning("[auth] sign-in refused, %s must wait %.0fs", caller, waiting)
         return _page(target, _wait_message(waiting), status=429)
 
-    if not CONFIG.api_key or not hmac.compare_digest(presented, CONFIG.api_key):
+    if not CONFIG.api_key or not auth.key_matches(presented, CONFIG.api_key):
         # No detail about which part was wrong, and the same page either way.
         throttle.throttle.record_failure(caller)
         logger.warning("[auth] failed sign-in from %s", caller)
@@ -218,14 +234,14 @@ async def login_submit_handler(request: web.Request) -> Response:
     # and aiohttp wants an HTTPException raised rather than returned.
     throttle.throttle.record_success(caller)
     response = web.HTTPFound(target)
-    _set_session_cookie(request, response, sessions.store.create())
+    _set_session_cookie(request, response, await sessions.store.started())
     logger.info("[auth] signed in from %s", caller)
     raise response
 
 
 async def logout_handler(request: web.Request) -> Response:
     """End this browser's session and return to the form."""
-    sessions.store.revoke(request.cookies.get(auth.SESSION_COOKIE, ""))
+    await sessions.store.ended(request.cookies.get(auth.SESSION_COOKIE, ""))
     response = web.HTTPFound("/login")
     response.del_cookie(auth.SESSION_COOKIE, path="/")
     raise response
@@ -238,7 +254,7 @@ async def logout_everywhere_handler(request: web.Request) -> Response:
     everyone out is this, and not a credential change that would also break
     every script, probe and integration at the same moment.
     """
-    ended = sessions.store.revoke_all()
+    ended = await sessions.store.all_ended()
     logger.info("[auth] all sessions ended (%d)", ended)
     response = web.HTTPFound("/login")
     response.del_cookie(auth.SESSION_COOKIE, path="/")

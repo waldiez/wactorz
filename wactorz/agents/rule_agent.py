@@ -1,9 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
 """A rule: when a message arrives on a topic and a condition holds, act.
 
 The glue between the stages of a pipeline, without a program per rule. A rule
 subscribes to one or more trigger topics, checks conditions against the
 payload, waits out a cooldown, and runs its actions: publish a message, send a
-task to an agent, or call a webhook. A Home Assistant service call stays with
+task to an agent, call a webhook, ask the operator, or record a label. The
+cooldown runs in the triggers' own time, the event time each payload carries
+in ``ts`` or ``timestamp``, else when it arrived, so a replayed day's cooldown
+is a replayed day (docs/design/event-time.md). A Home Assistant service call stays with
 the ``ha_actuator`` type; a rule is for everything that is not Home Assistant.
 
 A spawn config, a pipeline definition and chat all describe a rule the same way:
@@ -22,8 +26,22 @@ A spawn config, a pipeline definition and chat all describe a rule the same way:
     }
 
 An action's payload may name fields of the trigger payload in braces, by the
-same dotted path a condition uses (``{reading.score}``), and carries the
-trigger payload itself under ``trigger`` unless told not to.
+same dotted path a condition uses (``{reading.score}``), inside nested objects
+and lists too, and carries the trigger payload itself under ``trigger`` unless
+told not to. A value that is one placeholder and nothing else is the trigger's
+value as it is, so ``"at": "{ts}"`` hands a number on, and
+``"split": {"kind": "time_split", "at": "{ts}"}`` is what the trainer reads.
+
+A ``label`` action records that a source was doing something from the moment
+the trigger says it happened (its ``ts`` or ``timestamp``, else now), as the
+rule's own label in the provenance graph -- see
+docs/design/labels-and-provenance.md:
+
+    {"type": "label", "source": "sensors/{entity_id}", "value": "maintenance",
+     "text": "maintenance switch on"}
+
+``source`` and ``value`` may name trigger fields in braces; ``text``, if given,
+is kept as the label's note.
 """
 
 from __future__ import annotations
@@ -31,6 +49,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import operator
+import re
 import string
 import time
 from collections.abc import Callable
@@ -40,9 +59,12 @@ from typing import Any
 import aiohttp
 
 from ..core.actor import Actor, Message, MessageType
+from ..core.labels import LabelError, Labels, event_time
 from ..core.outbound import check_channel, check_options
+from ..core.persistence.stores import get_db
+from ..core.topics import agent_topic
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long a webhook call may take. Generous: the cost of a slow hook is a
 #: late action, the cost of a tight limit is an action that never happens.
@@ -63,7 +85,7 @@ _ALIASES = {"==": "eq", "=": "eq", "!=": "ne", ">": "gt", ">=": "gte", "<": "lt"
 #: Operators that need no value: whether the field is there at all.
 _PRESENCE = ("exists", "absent")
 
-ACTION_TYPES = ("publish", "task", "webhook", "ask_operator")
+ACTION_TYPES = ("publish", "task", "webhook", "ask_operator", "label")
 
 #: Where an ``ask_operator`` action publishes the pick when it names no topic.
 ANSWERS_TOPIC = "answers/{rule}"
@@ -77,50 +99,74 @@ class RuleError(ValueError):
 
     @classmethod
     def unknown_operator(cls, op: str) -> RuleError:
+        """The error for a condition operator ``op`` that is none of the known ones."""
         return cls(f"unknown condition operator {op!r}")
 
     @classmethod
     def unknown_action(cls, kind: str) -> RuleError:
+        """The error for an action ``kind`` that is none of the known action types."""
         return cls(f"unknown action type {kind!r}; one of {', '.join(ACTION_TYPES)}")
 
     @classmethod
     def condition_without_field(cls) -> RuleError:
+        """The error for a condition with no field to test."""
         return cls("a condition needs a 'field'")
 
     @classmethod
     def question_without_text(cls) -> RuleError:
+        """The error for an ``ask_operator`` action with no question text."""
         return cls("an ask_operator action needs the 'text' to ask")
 
     @classmethod
     def question_without_options(cls) -> RuleError:
+        """The error for an ``ask_operator`` action with no options."""
         return cls("an ask_operator action needs 'options' to pick from")
 
     @classmethod
     def publish_without_topic(cls) -> RuleError:
+        """The error for a ``publish`` action with no topic."""
         return cls("a publish action needs a 'topic'")
 
     @classmethod
     def task_without_agent(cls) -> RuleError:
+        """The error for a ``task`` action that names no agent."""
         return cls("a task action needs an 'agent'")
 
     @classmethod
     def webhook_without_url(cls) -> RuleError:
+        """The error for a ``webhook`` action with no http(s) URL."""
         return cls("a webhook action needs an http(s) 'url'")
 
     @classmethod
+    def label_without_source(cls) -> RuleError:
+        """The error for a ``label`` action that names no source."""
+        return cls("a label action needs the 'source' it is about")
+
+    @classmethod
+    def label_without_value(cls) -> RuleError:
+        """The error for a ``label`` action with no value to record."""
+        return cls("a label action needs the 'value' to record")
+
+    @classmethod
     def no_trigger(cls) -> RuleError:
+        """The error for a rule with no trigger topic."""
         return cls("a rule needs at least one trigger topic")
 
     @classmethod
     def no_action(cls) -> RuleError:
+        """The error for a rule with no action."""
         return cls("a rule needs at least one action")
 
     @classmethod
     def bad_question(cls, exc: ValueError) -> RuleError:
+        """The error for an ``ask_operator`` action whose question was refused, with the reason
+        in ``exc``.
+        """
         return cls(f"an ask_operator action: {exc}")
 
     @classmethod
     def negative_timeout(cls) -> RuleError:
+        """The error for an ``ask_operator`` action with a negative timeout."""
         return cls("an ask_operator action's 'timeout' is seconds, zero to wait")
 
 
@@ -147,6 +193,11 @@ class RuleCondition:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> RuleCondition:
+        """The condition ``raw`` declares; ``operator`` is read as ``op``, which defaults to
+        ``eq``, and aliases are resolved.
+
+        Raises :class:`RuleError` for an unknown operator or a missing field.
+        """
         op = str(raw.get("op", raw.get("operator", "eq")))
         op = _ALIASES.get(op, op)
         if op not in _OPERATORS and op not in _PRESENCE:
@@ -156,9 +207,14 @@ class RuleCondition:
         return cls(field=str(raw["field"]), op=op, value=raw.get("value"))
 
     def to_dict(self) -> dict[str, Any]:
+        """The condition as JSON, as :meth:`from_dict` reads it back."""
         return {"field": self.field, "op": self.op, "value": self.value}
 
     def holds(self, payload: Any) -> bool:
+        """Whether ``payload`` meets the condition. A field it lacks fails every test but
+        ``absent``, and a comparison that does not apply, such as text against a number, does not
+        hold.
+        """
         present, value = field_value(payload, self.field)
         if self.op == "exists":
             return present
@@ -174,6 +230,28 @@ class RuleCondition:
             return False
 
 
+def _checked_question(
+    raw: dict[str, Any], options: tuple[str, ...], channel: str, timeout: float
+) -> tuple[tuple[str, ...], str]:
+    """An ``ask_operator`` action's options and channel, cleaned, or why it cannot ask.
+
+    The checks run in the order a reader meets the fields, so a question with
+    more than one fault is refused for the first.
+    """
+    if not str(raw.get("text", "")).strip():
+        raise RuleError.question_without_text()
+    try:
+        options = check_options(options)
+        channel = check_channel(channel)
+    except ValueError as exc:
+        raise RuleError.bad_question(exc) from None
+    if not options:
+        raise RuleError.question_without_options()
+    if timeout < 0:
+        raise RuleError.negative_timeout()
+    return options, channel
+
+
 @dataclass(frozen=True)
 class RuleAction:
     """What a rule does once its conditions hold."""
@@ -187,15 +265,25 @@ class RuleAction:
     #: Whether the trigger payload travels with the action, under ``trigger``.
     include_trigger: bool = True
     #: For ``ask_operator``: the question, its options, where and to whom it
-    #: goes, and how long to wait before the dashboard is tried and given up on.
+    #: goes, how long to wait before the dashboard is tried and given up on,
+    #: and why it is asked, which may name trigger fields in braces.
     text: str = ""
     options: tuple[str, ...] = ()
     channel: str = ""
     user: str = ""
     timeout: float = 0.0
+    context: str = ""
+    #: For ``label``: the source it is about and the value to record, either of
+    #: which may name trigger fields in braces. ``text`` is kept as its note.
+    source: str = ""
+    value: str = ""
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> RuleAction:
+        """The action ``raw`` declares, checked for what its type needs.
+
+        Raises :class:`RuleError` for an unknown type or a missing field.
+        """
         kind = str(raw.get("type", "")).strip()
         if kind not in ACTION_TYPES:
             raise RuleError.unknown_action(kind)
@@ -203,17 +291,7 @@ class RuleAction:
         channel = str(raw.get("channel", ""))
         timeout = float(raw.get("timeout", 0.0) or 0.0)
         if kind == "ask_operator":
-            if not str(raw.get("text", "")).strip():
-                raise RuleError.question_without_text()
-            try:
-                options = check_options(options)
-                channel = check_channel(channel)
-            except ValueError as exc:
-                raise RuleError.bad_question(exc) from None
-            if not options:
-                raise RuleError.question_without_options()
-            if timeout < 0:
-                raise RuleError.negative_timeout()
+            options, channel = _checked_question(raw, options, channel, timeout)
         action = cls(
             type=kind,
             topic=str(raw.get("topic", "")),
@@ -227,16 +305,46 @@ class RuleAction:
             channel=channel,
             user=str(raw.get("user", "")),
             timeout=timeout,
+            context=str(raw.get("context", "")),
+            source=str(raw.get("source", "")).strip(),
+            value=str(raw.get("value", "")).strip(),
         )
-        if kind == "publish" and not action.topic:
-            raise RuleError.publish_without_topic()
-        if kind == "task" and not action.agent:
-            raise RuleError.task_without_agent()
-        if kind == "webhook" and not action.url.startswith(("http://", "https://")):
-            raise RuleError.webhook_without_url()
+        action._check_required()
         return action
 
+    def _check_required(self) -> None:
+        """Refuse an action that lacks what its kind cannot run without."""
+        if self.type == "label":
+            if not self.source:
+                raise RuleError.label_without_source()
+            if not self.value:
+                raise RuleError.label_without_value()
+        elif self.type == "publish" and not self.topic:
+            raise RuleError.publish_without_topic()
+        elif self.type == "task" and not self.agent:
+            raise RuleError.task_without_agent()
+        elif self.type == "webhook" and not self.url.startswith(("http://", "https://")):
+            raise RuleError.webhook_without_url()
+
+    def _question_fields(self) -> dict[str, Any]:
+        """What an ``ask_operator`` action says beyond the fields every action has."""
+        fields: dict[str, Any] = {
+            "text": self.text,
+            "options": list(self.options),
+            "channel": self.channel,
+        }
+        if self.user:
+            fields["user"] = self.user
+        if self.timeout:
+            fields["timeout"] = self.timeout
+        if self.context:
+            fields["context"] = self.context
+        return fields
+
     def to_dict(self) -> dict[str, Any]:
+        """The action as JSON, as :meth:`from_dict` reads it back, holding only the fields its
+        type uses.
+        """
         out: dict[str, Any] = {"type": self.type, "payload": dict(self.payload)}
         if self.topic:
             out["topic"] = self.topic
@@ -248,13 +356,12 @@ class RuleAction:
         if not self.include_trigger:
             out["include_trigger"] = False
         if self.type == "ask_operator":
-            out["text"] = self.text
-            out["options"] = list(self.options)
-            out["channel"] = self.channel
-            if self.user:
-                out["user"] = self.user
-            if self.timeout:
-                out["timeout"] = self.timeout
+            out.update(self._question_fields())
+        if self.type == "label":
+            out["source"] = self.source
+            out["value"] = self.value
+            if self.text:
+                out["text"] = self.text
         return out
 
     def body(self, trigger: Any) -> dict[str, Any]:
@@ -296,14 +403,30 @@ class _TriggerFormatter(string.Formatter):
 
 _FORMATTER = _TriggerFormatter()
 
+#: A value that is one placeholder and nothing else: ``{score}``, ``{reading.ts}``.
+_WHOLE_PLACEHOLDER = re.compile(r"^\{([^{}:!]+)\}$")
+
 
 def _render(value: Any, trigger: Any) -> Any:
-    """A string with ``{field}`` placeholders filled from a dict trigger; anything else as is.
+    """``value`` with its ``{field}`` placeholders filled from a dict trigger.
 
-    A string that cannot be rendered -- a stray brace, a format spec the value
-    does not take -- is sent as written: the action still runs.
+    A string that is one placeholder and nothing else becomes the trigger's
+    value as it is -- a number stays a number, an object an object -- so an
+    action can hand a trigger's field to an agent that reads it as such. Any
+    other string is formatted, and one that cannot be -- a stray brace, a
+    format spec the value does not take -- is sent as written: the action
+    still runs. A dict or a list is rendered inside; anything else is as is.
     """
+    if isinstance(value, dict):
+        return {key: _render(item, trigger) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_render(item, trigger) for item in value]
     if isinstance(value, str) and "{" in value and isinstance(trigger, dict):
+        whole = _WHOLE_PLACEHOLDER.match(value)
+        if whole is not None:
+            found, field = field_value(trigger, whole.group(1).strip())
+            if found:
+                return field
         try:
             return _FORMATTER.vformat(value, (), trigger)
         except (ValueError, TypeError, IndexError, KeyError, AttributeError):
@@ -323,6 +446,12 @@ class RuleConfig:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> RuleConfig:
+        """The rule ``raw`` declares: its triggers (one topic, or many under ``triggers``,
+        ``trigger`` or ``mqtt_topics``), conditions, actions and cooldown.
+
+        Raises :class:`RuleError` for a rule with no trigger or no action, or for any condition
+        or action that is refused.
+        """
         triggers = raw.get("triggers", raw.get("trigger", raw.get("mqtt_topics", ())))
         if isinstance(triggers, str):
             triggers = (triggers,)
@@ -342,6 +471,7 @@ class RuleConfig:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """The rule as JSON, as :meth:`from_dict` reads it back."""
         return {
             "triggers": list(self.triggers),
             "conditions": [c.to_dict() for c in self.conditions],
@@ -369,9 +499,10 @@ class RuleAgent(Actor):
     def __init__(self, config: RuleConfig, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.config = config
-        self.description = config.description or self._describe()
+        self.description: str = config.description or self._describe()
+        #: The event time of the trigger the rule last fired on, for the cooldown.
         self._fired_at: float | None = None
-        self.fired = 0
+        self.fired: int = 0
 
     def _describe(self) -> str:
         what = ", ".join(a.type for a in self.config.actions)
@@ -381,6 +512,7 @@ class RuleAgent(Actor):
         return self.description
 
     async def on_start(self) -> None:
+        """Publish the rule's manifest and evaluate it on every message to one of its triggers."""
         await self.publish_manifest(
             description=self.description,
             publishes=list(self.config.publishes),
@@ -396,10 +528,10 @@ class RuleAgent(Actor):
         self.metrics.messages_processed += 1
         if not all(c.holds(payload) for c in self.config.conditions):
             return False
-        now = time.monotonic()
-        if self._fired_at is not None and now - self._fired_at < self.config.cooldown_seconds:
+        at = event_time(payload)
+        if self._fired_at is not None and at - self._fired_at < self.config.cooldown_seconds:
             return False
-        self._fired_at = now
+        self._fired_at = at
         self.fired += 1
         for action in self.config.actions:
             try:
@@ -410,7 +542,7 @@ class RuleAgent(Actor):
                 logger.exception("[%s] %s action failed", self.name, action.type)
         self.metrics.tasks_completed += 1
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": f"fired: {self._describe()}", "timestamp": time.time()},
         )
         return True
@@ -427,6 +559,28 @@ class RuleAgent(Actor):
             # The person may take hours: the rule goes on evaluating meanwhile,
             # and the pick is published when it comes.
             self.run_detached(self._ask_operator(action, trigger, body), name="ask_operator")
+        elif action.type == "label":
+            await self._write_label(action, trigger)
+
+    async def _write_label(self, action: RuleAction, trigger: Any) -> None:
+        """Record the action's label, from when the trigger says it happened, as this rule's."""
+        db = get_db()
+        if db is None:
+            logger.warning("[%s] label action: persistence is not running", self.name)
+            return
+        source = str(_render(action.source, trigger))
+        value = str(_render(action.value, trigger))
+        try:
+            await asyncio.to_thread(
+                Labels(db).write,
+                source=source,
+                start=event_time(trigger),
+                value=value,
+                actor=f"rule:{self.name}",
+                note=str(_render(action.text, trigger)),
+            )
+        except LabelError as exc:
+            logger.warning("[%s] label action: %s", self.name, exc)
 
     async def _ask_operator(self, action: RuleAction, trigger: Any, body: dict[str, Any]) -> None:
         """Ask the person, and publish what they picked beside the trigger."""
@@ -438,6 +592,7 @@ class RuleAgent(Actor):
                 channel=action.channel,
                 user=action.user,
                 timeout=action.timeout or None,
+                context=str(_render(action.context, trigger)),
             )
         except asyncio.TimeoutError:
             logger.warning("[%s] nobody answered %r; the question stays open", self.name, text[:60])

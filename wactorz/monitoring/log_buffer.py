@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A bounded in-memory ring of recent log records.
 
 Holds what the dashboard's log view will read, in the envelope the view renders,
@@ -51,6 +52,7 @@ class LogRingBuffer(logging.Handler):
 
     @property
     def capacity(self) -> int:
+        """How many entries the buffer keeps before it drops the oldest."""
         return self._entries.maxlen or 0
 
     def emit(self, record: logging.LogRecord) -> None:

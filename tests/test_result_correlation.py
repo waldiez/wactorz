@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A RESULT carrying a correlation id settles the future waiting on it.
 
 Request/reply is a convention, not a framework feature: a sender tags a TASK
@@ -11,6 +12,7 @@ rather than of which agent happens to be receiving.
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -39,7 +41,7 @@ def _result(payload: object, sender: str = "other") -> Message:
 
 class TestCorrelatedResults:
     async def test_a_matching_result_settles_the_future(self, agent: _Agent) -> None:
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         agent._result_futures["t-1"] = future
 
         await agent._dispatch(_result({"_task_id": "t-1", "value": 7}))
@@ -56,7 +58,7 @@ class TestCorrelatedResults:
         assert agent.seen == []
 
     async def test_the_legacy_task_key_still_correlates(self, agent: _Agent) -> None:
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         agent._result_futures["t-2"] = future
 
         await agent._dispatch(_result({"task": "t-2", "value": "ok"}))
@@ -64,7 +66,7 @@ class TestCorrelatedResults:
         assert future.done()
 
     async def test_an_already_settled_future_is_left_alone(self, agent: _Agent) -> None:
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         future.set_result({"first": True})
         agent._result_futures["t-3"] = future
 

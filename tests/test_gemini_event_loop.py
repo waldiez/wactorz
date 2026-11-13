@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """GeminiProvider must not block the shared event loop.
 
 Every actor in the process runs on one loop. A provider that calls the
@@ -14,8 +15,6 @@ passing against a fake that never blocks.
 No google-genai needed: the provider is built with ``__new__`` and handed the
 attributes its methods use, so this runs on a machine without the extra.
 """
-
-# pylint: disable=missing-function-docstring,too-few-public-methods
 
 import asyncio
 import inspect
@@ -42,15 +41,15 @@ class _Types:
     """Stand-in for google.genai.types — every factory just echoes kwargs."""
 
     @staticmethod
-    def GenerateContentConfig(**kwargs: Any) -> dict[str, Any]:  # pylint: disable=invalid-name
+    def GenerateContentConfig(**kwargs: Any) -> dict[str, Any]:
         return kwargs
 
     @staticmethod
-    def Tool(**kwargs: Any) -> dict[str, Any]:  # pylint: disable=invalid-name
+    def Tool(**kwargs: Any) -> dict[str, Any]:
         return kwargs
 
     @staticmethod
-    def FunctionDeclaration(**kwargs: Any) -> dict[str, Any]:  # pylint: disable=invalid-name
+    def FunctionDeclaration(**kwargs: Any) -> dict[str, Any]:
         return kwargs
 
 
@@ -105,7 +104,7 @@ def _provider() -> tuple[GeminiProvider, _SyncModels, _AsyncModels]:
     return provider, sync_models, async_models
 
 
-async def _loop_ticks_during(coro: Awaitable) -> int:
+async def _loop_ticks_during(coro: Awaitable[Any]) -> int:
     """Run `coro`, counting how many times an unrelated task got scheduled.
 
     A responsive loop lets the ticker run many times; a blocked one starves it.

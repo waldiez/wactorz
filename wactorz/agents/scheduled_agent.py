@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """ScheduledAgent — first-class scheduled trigger primitive.
 
 Fires an MQTT event at a configured schedule. Designed to be paired with a
@@ -66,16 +67,13 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
-
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:  # Python < 3.9 — should not happen in this codebase
-    ZoneInfo = None  # type: ignore[assignment]
+from zoneinfo import ZoneInfo
 
 from ..core.actor import Actor, Message, MessageType
+from ..core.topics import agent_topic
 from .lookup import find_main_actor
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 # ── Day-of-week parsing ──────────────────────────────────────────────────────
@@ -122,64 +120,81 @@ class ScheduleError(ValueError):
 
     @classmethod
     def not_a_dict(cls, schedule: Any) -> "ScheduleError":
+        """The error for a ``schedule`` given as something other than a dict."""
         return cls(f"ScheduledAgent requires a 'schedule' dict, got {type(schedule).__name__}")
 
     @classmethod
     def invalid(cls, name: str, exc: Exception) -> "ScheduleError":
+        """The error for agent ``name``'s schedule being refused, with the reason in ``exc``."""
         return cls(f"Invalid schedule for {name}: {exc}")
 
     @classmethod
     def unknown_type(cls, stype: Any) -> "ScheduleError":
+        """The error for a schedule type ``stype`` that is none of the known ones."""
         return cls(
             f"Unknown schedule type: {stype!r}. Use one of: daily, weekly, interval, once, cron."
         )
 
     @classmethod
     def daily_without_at(cls) -> "ScheduleError":
+        """The error for a daily schedule with no time of day."""
         return cls("daily schedule requires 'at' (e.g. '17:00')")
 
     @classmethod
     def weekly_without_at(cls) -> "ScheduleError":
+        """The error for a weekly schedule with no time of day."""
         return cls("weekly schedule requires 'at'")
 
     @classmethod
     def weekly_without_days(cls) -> "ScheduleError":
+        """The error for a weekly schedule with no days."""
         return cls("weekly schedule requires non-empty 'days' list")
 
     @classmethod
     def once_without_at(cls) -> "ScheduleError":
+        """The error for a once schedule with no moment."""
         return cls("once schedule requires 'at' (ISO-8601 datetime)")
 
     @classmethod
     def cron_without_expr(cls) -> "ScheduleError":
+        """The error for a cron schedule with no expression."""
         return cls("cron schedule requires 'expr' (e.g. '0 17 * * *')")
 
     @classmethod
     def not_hhmm(cls, at: str) -> "ScheduleError":
+        """The error for a time of day ``at`` that is not ``HH:MM``."""
         return cls(f"Time string must be HH:MM, got {at!r}")
 
     @classmethod
     def time_out_of_range(cls, at: str) -> "ScheduleError":
+        """The error for a time of day ``at`` with an hour or minute out of range."""
         return cls(f"Time out of range: {at!r}")
 
     @classmethod
     def unknown_day(cls, day: str) -> "ScheduleError":
+        """The error for a ``day`` that is none of the days of the week."""
         return cls(f"Unknown day: {day!r} (use mon|tue|wed|thu|fri|sat|sun)")
 
     @classmethod
     def interval_not_positive(cls, seconds: int) -> "ScheduleError":
+        """The error for an interval of ``seconds`` that is not above zero."""
         return cls(f"interval seconds must be positive, got {seconds}")
 
     @classmethod
     def interval_not_a_number(cls, seconds: Any) -> "ScheduleError":
+        """The error for an interval given ``seconds`` that is not a whole number."""
         return cls(f"interval schedule requires 'seconds' (int), got {seconds!r}")
 
     @classmethod
     def once_not_iso(cls, at: str) -> "ScheduleError":
+        """The error for a once schedule's ``at`` that is not an ISO-8601 moment."""
         return cls(f"once schedule 'at' must be ISO-8601 (YYYY-MM-DDTHH:MM:SS), got {at!r}")
 
     @classmethod
     def no_croniter(cls) -> "ScheduleError":
+        """The error for a cron schedule without the ``croniter`` package, saying how to do
+        without it.
+        """
         return cls(
             "Cron schedules require the 'croniter' package. Install with "
             "`pip install 'wactorz[cron]'`, OR use a structured schedule "
@@ -189,6 +204,9 @@ class ScheduleError(ValueError):
 
     @classmethod
     def bad_cron(cls, expr: str, exc: Exception) -> "ScheduleError":
+        """The error for a cron expression ``expr`` that ``croniter`` refuses, with the reason in
+        ``exc``.
+        """
         return cls(f"Invalid cron expression {expr!r}: {exc}")
 
 
@@ -202,7 +220,7 @@ def _resolve_timezone(spec_tz: str | None, user_tz: str | None) -> Any:
     """
     candidates = [spec_tz, user_tz]
     for cand in candidates:
-        if cand and ZoneInfo is not None:
+        if cand:
             try:
                 return ZoneInfo(cand)
             except Exception:
@@ -300,7 +318,7 @@ def _next_fire_cron(now_local: datetime, expr: str) -> datetime:
     Falls back to ValueError if not, with a hint to use structured form.
     """
     try:
-        from croniter import croniter
+        from croniter import croniter  # optional dependency: the `cron` extra
     except ImportError as e:
         raise ScheduleError.no_croniter() from e
     try:
@@ -332,17 +350,17 @@ class ScheduledAgent(Actor):
 
     def __init__(
         self,
-        schedule: dict | None = None,
+        schedule: dict[str, Any] | None = None,
         timezone: str | None = None,
         publish_topic: str | None = None,
         description: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         kwargs.setdefault("name", "scheduled")
         super().__init__(**kwargs)
         if not isinstance(schedule, dict):
             raise ScheduleError.not_a_dict(schedule)
-        self._schedule: dict = dict(schedule)  # defensive copy
+        self._schedule: dict[str, Any] = dict(schedule)  # defensive copy
         self._user_tz: str | None = timezone
         self._tz = _resolve_timezone(self._schedule.get("tz"), timezone)
         self._publish_topic: str = publish_topic or f"schedule/{self.name}/fired"
@@ -360,13 +378,18 @@ class ScheduledAgent(Actor):
             raise ScheduleError.invalid(self.name, e) from e
 
         # Background loop handle
-        self._loop_task: asyncio.Task | None = None
+        self._loop_task: asyncio.Task[Any] | None = None
         # Used by handle_message for manual trigger/inspect commands
         self._manual_trigger_event: asyncio.Event = asyncio.Event()
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
-    async def on_start(self):
+    async def on_start(self) -> None:
+        """Restore when the schedule last fired, and start the scheduling loop.
+
+        A once schedule that has fired already, or whose moment is past, deletes the agent
+        instead; a moment missed by no more than the catch-up window is fired first.
+        """
         # Restore last-fire state if persisted
         state = self.recall("_schedule_state") or {}
         if isinstance(state, dict):
@@ -415,7 +438,8 @@ class ScheduledAgent(Actor):
         )
         self._loop_task = asyncio.create_task(self._run_loop())
 
-    async def on_stop(self):
+    async def on_stop(self) -> None:
+        """Cancel the scheduling loop and wait for it, logging an error it ended with."""
         if self._loop_task and not self._loop_task.done():
             self._loop_task.cancel()
             # gather rather than a bare await: the scheduling loop's own
@@ -433,7 +457,7 @@ class ScheduledAgent(Actor):
 
     # ── Scheduling loop ────────────────────────────────────────────────────
 
-    async def _run_loop(self):
+    async def _run_loop(self) -> None:
         """Sleep until the next fire time, fire, recompute, repeat.
 
         Wake bounded to _MAX_SLEEP_S so DST transitions / clock jumps /
@@ -553,7 +577,7 @@ class ScheduledAgent(Actor):
 
     # ── Firing ─────────────────────────────────────────────────────────────
 
-    async def _fire(self, now_utc: datetime, manual: bool = False):
+    async def _fire(self, now_utc: datetime, manual: bool = False) -> None:
         """Publish the fire event and update persisted state."""
         payload = {
             "fired_at": now_utc.isoformat(),
@@ -579,7 +603,7 @@ class ScheduledAgent(Actor):
         except Exception:
             logger.exception("[%s] Fire failed", self.name)
 
-    async def _self_delete(self):
+    async def _self_delete(self) -> None:
         """Remove from registry and stop. Used for completed once-schedules."""
         await asyncio.sleep(0.5)
         if self._registry:
@@ -592,7 +616,7 @@ class ScheduledAgent(Actor):
             main = find_main_actor(self._registry)
             if main:
                 try:
-                    main._remove_from_spawn_registry(self.name)
+                    main._remove_from_spawn_registry(self.name, actor_id=self.actor_id)
                 except Exception:  # noqa: S110  # teardown; the agent is going away regardless
                     pass
         await self.stop()
@@ -603,7 +627,7 @@ class ScheduledAgent(Actor):
 
     # ── Message handling ───────────────────────────────────────────────────
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         """Supports two task types for inspection / testing:
 
         {"action": "trigger"} — fire NOW without advancing the schedule
@@ -616,7 +640,7 @@ class ScheduledAgent(Actor):
         reply_to = msg.reply_to or msg.sender_id
         task_id = payload.get("_task_id")
 
-        async def _reply(body: dict):
+        async def _reply(body: dict[str, Any]) -> None:
             if not reply_to:
                 return
             r = dict(body)
@@ -652,10 +676,10 @@ class ScheduledAgent(Actor):
 
     # ── Helpers ────────────────────────────────────────────────────────────
 
-    async def _log(self, msg: str):
+    async def _log(self, msg: str) -> None:
         logger.info("[%s] %s", self.name, msg)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": msg, "timestamp": time.time()},
         )
 
@@ -684,7 +708,7 @@ def _parse_duration(s: str) -> int | None:
         return None
 
 
-def describe_schedule(schedule: dict, tz_name: str | None = None) -> str:
+def describe_schedule(schedule: dict[str, Any], tz_name: str | None = None) -> str:
     """Render a schedule dict as a short human-readable string for /rules
     and the /plans dry-run preview. Pure function — no I/O.
     """

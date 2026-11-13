@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """InstallerAgent — pre-defined agent that installs Python packages on demand.
 Always uses sys.executable so packages land in the active venv (e.g. myenv),
 not the system Python.
@@ -53,12 +54,26 @@ from ..core.packages import (
     unlisted,
 )
 from ..core.paths import resolve_state_dir
-from ..core.pip import PIP_TIMEOUT_S, index_args, is_installable_name
+from ..core.pip import (
+    NO_INSTALLER_MESSAGE,
+    PIP_INSTALL_TIMEOUT_S,
+    PIP_TIMEOUT_S,
+    index_args,
+    installed_versions,
+    installer_command,
+    is_installable_name,
+    make_user_site_importable,
+    pending_restart,
+    refresh_import_caches,
+    requirement_is_satisfied,
+    stale_loaded_distributions,
+)
 from ..core.refusals import REFUSED, UNANSWERED, RecentRefusals
+from ..core.topics import agent_topic, node_topic
 from . import node_service
 from .lookup import find_main_actor
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The control topics main publishes without retaining them, so a retained message
 #: on one was put there by something else. `desired_state` is not among them: main
@@ -302,6 +317,9 @@ class DeployRefusedError(PermissionError):
 
     @classmethod
     def host_mismatch(cls, target: DeployTarget, requested: str) -> "DeployRefusedError":
+        """The error for a deploy to ``requested`` while ``target`` is configured for another
+        host.
+        """
         return cls(
             f"Refusing to connect: deploy target '{target.name}' is configured "
             f"as {target.host}, but the task asked for {requested}. Credentials "
@@ -310,6 +328,7 @@ class DeployRefusedError(PermissionError):
 
     @classmethod
     def unresolvable(cls, target: DeployTarget, mdns: str) -> "DeployRefusedError":
+        """The error for ``target`` having no host, and its mDNS name ``mdns`` not resolving."""
         return cls(
             f"Deploy target '{target.name}' has no host configured and "
             f"'{mdns}' does not resolve. Set {deploy_env_prefix(target.name)}_HOST."
@@ -317,6 +336,9 @@ class DeployRefusedError(PermissionError):
 
     @classmethod
     def unknown_host_key(cls, host: str, port: int, path: Path) -> "DeployRefusedError":
+        """The error for ``host``'s key not being in the known-hosts file at ``path`` while
+        strict host keys are on.
+        """
         return cls(
             f"Host key for {host}:{port} is not in {path} and "
             "DEPLOY_STRICT_HOST_KEYS is set. Add the key with "
@@ -325,10 +347,12 @@ class DeployRefusedError(PermissionError):
 
     @classmethod
     def no_host_key(cls, host: str, port: int) -> "DeployRefusedError":
+        """The error for ``host`` offering no SSH host key at all."""
         return cls(f"{host}:{port} offered no SSH host key.")
 
     @classmethod
     def no_target(cls, requested: str) -> "DeployRefusedError":
+        """The error for a deploy to ``requested``, for which no target is configured."""
         return cls(
             f"No deploy target configured for '{requested}'. "
             "SSH credentials come from the environment (DEPLOY_TARGETS plus a "
@@ -337,6 +361,7 @@ class DeployRefusedError(PermissionError):
 
     @classmethod
     def no_credentials(cls, target: DeployTarget) -> "DeployRefusedError":
+        """The error for ``target`` having neither a key nor a password."""
         return cls(
             f"Deploy target '{target.name}' has no credentials. Set "
             f"{deploy_env_prefix(target.name)}_KEY (preferred) or "
@@ -349,11 +374,11 @@ class InstallerAgent(Actor):
     Uses sys.executable so packages are installed into the active venv.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "installer")
         super().__init__(**kwargs)
         self.protected = True
-        self._install_log: list[dict] = []
+        self._install_log: list[dict[str, Any]] = []
         # Serialises the read-then-append on the known-hosts file: two deploys
         # to new hosts at once would otherwise both read "unknown" and race.
         self._known_hosts_lock = asyncio.Lock()
@@ -369,11 +394,14 @@ class InstallerAgent(Actor):
     def _current_task_description(self) -> str:
         return "idle"
 
-    async def on_start(self):
+    async def on_start(self) -> None:
+        """Remove any password or key path kept in the store, where nothing reads them, announce
+        the interpreter it installs into, and publish the manifest.
+        """
         logger.info("[%s] Installer ready — using: %s", self.name, sys.executable)
         self._scrub_persisted_credentials()
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {
                 "type": "log",
                 "message": f"Installer ready ({sys.executable})",
@@ -385,7 +413,13 @@ class InstallerAgent(Actor):
             capabilities=["pip_install", "package_management"],
         )
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
+        """Answer a task with its result, the task's id echoed, sent to its reply address; other
+        messages are ignored.
+
+        Actions that reach a node over SSH, and those that change the packages allowed, are
+        refused to anyone but main.
+        """
         if msg.type == MessageType.TASK:
             result = await self._handle_install(msg)
             # Echo task_id back so caller's future can resolve
@@ -398,7 +432,7 @@ class InstallerAgent(Actor):
             if target:
                 await self.send(target, MessageType.RESULT, result)
 
-    async def _handle_install(self, msg: Message) -> dict:
+    async def _handle_install(self, msg: Message) -> dict[str, Any]:
         payload = msg.payload if isinstance(msg.payload, dict) else {}
         action = payload.get("action", "install")
 
@@ -417,14 +451,27 @@ class InstallerAgent(Actor):
             packages = payload.get("packages", [])
             if isinstance(packages, str):
                 packages = [p.strip() for p in packages.replace(",", " ").split()]
-            return await self._install_packages(packages, self._wanted_by(msg, payload))
+            options = {}
+            if payload.get("require_install_success") is True:
+                options["require_install_success"] = True
+            if "for_agent" in payload:
+                options["for_agent"] = str(payload["for_agent"])
+            if "notify" in payload:
+                options["notify"] = bool(payload["notify"])
+            return await self._install_packages(packages, self._wanted_by(msg, payload), **options)
 
         if action == "install_restored":
-            # An agent main is restoring: its packages were cleared when it was placed.
             packages = payload.get("packages", [])
             if isinstance(packages, str):
                 packages = packages.replace(",", " ").split()
-            return await self._install_packages(packages, self._wanted_by(msg, payload), ask=False)
+            return await self._install_packages(
+                packages,
+                self._wanted_by(msg, payload),
+                ask=False,
+                require_install_success=payload.get("require_install_success") is True,
+                for_agent=str(payload.get("for_agent") or ""),
+                notify=bool(payload.get("notify")),
+            )
 
         if action == "check":
             packages = payload.get("packages", [])
@@ -500,7 +547,7 @@ class InstallerAgent(Actor):
         names = {normalized(p) for p in packages} | set(self._remembered())
         self.persist(ALLOWED_KEY, sorted(filter(None, names)))
 
-    def _wanted_by(self, msg: Message, payload: dict) -> str:
+    def _wanted_by(self, msg: Message, payload: dict[str, Any]) -> str:
         """Who an install is for, as the operator is told: the agent, or who asked."""
         agent = str(payload.get("agent") or payload.get("agent_name") or "").strip()
         if agent:
@@ -538,12 +585,12 @@ class InstallerAgent(Actor):
             )
             return waiting
         names = ", ".join(waiting)
-        question_id = await self.notify_user(
+        question_id = await self.ask_permission(
             f"{wanted_by} needs {names} installed, and "
             f"{'it is' if len(waiting) == 1 else 'they are'} not on the list of packages "
             "installed without asking. Install, and allow from now on? "
             f"Typing /packages allow {' '.join(waiting)} does the same.",
-            options=(INSTALL, REFUSE),
+            (INSTALL, REFUSE),
         )
         settled: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         self._asking[question_id] = _Asking(tuple(waiting), settled)
@@ -560,22 +607,10 @@ class InstallerAgent(Actor):
             # spawn already refused. A request for them soon after is refused
             # without asking; after that, it asks afresh.
             if self._asking.pop(question_id, None) is not None:
-                await self._close_question(question_id, NO_ANSWER)
+                await self.close_permission(question_id, NO_ANSWER)
                 for package in waiting:
                     self._refusals.remember(normalized(package), UNANSWERED)
         return unlisted(waiting, self._allowed())
-
-    async def _close_question(self, question_id: str, option: str) -> None:
-        """Mark ``question_id`` answered with ``option`` wherever it is shown."""
-        closing = Answer(
-            id=question_id,
-            agent_id=self.actor_id,
-            option=option,
-            index=-1,
-            channel=self.name,
-            timestamp=time.time(),
-        )
-        await self._mqtt_publish(closing.topic, closing.to_payload(), qos=1)
 
     async def _settle_allowed(self) -> None:
         """Let through every question whose packages are all allowed now, and close it."""
@@ -585,10 +620,10 @@ class InstallerAgent(Actor):
                 self._asking.pop(question_id)
                 if not asking.settled.done():
                     asking.settled.set_result(True)
-                await self._close_question(question_id, ALLOWED)
+                await self.close_permission(question_id, ALLOWED)
 
     @staticmethod
-    def _not_allowed(refused: list[str]) -> dict:
+    def _not_allowed(refused: list[str]) -> dict[str, Any]:
         names = ", ".join(refused)
         return {
             "success": False,
@@ -612,6 +647,7 @@ class InstallerAgent(Actor):
             return
         if not asking.settled.done():
             asking.settled.set_result(answer.option == INSTALL)
+        await self.permission_answered(answer)
         if answer.option != INSTALL:
             for package in asking.packages:
                 self._refusals.remember(normalized(package), REFUSED)
@@ -625,7 +661,7 @@ class InstallerAgent(Actor):
             # Another spawn waiting for the same packages goes through too.
             await self._settle_allowed()
 
-    async def _change_the_list(self, action: str, payload: dict) -> dict:
+    async def _change_the_list(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         """``/packages``: show, add to or take from the operator's list."""
         packages = payload.get("packages", [])
         if isinstance(packages, str):
@@ -654,8 +690,21 @@ class InstallerAgent(Actor):
     # ── Core install logic ──────────────────────────────────────────────────
 
     async def _install_packages(
-        self, packages: list[str], wanted_by: str = "an agent", *, ask: bool = True
-    ) -> dict:
+        self,
+        packages: list[str],
+        wanted_by: str = "an agent",
+        *,
+        ask: bool = True,
+        for_agent: str = "",
+        notify: bool = False,
+        require_install_success: bool = False,
+    ) -> dict[str, Any]:
+        """Install `packages` one at a time, reporting each and the outcome.
+
+        With `notify`, each package actually being installed is announced in
+        chat as well as the activity log: a first install of a robot SDK takes
+        minutes, and a chat that says nothing for that long reads as a hang.
+        """
         if not packages:
             return {"error": "No packages specified"}
 
@@ -665,7 +714,7 @@ class InstallerAgent(Actor):
             pip_name = IMPORT_TO_PACKAGE.get(pkg.strip(), pkg.strip())
             if not is_installable_name(pip_name):
                 continue
-            if not self._is_installed(PACKAGE_TO_IMPORT.get(pip_name, pip_name)):
+            if not await asyncio.to_thread(requirement_is_satisfied, pip_name):
                 to_install.append(pip_name)
         refused = await self._cleared(to_install, wanted_by) if ask else []
         if refused:
@@ -673,12 +722,12 @@ class InstallerAgent(Actor):
 
         results = {}
         failed = []
+        wanted = [p.strip() for p in packages if p.strip()]
+        suffix = f" for {for_agent}" if for_agent else ""
+        before = await asyncio.to_thread(installed_versions)
+        ran_pip = False
 
-        for pkg in packages:
-            pkg = pkg.strip()
-            if not pkg:
-                continue
-
+        for index, pkg in enumerate(wanted, start=1):
             # Resolve import name → pip name (e.g. "cv2" → "opencv-python")
             pip_name = IMPORT_TO_PACKAGE.get(pkg, pkg)
 
@@ -691,20 +740,27 @@ class InstallerAgent(Actor):
                 failed.append(pkg)
                 continue
 
-            # Check if already importable (invalidate cache so fresh installs show up)
-            import_name = PACKAGE_TO_IMPORT.get(pip_name, pip_name)
-            if self._is_installed(import_name):
+            # Installed metadata, version specifier included: a pinned
+            # `name==1.2` is not "installed" just because some other version
+            # imports, and a pip name need not be the module's name.
+            if pip_name not in to_install:
                 logger.info("[%s] %s already installed.", self.name, pip_name)
                 results[pip_name] = "already_installed"
                 continue
 
             logger.info("[%s] Installing %s into %s...", self.name, pip_name, sys.executable)
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/logs",
+                agent_topic(self.actor_id, "logs"),
                 {"type": "log", "message": f"Installing {pip_name}...", "timestamp": time.time()},
             )
+            if notify:
+                await self.notify_user(f"Installing {pip_name} ({index}/{len(wanted)}){suffix}…")
 
-            success, output = await self._pip_install(pip_name)
+            ran_pip = True
+            if require_install_success:
+                success, output = await self._pip_install(pip_name, timeout_s=PIP_INSTALL_TIMEOUT_S)
+            else:
+                success, output = await self._pip_install(pip_name)
 
             # duckduckgo-search was renamed to ddgs in v9 — try the other name as fallback
             if not success and pip_name in ("duckduckgo-search", "ddgs"):
@@ -742,18 +798,35 @@ class InstallerAgent(Actor):
                 status = f"✗ {pip_name} FAILED: {err_snippet}"
             logger.info("[%s] %s", self.name, status)
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/logs",
+                agent_topic(self.actor_id, "logs"),
                 {"type": "log", "message": status, "timestamp": time.time()},
             )
 
+        # A dependency pip upgraded or downgraded on the way can be one this
+        # process already imported, and then no agent that needs it will work
+        # until the process restarts. Said here, where it is known, rather than
+        # left to surface later as an ImportError nobody can explain.
+        restart_required = []
+        if ran_pip:
+            after = await asyncio.to_thread(installed_versions)
+            restart_required = await asyncio.to_thread(stale_loaded_distributions, before, after)
+        if restart_required:
+            logger.warning(
+                "[%s] Install replaced packages this process already loaded: %s — restart needed",
+                self.name,
+                ", ".join(restart_required),
+            )
         return {
             "results": results,
             "failed": failed,
             "success": len(failed) == 0,
+            "restart_required": pending_restart(restart_required),
             "message": f"Installed {len(results) - len(failed)}/{len(results)} packages",
         }
 
-    async def _pip_install(self, package: str) -> tuple[bool, str]:
+    async def _pip_install(
+        self, package: str, *, timeout_s: float = PIP_TIMEOUT_S
+    ) -> tuple[bool, str]:
         """Run pip install using the same interpreter that launched this process.
 
         sys.executable inside a venv points to  venv/Scripts/python.exe  (Windows)
@@ -764,8 +837,12 @@ class InstallerAgent(Actor):
         (the default in some Python versions / environments). subprocess.run() works
         correctly on all platforms.
         """
-        cmd = [sys.executable, "-m", "pip", "install", *index_args(), package, "--quiet"]
-        if sys.platform != "win32":
+        base = installer_command()
+        if base is None:
+            return False, NO_INSTALLER_MESSAGE
+        cmd = [*base, *index_args(), package, "--quiet"]
+        if sys.platform != "win32" and base[1:2] == ["-m"]:
+            # pip's flag; uv installs into the environment it is pointed at.
             cmd.append("--break-system-packages")
 
         def _run_pip() -> tuple[bool, str]:
@@ -773,11 +850,11 @@ class InstallerAgent(Actor):
                 result = subprocess.run(  # noqa: S603  # argv, no shell; name pre-screened
                     cmd,
                     capture_output=True,
-                    timeout=PIP_TIMEOUT_S,
+                    timeout=timeout_s,
                 )
                 output = (result.stdout + result.stderr).decode("utf-8", errors="replace")
             except subprocess.TimeoutExpired:
-                return False, f"pip timed out after {PIP_TIMEOUT_S}s"
+                return False, f"pip timed out after {timeout_s:g}s"
             except FileNotFoundError:
                 return False, f"Python executable not found: {sys.executable}"
             except Exception as e:
@@ -791,7 +868,8 @@ class InstallerAgent(Actor):
 
             if success:
                 # Refresh import machinery so the new package is visible immediately
-                importlib.invalidate_caches()
+                make_user_site_importable()
+                refresh_import_caches()
 
         except Exception as e:
             return False, f"Executor error: {type(e).__name__}: {e}"
@@ -800,7 +878,7 @@ class InstallerAgent(Actor):
 
     def _is_installed(self, import_name: str) -> bool:
         """Check importability, always refreshing the import cache first."""
-        importlib.invalidate_caches()
+        refresh_import_caches()
         try:
             importlib.import_module(import_name)
         except ImportError:
@@ -810,7 +888,7 @@ class InstallerAgent(Actor):
 
     # ── Helper actions ──────────────────────────────────────────────────────
 
-    def _check_packages(self, packages: list[str]) -> dict:
+    def _check_packages(self, packages: list[str]) -> dict[str, Any]:
         status = {}
         for pkg in packages:
             pip_name = IMPORT_TO_PACKAGE.get(pkg, pkg)
@@ -818,12 +896,12 @@ class InstallerAgent(Actor):
             status[pkg] = "installed" if self._is_installed(import_name) else "missing"
         return {"status": status}
 
-    def _resolve_imports(self, imports: list[str]) -> dict:
+    def _resolve_imports(self, imports: list[str]) -> dict[str, Any]:
         return {"resolved": {imp: IMPORT_TO_PACKAGE.get(imp, imp) for imp in imports}}
 
     # ── Remote node helpers (SSH via asyncssh) ──────────────────────────────
 
-    def _resolve_ssh_target(self, payload: dict) -> DeployTarget | None:
+    def _resolve_ssh_target(self, payload: dict[str, Any]) -> DeployTarget | None:
         """The configured deploy target a payload refers to, by node name or host.
 
         The node actions may be handed a host rather than a node name, so a host
@@ -983,6 +1061,7 @@ class InstallerAgent(Actor):
             password=password,
             tls_ca=tls.ca if tls is not None and enabled else None,
             check_hostname=bool(tls is not None and tls.check_hostname),
+            extensions=target.extensions,
         )
         credentials = bool(username or password)
         remote = f"{home}/wactorz/.env"
@@ -1006,7 +1085,7 @@ class InstallerAgent(Actor):
         and a node ignores them.
         """
         for leaf in UNRETAINED_CONTROL_TOPICS:
-            await self._mqtt_publish(f"nodes/{node_name}/{leaf}", b"", retain=True, qos=1)
+            await self._mqtt_publish(node_topic(node_name, leaf), b"", retain=True, qos=1)
 
     @staticmethod
     def _node_account(target: DeployTarget, node_name: str) -> tuple[str, str]:
@@ -1113,7 +1192,7 @@ class InstallerAgent(Actor):
             f"own account of why."
         )
 
-    async def _ssh_kwargs(self, payload: dict) -> dict:
+    async def _ssh_kwargs(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Build asyncssh connection kwargs for a task payload.
 
         Credentials come from the configured deploy target and from nowhere
@@ -1130,7 +1209,7 @@ class InstallerAgent(Actor):
         if not target.key_path and not target.password:
             raise DeployRefusedError.no_credentials(target)
 
-        kwargs: dict = {
+        kwargs: dict[str, Any] = {
             "host": host,
             "port": target.ssh_port,
             "username": target.user,
@@ -1180,7 +1259,7 @@ class InstallerAgent(Actor):
                 len(cleaned),
             )
 
-    async def _ssh_run(self, conn, command: str) -> tuple[bool, str]:
+    async def _ssh_run(self, conn: Any, command: str) -> tuple[bool, str]:
         """Run a single command over an open SSH connection. Returns (ok, output)."""
         result = await conn.run(command, check=False)
         output = (result.stdout or "") + (result.stderr or "")
@@ -1372,19 +1451,19 @@ class InstallerAgent(Actor):
         )
         return built[-1] if built else None
 
-    def _log_remote(self, message: str):
+    def _log_remote(self, message: str) -> None:
         logger.info("[%s] %s", self.name, message)
         self.run_detached(
             self._mqtt_publish(
-                f"agents/{self.actor_id}/logs",
+                agent_topic(self.actor_id, "logs"),
                 {"type": "log", "message": message, "timestamp": time.time()},
             ),
             name="log",
         )
 
     async def _node_install(
-        self, payload: dict, wanted_by: str = "an agent", *, ask: bool = True
-    ) -> dict:
+        self, payload: dict[str, Any], wanted_by: str = "an agent", *, ask: bool = True
+    ) -> dict[str, Any]:
         """Install pip packages on a remote node via SSH.
 
         payload keys:
@@ -1467,7 +1546,7 @@ class InstallerAgent(Actor):
         except Exception as e:
             return {"success": False, "host": host, "error": str(e)}
 
-    async def _node_deploy(self, payload: dict) -> dict:
+    async def _node_deploy(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Full bootstrap of a new Wactorz edge node via SSH.
 
         Steps:
@@ -1821,7 +1900,7 @@ class InstallerAgent(Actor):
         main = find_main_actor(self._registry)
         return main is not None and msg.sender_id == main.actor_id
 
-    async def _node_run(self, payload: dict) -> dict:
+    async def _node_run(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Run a command the operator typed, as `/nodes run`, on a node.
 
         payload keys:
@@ -1846,7 +1925,7 @@ class InstallerAgent(Actor):
         result = await self._run_on_node(payload, command, COMMAND_TIMEOUT_S)
         return {"host": payload.get("host") or where, "command": command, **result}
 
-    async def _node_op(self, payload: dict) -> dict:
+    async def _node_op(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Run a named operation from `core.node_operations` on a node.
 
         payload keys:
@@ -1873,7 +1952,9 @@ class InstallerAgent(Actor):
             return result
         return {"node": target.name, "operation": name, **result}
 
-    async def _run_on_node(self, payload: dict, command: str, timeout: float) -> dict:
+    async def _run_on_node(
+        self, payload: dict[str, Any], command: str, timeout: float
+    ) -> dict[str, Any]:
         """Run ``command`` on the node ``payload`` names, over SSH, within ``timeout``.
 
         Every command a node is sent outside a deploy goes through here, so how

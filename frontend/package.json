@@ -3,7 +3,7 @@
   "version": "0.7.2",
   "description": "Wactorz dashboard",
   "private": true,
-  "packageManager": "bun@1.4.2",
+  "packageManager": "bun@1.4.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -27,21 +27,21 @@
   "dependencies": {},
   "devDependencies": {
     "@typescript/native": "npm:typescript@^7.0.2",
-    "@vitest/coverage-v8": "^5.0.3",
+    "@vitest/coverage-v8": "^5.1.0",
     "axe-core": "^4.14.0",
-    "eslint": "^10.12.0",
+    "eslint": "^10.14.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-import-resolver-typescript": "^4.4.5",
-    "eslint-plugin-headers": "^1.3.4",
+    "eslint-plugin-headers": "^1.3.5",
     "eslint-plugin-import": "^2.32.0",
-    "eslint-plugin-prettier": "^5.5.6",
-    "happy-dom": "^20.14.6",
-    "markdownlint-cli2": "^0.23.3",
-    "prettier": "^3.9.9",
+    "eslint-plugin-prettier": "^5.5.7",
+    "happy-dom": "^21.0.4",
+    "markdownlint-cli2": "^0.24.0",
+    "prettier": "^3.9.10",
     "typedoc": "^0.28.20",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "typescript-eslint": "^8.71.1",
-    "vite": "^8.3.4",
-    "vitest": "^5.0.3"
+    "typescript-eslint": "^8.72.1",
+    "vite": "^8.3.5",
+    "vitest": "^5.1.0"
   }
 }

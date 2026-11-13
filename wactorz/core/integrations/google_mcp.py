@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shared base for Google hosted-MCP clients with a REST fallback.
 
 Google's hosted MCP servers (e.g. ``calendarmcp.googleapis.com``,
@@ -23,10 +24,10 @@ import os
 import secrets
 import sys
 import webbrowser
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 from urllib.parse import urlencode, urlparse
 
 import aiohttp
@@ -63,7 +64,7 @@ else:
         OAuthClientMetadata = None
         OAuthToken = None
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105  # an endpoint URL, not a credential
 
@@ -87,39 +88,59 @@ class GoogleMcpConfig:
 
     @property
     def key(self) -> str:
+        """The prefix in lower case, which names this service's keys in :meth:`config_status`."""
         return self.prefix.lower()  # "calendar_mcp" / "gmail_mcp"
 
     def mcp_url(self) -> str:
+        """The MCP endpoint, from ``{PREFIX}_URL`` or the default, without a trailing slash."""
         return self._env("URL", self.default_mcp_url).rstrip("/")
 
     def redirect_uri(self) -> str:
+        """Where the OAuth flow returns to, from ``{PREFIX}_REDIRECT_URI`` or the default."""
         return self._env("REDIRECT_URI", self.default_redirect)
 
     def scopes(self) -> str:
+        """The OAuth scopes asked for, from ``{PREFIX}_SCOPES`` or the default."""
         return self._env("SCOPES", self.default_scopes)
 
     def client_id(self) -> str:
+        """The OAuth client id from ``{PREFIX}_CLIENT_ID``; empty when unset."""
         return self._env("CLIENT_ID")
 
     def client_secret(self) -> str:
+        """The OAuth client secret from ``{PREFIX}_CLIENT_SECRET``; empty when unset."""
         return self._env("CLIENT_SECRET")
 
     def token(self) -> str:
+        """A bearer token from ``{PREFIX}_TOKEN``; empty when unset."""
         return self._env("TOKEN")
 
     def authorization(self) -> str:
+        """A whole ``Authorization`` header value from ``{PREFIX}_AUTHORIZATION``; empty when
+        unset.
+        """
         return self._env("AUTHORIZATION")
 
     def token_file(self) -> str:
+        """Where the OAuth token is kept: ``{PREFIX}_TOKEN_FILE``, or a file under
+        ``~/.wactorz``.
+        """
         return self._env("TOKEN_FILE") or str(Path.home() / ".wactorz" / self.token_filename)
 
     def headers(self) -> dict[str, str]:
+        """The ``Authorization`` header to send without OAuth: the configured value, else the
+        bearer token, else none.
+        """
         auth = self.authorization()
         if not auth and self.token():
             auth = f"Bearer {self.token()}"
         return {"Authorization": auth} if auth else {}
 
     def config_status(self) -> dict[str, Any]:
+        """What is configured, for the agent's status answer: the endpoint, whether any
+        credential is set, and the OAuth client's redirect and token file when there is one.
+        Never a secret's value.
+        """
         client_id = self.client_id()
         return {
             f"{self.key}_url": self.mcp_url() or None,
@@ -135,14 +156,19 @@ class GoogleRestError(Exception):
 
     @classmethod
     def missing_id(cls, what: str) -> GoogleRestError:
+        """The error for a call that needs a ``what`` id and was given none."""
         return cls(f"Missing {what} id")
 
     @classmethod
     def not_authenticated(cls, label: str) -> GoogleRestError:
+        """The error for a REST call to the Google service ``label`` with no credentials."""
         return cls(f"Not authenticated for Google {label}")
 
 
 def format_mcp_content(result: Any) -> str:
+    """An MCP tool result as text: its structured content as JSON when it has some, else each
+    content item's text, joined by lines.
+    """
     if getattr(result, "structuredContent", None) is not None:
         return json.dumps(result.structuredContent, indent=2)
     content = getattr(result, "content", None)
@@ -167,6 +193,9 @@ RestParams = Mapping[str, str] | Sequence[tuple[str, str]] | None
 
 
 def rest_error_message(data: Any) -> str:
+    """The message in a Google REST error body ``data``, or the whole body as text when it has
+    none.
+    """
     if isinstance(data, dict):
         err = data.get("error")
         if isinstance(err, dict) and err.get("message"):
@@ -187,11 +216,11 @@ def _looks_mcp_unavailable(text: str) -> bool:
 
 
 class _GoogleTokenStorage(TokenStorage):
-    def __init__(self, config: GoogleMcpConfig):
+    def __init__(self, config: GoogleMcpConfig) -> None:
         self.config = config
         self.path = Path(config.token_file()).expanduser()
 
-    def _read(self) -> dict:
+    def _read(self) -> dict[str, Any]:
         try:
             return json.loads(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -200,7 +229,7 @@ class _GoogleTokenStorage(TokenStorage):
             logger.warning("Could not read %s MCP token file %s", self.config.label, self.path)
             return {}
 
-    def _write(self, data: dict) -> None:
+    def _write(self, data: dict[str, Any]) -> None:
         write_private_json(self.path, data)
 
     async def get_tokens(self) -> OAuthToken | None:
@@ -242,7 +271,7 @@ class _GoogleTokenStorage(TokenStorage):
         self._write(data)
 
 
-def _make_redirect_handler(config: GoogleMcpConfig):
+def _make_redirect_handler(config: GoogleMcpConfig) -> Callable[[str], Awaitable[None]]:
     async def _open_oauth_browser(url: str) -> None:
         print(
             f"\n{config.label} MCP OAuth required. Open this URL if the browser does not open:\n{url}\n",
@@ -256,7 +285,9 @@ def _make_redirect_handler(config: GoogleMcpConfig):
     return _open_oauth_browser
 
 
-def _make_callback_handler(config: GoogleMcpConfig):
+def _make_callback_handler(
+    config: GoogleMcpConfig,
+) -> Callable[[], Coroutine[Any, Any, tuple[str, str | None]]]:
     async def _wait_for_oauth_callback() -> tuple[str, str | None]:
         parsed = urlparse(config.redirect_uri())
         host = parsed.hostname or "localhost"
@@ -297,14 +328,14 @@ class NeedsLoginError(RuntimeError):
         super().__init__(f"{label} MCP needs interactive authorization; run login() once first")
 
 
-def _make_noninteractive_handler(config: GoogleMcpConfig):
-    async def _handler(*_args, **_kwargs):
+def _make_noninteractive_handler(config: GoogleMcpConfig) -> Callable[..., Awaitable[NoReturn]]:
+    async def _handler(*_args: Any, **_kwargs: Any) -> NoReturn:
         raise NeedsLoginError(config.label)
 
     return _handler
 
 
-def build_auth(config: GoogleMcpConfig, interactive: bool = False):
+def build_auth(config: GoogleMcpConfig, interactive: bool = False) -> OAuthClientProvider | None:
     """Build an OAuth provider.
 
     With ``interactive=False`` (the default, used for normal tool calls) the
@@ -342,19 +373,22 @@ def build_auth(config: GoogleMcpConfig, interactive: bool = False):
 
 
 def mcp_timeout() -> float:
+    """Seconds to wait for one MCP call, from ``GOOGLE_MCP_TIMEOUT``; 20 when unset or not a
+    number.
+    """
     try:
         return float(os.getenv("GOOGLE_MCP_TIMEOUT", "20"))
     except ValueError:
         return 20.0
 
 
-RestHandler = Callable[[dict], Awaitable[str]]
+RestHandler = Callable[[dict[str, Any]], Awaitable[str]]
 
 
 class GoogleMcpClient:
     """Base client: hosted MCP first, plain REST fallback on permission-denied."""
 
-    def __init__(self, config: GoogleMcpConfig):
+    def __init__(self, config: GoogleMcpConfig) -> None:
         self.config = config
 
     # ── Subclass hook ──────────────────────────────────────────────────────
@@ -363,7 +397,13 @@ class GoogleMcpClient:
         return {}
 
     # ── Public API ─────────────────────────────────────────────────────────
-    async def call_tool(self, tool_name: str, arguments: dict | None = None) -> str:
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> str:
+        """Call the MCP tool ``tool_name`` with ``arguments`` and return its result as text.
+
+        When the MCP server refuses permission, is unreachable or times out, the call is tried
+        again through the REST API where there is a fallback for the tool. A failure comes back
+        as text saying so, not as an exception.
+        """
         arguments = arguments or {}
         try:
             result = await asyncio.wait_for(
@@ -382,7 +422,9 @@ class GoogleMcpClient:
                 return fallback
         return result
 
-    async def _call_mcp(self, tool_name: str, arguments: dict, interactive: bool = False) -> str:
+    async def _call_mcp(
+        self, tool_name: str, arguments: dict[str, Any], interactive: bool = False
+    ) -> str:
         if ClientSession is None or streamablehttp_client is None:
             return "The 'mcp' package is required. Install with: pip install wactorz[mcp]"
         try:
@@ -400,6 +442,11 @@ class GoogleMcpClient:
             return f"{self.config.label} MCP error: {exc}"
 
     async def list_tools(self, interactive: bool = False) -> str:
+        """The MCP server's tools, one ``name: description`` line each; a failure comes back as
+        text saying so.
+
+        With ``interactive``, a missing OAuth token starts the browser consent flow.
+        """
         if ClientSession is None or streamablehttp_client is None:
             return "The 'mcp' package is required. Install with: pip install wactorz[mcp]"
         try:
@@ -418,7 +465,7 @@ class GoogleMcpClient:
         except Exception as exc:
             return f"{self.config.label} MCP error: {exc}"
 
-    def _store_token_response(self, td: dict) -> None:
+    def _store_token_response(self, td: dict[str, Any]) -> None:
         path = Path(self.config.token_file()).expanduser()
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -529,7 +576,7 @@ class GoogleMcpClient:
         return f"{self.config.label} login did not complete: {result}"
 
     # ── REST fallback plumbing ─────────────────────────────────────────────
-    async def _call_rest(self, tool_name: str, arguments: dict) -> str | None:
+    async def _call_rest(self, tool_name: str, arguments: dict[str, Any]) -> str | None:
         handler = self._rest_handlers().get(tool_name)
         if handler is None:
             return None
@@ -541,7 +588,7 @@ class GoogleMcpClient:
             logger.warning("%s REST fallback failed: %s", self.config.label, exc)
             return None
 
-    def _stored_tokens(self) -> dict:
+    def _stored_tokens(self) -> dict[str, Any]:
         path = Path(self.config.token_file()).expanduser()
         try:
             return json.loads(path.read_text(encoding="utf-8")).get("tokens", {}) or {}

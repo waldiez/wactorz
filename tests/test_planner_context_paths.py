@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Resolving a vague reference to a concrete topic or Home Assistant entity.
 
 A task says "temperature"; a spawned agent needs a topic name and the field

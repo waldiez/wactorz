@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 set -eu
 
 out_file="${1:-/etc/prometheus/prometheus.yml}"

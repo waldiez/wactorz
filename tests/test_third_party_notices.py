@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The list of third-party packages an image carries, and the license files beside it.
 
 An image passes on every package installed in it. `scripts/third_party.py`
@@ -136,19 +137,27 @@ class TestWhatTheImageCarries:
 
         assert '"LICENSE"' in declared
         assert '"NOTICE.md"' in declared
-        assert "COPY pyproject.toml README.md LICENSE NOTICE.md uv.lock ./" in DOCKERFILE
+        copied = DOCKERFILE.index("COPY README.md LICENSE NOTICE.md ./")
+        assert DOCKERFILE.index("COPY pyproject.toml uv.lock ./") < copied
+        assert copied < DOCKERFILE.index("pip install --no-cache-dir --no-deps .")
+
+    def test_the_dependencies_are_installed_before_the_code_is_copied(self) -> None:
+        # So a change to Wactorz's own code reuses the large layer they make.
+        dependencies = DOCKERFILE.index("pip install --no-cache-dir --require-hashes")
+
+        assert dependencies < DOCKERFILE.index("COPY wactorz/ ./wactorz/")
 
     def test_the_list_is_written_once_everything_is_installed(self) -> None:
         install = DOCKERFILE.index("pip install --no-cache-dir --no-deps .")
         written = DOCKERFILE.index("python scripts/third_party.py > /app/THIRD_PARTY.txt")
 
         assert install < written
-        assert written < DOCKERFILE.index("rm -rf /tmp/requirements.txt"), (
+        assert written < DOCKERFILE.index("rm -rf /app/wactorz"), (
             "the script is among the build inputs removed at the end of that step"
         )
 
     def test_the_build_inputs_are_removed_and_the_notices_are_not(self) -> None:
-        removed = DOCKERFILE[DOCKERFILE.index("rm -rf /tmp/requirements.txt") :]
+        removed = DOCKERFILE[DOCKERFILE.index("rm -rf /app/wactorz") :]
         removed = removed[: removed.index("\n\n")]
 
         assert "/app/scripts" in removed

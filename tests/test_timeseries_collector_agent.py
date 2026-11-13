@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The time-series collector: what it buffers from each topic, and what reaches SQLite.
 
 The program is exec'd as it is at spawn and driven through a stand-in `agent`,
@@ -189,6 +190,24 @@ class TestRouting:
         assert rows["door"]["value"] is None
         assert (rows["temperature"]["agent"], rows["temperature"]["node"]) == ("bme280", "pi")
 
+    async def test_a_clock_far_ahead_is_stored_at_its_arrival_and_logged_once(
+        self, agent: _Agent, db: WactorzDB, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        sent = time.time()
+        with caplog.at_level(logging.WARNING, logger="timeseries-collector"):
+            for _ in range(2):
+                _route(agent, "sensors/kitchen", {"ts": sent * 1000, "temperature": 21.5})
+            _route(agent, "sensors/hall", {"ts": sent * 1000, "temperature": 20.0})
+        NS["_flush"](agent)
+
+        rows = _rows(db, "sensor_readings")
+        assert {r["time_source"] for r in rows} == {"arrival"}
+        assert all(r["ts"] == r["arrived"] >= sent for r in rows)
+        said = [
+            r.getMessage() for r in caplog.records if "ahead of their arrival" in r.getMessage()
+        ]
+        assert [line.split()[0] for line in said] == ["sensors/kitchen", "sensors/hall"]
+
     async def test_anything_but_an_object_is_ignored(self, agent: _Agent) -> None:
         _route(agent, "sensors/x", [1, 2, 3])
 
@@ -248,6 +267,23 @@ class TestRouting:
         assert rows["reward"]["entity_id"] == "sinergym.office"
         assert rows["step"]["value"] == 40.0
         assert rows["obs_0"]["agent"] == "sinergym-train"
+
+    async def test_an_observation_without_a_reward_or_its_lists_keeps_its_step(
+        self, agent: _Agent, db: WactorzDB
+    ) -> None:
+        # obs, action and info in a shape the collector cannot spread are skipped,
+        # not misread; the step and the episode are kept whatever else is there.
+        _route(
+            agent,
+            "sinergym/env/office/observation",
+            {"step": 3, "obs": "20.0", "action": {"a": 1}, "info": [12.5]},
+        )
+        NS["_flush"](agent)
+
+        rows = {r["field"]: r for r in _rows(db, "sensor_readings")}
+        assert set(rows) == {"step", "episode"}
+        assert rows["step"]["entity_id"] == "sinergym"
+        assert rows["episode"]["value"] == 0.0
 
     async def test_only_an_episode_end_is_kept(self, agent: _Agent, db: WactorzDB) -> None:
         _route(agent, "sinergym/env/office/episode", {"event": "episode_start"})

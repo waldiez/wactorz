@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Hatchling pre-build hook — ensures the Vite frontend is built before packaging.
 
 ``static/app/`` (Vite SPA) and ``static/docs/`` (docs site) are committed
@@ -12,10 +13,13 @@ Configure in pyproject.toml:
 """
 
 import hashlib
+import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
@@ -40,8 +44,6 @@ def _pkg_manager(frontend_dir: Path) -> list[str]:
     """Return the detected package-manager command prefix."""
     pkg_json = frontend_dir / "package.json"
     try:
-        import json
-
         data = json.loads(pkg_json.read_text())
         pm = data.get("packageManager", "")
         if pm.startswith("bun"):
@@ -57,8 +59,6 @@ def _pkg_manager(frontend_dir: Path) -> list[str]:
 
 def _pm_available(pm: list[str]) -> bool:
     """Return True if the package-manager executable is on PATH."""
-    import shutil
-
     return shutil.which(pm[0]) is not None
 
 
@@ -127,12 +127,12 @@ def _record_fingerprint(frontend: Path) -> None:
         pass  # a cache we cannot write is a slower build, not a failure
 
 
-class CustomBuildHook(BuildHookInterface):
+class CustomBuildHook(BuildHookInterface[Any]):
     """Ensure the Vite frontend is built before the wheel is assembled."""
 
     PLUGIN_NAME = "custom"
 
-    def initialize(self, version: str, build_data: dict) -> None:
+    def initialize(self, version: str, build_data: dict[str, Any]) -> None:
         self._build_frontend(Path(self.root))
 
     def _build_frontend(self, root: Path) -> None:

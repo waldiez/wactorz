@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The store instances this process uses, and the accessors that reach them.
 
 Kept apart from the store classes themselves so those stay plain objects that a
@@ -14,7 +15,7 @@ from .db import WactorzDB
 from .memory_store import MemoryStore
 from .pickle_store import PickleStore
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class Stores:

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The sliding window agent code queries for recent readings.
 
 Every accessor trims first, so age is enforced on read rather than on a timer.

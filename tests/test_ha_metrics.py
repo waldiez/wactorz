@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """How Home Assistant's WebSocket API answers, as `/metrics` says it.
 
 Requests are counted by command and outcome and timed; connecting is timed, and

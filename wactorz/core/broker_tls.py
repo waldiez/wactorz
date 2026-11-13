@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The private CA and broker certificate an install issues for brokers it provides.
 
 A node that connects over TLS has to trust the broker's certificate, and asking
@@ -35,7 +36,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from .mqtt_tls import CA_FILE, TLS_DIRNAME
 from .paths import ensure_state_dir
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The CA's private key, beside its certificate.
 CA_KEY_FILE = "ca.key"

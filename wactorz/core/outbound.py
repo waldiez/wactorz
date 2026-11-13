@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What an agent says to a person, and what the person answers.
 
 An agent reaches a person through a chat channel: the dashboard, Telegram,
@@ -22,6 +23,8 @@ import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
+
+from .topics import agent_topic
 
 #: The channel a message goes to when none is named: the dashboard shows every
 #: ``agents/<id>/chat`` frame, so a message for it needs no delivery of its own.
@@ -54,18 +57,22 @@ class OptionsError(ValueError):
 
     @classmethod
     def none(cls) -> OptionsError:
+        """The error for a question asked with no options."""
         return cls("ask_operator needs options for the person to pick from")
 
     @classmethod
     def not_a_string(cls, option: Any) -> OptionsError:
+        """The error for an ``option`` that is not a string."""
         return cls(f"an option must be a string, not {type(option).__name__}")
 
     @classmethod
     def empty(cls) -> OptionsError:
+        """The error for an option that is empty."""
         return cls("an option cannot be empty")
 
     @classmethod
     def too_long(cls, text: str) -> OptionsError:
+        """The error for an option, ``text``, longer than an option may be."""
         return cls(
             f"option {text[:20]!r}… is longer than {MAX_OPTION_CHARS} characters; "
             "put the sentence in the message and keep the option to a few words"
@@ -73,10 +80,12 @@ class OptionsError(ValueError):
 
     @classmethod
     def twice(cls, text: str) -> OptionsError:
+        """The error for the option ``text`` offered twice."""
         return cls(f"option {text!r} is offered twice")
 
     @classmethod
     def too_many(cls, count: int) -> OptionsError:
+        """The error for ``count`` options, more than a message may offer."""
         return cls(f"{count} options is more than the {MAX_OPTIONS} a message may offer")
 
 
@@ -123,7 +132,7 @@ def check_channel(channel: str) -> str:
 
 def answer_topic(agent_id: str) -> str:
     """The topic a channel publishes the person's pick on, for the agent that asked."""
-    return f"agents/{agent_id}/{ANSWER_LEAF}"
+    return agent_topic(agent_id, ANSWER_LEAF)
 
 
 @dataclass(frozen=True)
@@ -196,7 +205,9 @@ class TakesDashboardAnswers(Protocol):
     server, when the agent runs in its process, hands it the press instead.
     """
 
-    async def dashboard_answer(self, answer: Answer) -> None: ...
+    async def dashboard_answer(self, answer: Answer) -> None:
+        """Take the ``answer`` pressed in the dashboard to a question this agent asked."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -270,18 +281,24 @@ def note_text(raw: Any) -> str:
     return raw.strip()[:MAX_NOTE_CHARS] if isinstance(raw, str) else ""
 
 
-def numbered(text: str, options: Sequence[str]) -> str:
+#: The line that tells a person on a channel with no buttons how to answer.
+REPLY_HINT = "Reply with the number."
+
+
+def numbered(text: str, options: Sequence[str], *, reply_hint: bool = True) -> str:
     """``text`` with its options as a numbered list, for a channel with no buttons.
 
     The person answers with the number or the option's words; see
-    :func:`pick_option`. Without options the text goes as it is.
+    :func:`pick_option`. Without options the text goes as it is. Without
+    ``reply_hint`` the list is only a record of what was offered, as the
+    dashboard keeps it: an answer there is a button, not a reply.
     """
     if not options:
         return text
     lines = [text, ""]
     lines.extend(f"{n}. {option}" for n, option in enumerate(options, start=1))
-    lines.append("")
-    lines.append("Reply with the number.")
+    if reply_hint:
+        lines += ["", REPLY_HINT]
     return "\n".join(lines)
 
 

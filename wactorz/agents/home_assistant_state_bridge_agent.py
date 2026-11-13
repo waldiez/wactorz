@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
 import logging
 import os
@@ -9,7 +10,7 @@ from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.integrations.home_assistant.ha_helper import normalize_ha_ws_url
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 STATE_CHANGED_EVENT = "state_changed"
 DEFAULT_OUTPUT_TOPIC = "homeassistant/state_changes"
@@ -40,9 +41,9 @@ class HomeAssistantStateBridgeAgent(Actor):
         super().__init__(**kwargs)
         self.protected = False
 
-        self.ha_url = (os.getenv("HOME_ASSISTANT_URL") or CONFIG.ha_url or "").rstrip("/")
-        self.ha_ws_url = normalize_ha_ws_url(self.ha_url)
-        self.ha_token = (os.getenv("HOME_ASSISTANT_TOKEN") or CONFIG.ha_token or "").strip()
+        self.ha_url: str = (os.getenv("HOME_ASSISTANT_URL") or CONFIG.ha_url or "").rstrip("/")
+        self.ha_ws_url: str = normalize_ha_ws_url(self.ha_url)
+        self.ha_token: str = (os.getenv("HOME_ASSISTANT_TOKEN") or CONFIG.ha_token or "").strip()
 
         self._output_topic = (
             os.getenv("HA_STATE_BRIDGE_OUTPUT_TOPIC")
@@ -68,6 +69,9 @@ class HomeAssistantStateBridgeAgent(Actor):
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
     async def on_start(self) -> None:
+        """Restore the agent's counters, publish the manifest, and start forwarding Home
+        Assistant state changes to MQTT.
+        """
         self._events_seen = int(self.recall("events_seen", 0))
         self._last_event_at = float(self.recall("last_event_at", 0.0))
         self._last_error = str(self.recall("last_error", ""))
@@ -95,6 +99,7 @@ class HomeAssistantStateBridgeAgent(Actor):
         )
 
     async def on_stop(self) -> None:
+        """Remember the agent's counters for the next start."""
         self.persist("events_seen", self._events_seen)
         self.persist("last_event_at", self._last_event_at)
         self.persist("last_error", self._last_error)
@@ -123,6 +128,9 @@ class HomeAssistantStateBridgeAgent(Actor):
         )
 
     async def handle_message(self, msg: Message) -> None:
+        """Answer ``status`` with the bridge's state, in words and as fields; anything else is
+        answered with what the agent understands.
+        """
         if msg.type != MessageType.TASK:
             return
 

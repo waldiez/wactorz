@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a session cookie stands for, and for how long.
 
 The cookie carries an id, never the configured key — so the interesting

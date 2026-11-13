@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Durable MQTT publishing for the actor system.
 
 Callers hand messages over and carry on: delivery, reconnection and retry
@@ -21,12 +22,13 @@ from collections import deque
 from collections.abc import Sequence
 from itertools import islice
 from pathlib import Path
+from typing import Any
 
 from .cancellation import cancel_until_done
 from .mqtt import publish_properties
-from .topics import publish_topic_error
+from .topics import NODES, TASK_BY_NAME, TASK_BY_NODE, publish_topic_error, root_prefix
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 #: MQTT v5 user properties as (name, value) pairs, the form they are queued and stored in.
@@ -83,8 +85,9 @@ class MQTTPublisher:
 
     # Topics that must use QoS 1 regardless of caller setting
     _CRITICAL_TOPIC_PREFIXES = (
-        "nodes/",  # spawn, stop, desired_state
-        "agents/by-name/",  # task routing
+        root_prefix(NODES),  # spawn, stop, desired_state
+        f"{TASK_BY_NAME}/",  # tasks by name, and replies to them
+        f"{TASK_BY_NODE}/",  # tasks by node, and replies to them
     )
     # Topics that are purely telemetry — always QoS 0 to avoid queue bloat
     _TELEMETRY_TOPIC_SUFFIXES = (
@@ -150,7 +153,7 @@ class MQTTPublisher:
         db_path: str | os.PathLike[str] = "./state/mqtt_outbox.db",
         dead_letter_days: float = DEAD_LETTER_DAYS,
     ) -> None:
-        self._queue: asyncio.Queue = asyncio.Queue(maxsize=self.MAX_QUEUED)
+        self._queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=self.MAX_QUEUED)
         #: How many messages the cap has discarded, for the log and for tests.
         self._dropped = 0
         #: How many messages were given up on: unsendable, expired, or failing
@@ -163,7 +166,7 @@ class MQTTPublisher:
         #: How many publishes failed on a live connection and were held to retry.
         self._publish_failures = 0
         #: A message whose publish failed, retried before the queue is read again.
-        self._retry: tuple | None = None
+        self._retry: tuple[Any, ...] | None = None
         #: How many times in a row `_retry` has failed. It counts that one
         #: message: a fresh one starts again, so failures never add up across
         #: messages and turn a flaky link into a false verdict.
@@ -171,7 +174,7 @@ class MQTTPublisher:
         #: Topics already warned about as unsendable, so a caller in a loop
         #: warns once rather than on every call.
         self._refused_topics: set[str] = set()
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[Any] | None = None
         self._available = False
         self._db_path = db_path
         self._dead_letter_days = dead_letter_days
@@ -184,7 +187,7 @@ class MQTTPublisher:
         #: the same reason: a failed statement drops the handle from inside the
         #: `except` of a method already holding this.
         self._db_lock = threading.RLock()
-        self._checkpoint_task: asyncio.Task | None = None
+        self._checkpoint_task: asyncio.Task[Any] | None = None
         #: Set when the outbox could not be opened: QoS 1 then skips SQLite and
         #: is delivered from memory, like QoS 0.
         self._memory_only = False
@@ -267,7 +270,7 @@ class MQTTPublisher:
         succeeds — and each used to open, write, commit and close its own
         connection. On the SD card a Raspberry Pi runs from, that cycle measures
         ~16ms, and it is paid on the control plane rather than on telemetry:
-        `nodes/` and `agents/by-name/` are forced up to QoS 1 in `publish`, so
+        `nodes/` and the task topics are forced up to QoS 1 in `publish`, so
         every spawn, stop and migration ack stops every actor in the process for
         that long, MQTT keepalive included.
 
@@ -345,14 +348,18 @@ class MQTTPublisher:
         """
         now = time.time()
         # Commands: non-retained messages on the control plane, the prefixes in
-        # `_CRITICAL_TOPIC_PREFIXES`. `_` is a LIKE wildcard, and none appears in them.
-        rules: list[tuple[str, str, float, str]] = [
+        # `_CRITICAL_TOPIC_PREFIXES`, compared exactly rather than with LIKE, whose
+        # `_` and `%` would be wildcards inside a prefix.
+        prefixes = self._CRITICAL_TOPIC_PREFIXES
+        on_control_plane = " OR ".join("substr(topic, 1, ?) = ?" for _ in prefixes)
+        prefix_params = tuple(value for p in prefixes for value in (len(p), p))
+        # S608 below: the fragment is literal, and every value is bound.
+        rules: list[tuple[str, str, tuple[float | int | str, ...], str]] = [
             (
-                "SELECT topic, COUNT(*) FROM outbox WHERE retain = 0 AND ts < ?"
-                " AND (topic LIKE 'nodes/%' OR topic LIKE 'agents/by-name/%') GROUP BY topic",
-                "DELETE FROM outbox WHERE retain = 0 AND ts < ?"
-                " AND (topic LIKE 'nodes/%' OR topic LIKE 'agents/by-name/%')",
-                now - self.COMMAND_EXPIRY_S,
+                "SELECT topic, COUNT(*) FROM outbox WHERE retain = 0 AND ts < ?"  # noqa: S608
+                f" AND ({on_control_plane}) GROUP BY topic",
+                f"DELETE FROM outbox WHERE retain = 0 AND ts < ? AND ({on_control_plane})",  # noqa: S608
+                (now - self.COMMAND_EXPIRY_S, *prefix_params),
                 f"{self.COMMAND_EXPIRY_S / 60:g} minutes",
             )
         ]
@@ -361,7 +368,7 @@ class MQTTPublisher:
                 (
                     "SELECT topic, COUNT(*) FROM outbox WHERE ts < ? GROUP BY topic",
                     "DELETE FROM outbox WHERE ts < ?",
-                    now - self._dead_letter_days * 86400,
+                    (now - self._dead_letter_days * 86400,),
                     f"{self._dead_letter_days:g} days",
                 )
             )
@@ -369,10 +376,10 @@ class MQTTPublisher:
         try:
             with self._db_lock:
                 db = self._connect()
-                for select, delete, cutoff, age in rules:
-                    rows = db.execute(select, (cutoff,)).fetchall()
+                for select, delete, params, age in rules:
+                    rows = db.execute(select, params).fetchall()
                     if rows:
-                        db.execute(delete, (cutoff,))
+                        db.execute(delete, params)
                         expired.extend((topic, count, age) for topic, count in rows)
                 if expired:
                     db.commit()
@@ -512,7 +519,7 @@ class MQTTPublisher:
             logger.debug("[MQTT] Outbox delete failed: %s", e)
             self._close_db()
 
-    def _enqueue(self, item: tuple) -> None:
+    def _enqueue(self, item: tuple[Any, ...]) -> None:
         """Queue `item`, making room by discarding telemetry if the cap is reached.
 
         Never blocks the caller. `publish()` promises to return immediately, so
@@ -532,7 +539,7 @@ class MQTTPublisher:
         else:
             self._note_drop(item)
 
-    def _put_or_make_room(self, item: tuple) -> bool:
+    def _put_or_make_room(self, item: tuple[Any, ...]) -> bool:
         """Queue `item`, discarding the oldest telemetry if that makes room. False if full."""
         while True:
             try:
@@ -560,7 +567,7 @@ class MQTTPublisher:
         room = self.MAX_QUEUED - self._queue.qsize()
         return room >= min(len(self._spilled), self.REFILL_BATCH, max(1, self.MAX_QUEUED // 2))
 
-    def _read_rows(self, row_ids: list[int]) -> list[tuple] | None:
+    def _read_rows(self, row_ids: list[int]) -> list[tuple[Any, ...]] | None:
         """Stored messages by row id, in order; None if the outbox could not be read."""
         marks = ",".join("?" * len(row_ids))
         # Only the placeholders are interpolated; the ids themselves are bound.
@@ -630,7 +637,7 @@ class MQTTPublisher:
             self._queue.put_nowait(entry)
         return dropped
 
-    def _note_drop(self, item: tuple) -> None:
+    def _note_drop(self, item: tuple[Any, ...]) -> None:
         """Count a discarded message, and say so at a rate a log can carry."""
         self._dropped += 1
         if self._dropped == 1 or self._dropped % 1000 == 0:
@@ -642,7 +649,7 @@ class MQTTPublisher:
                 self._dropped,
             )
 
-    def _discard(self, item: tuple, from_queue: bool, reason: str) -> None:
+    def _discard(self, item: tuple[Any, ...], from_queue: bool, reason: str) -> None:
         """Give up on a message that can never be sent, so the ones behind it can be.
 
         Its stored row goes too; left in the outbox it would be replayed after a
@@ -656,7 +663,7 @@ class MQTTPublisher:
         self._discarded += 1
         logger.warning("[MQTT] outbox: dropped a message for %r — %s", topic, reason)
 
-    def _hold_for_retry(self, item: tuple, from_queue: bool, error: Exception) -> None:
+    def _hold_for_retry(self, item: tuple[Any, ...], from_queue: bool, error: Exception) -> None:
         """Keep a failed message to send first after reconnecting, unless it keeps failing.
 
         A publish that fails on a live connection is usually the link, and the
@@ -701,7 +708,7 @@ class MQTTPublisher:
     async def publish(
         self,
         topic: str,
-        payload,
+        payload: Any,
         retain: bool = False,
         qos: int = 0,
         user_properties: UserProperties | None = None,

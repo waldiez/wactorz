@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Text main normalises before it uses it.
 
 Two pure functions with no relationship to each other beyond that: one

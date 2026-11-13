@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The artifacts a node has fetched, kept for the next agent that names them.
 
 An artifact is a model main keeps (see `wactorz.core.artifacts`). A node fetches
@@ -26,7 +27,7 @@ from typing import Any
 
 from ..core.artifacts import UNPACKED_DIRNAME, readable_path
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The directory, inside the state directory, the cache is kept in. Starts with
 #: `..`, which no agent's name may, so it never collides with an agent's own.
@@ -44,9 +45,12 @@ class ArtifactCache:
         #: The most the cache keeps of files no agent names; 0 for no limit.
         self.max_bytes = max_bytes
         #: Where a directory artifact is unpacked for an agent to read.
-        self.unpacked = unpacked or directory.parent / UNPACKED_DIRNAME
+        self.unpacked: Path = unpacked or directory.parent / UNPACKED_DIRNAME
 
     def path(self, sha256: str) -> Path:
+        """Where the artifact with this ``sha256`` is, or would be, kept; this does not check
+        that it is there.
+        """
         return self.directory / sha256
 
     def readable_path(self, entry: Mapping[str, Any]) -> Path:

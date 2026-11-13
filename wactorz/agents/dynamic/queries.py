@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Reading back what agents have recorded: time series, detections, HA state.
 
 The history lives in main's database. On main a query answers at once, and its
@@ -10,9 +11,11 @@ is main's alone -- on a node it says so the moment its result is used.
 import logging
 from collections.abc import Awaitable, Callable
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
+from ...core import topic_bus
 from ...core.persistence import get_db
+from ...core.topics import agent_topic
 from .awaitable import AwaitableDict, AwaitableList, awaitable_frame
 
 if TYPE_CHECKING:
@@ -25,7 +28,7 @@ if TYPE_CHECKING:
 else:
     _Host = object
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The database method answering each history query, named as the bridge to
 #: main names them (see :mod:`wactorz.agents.main.history`).
@@ -49,13 +52,11 @@ class QueriesMixin(_Host):
             await agent.publish_world_state('person_present', {'present': True, 'zone': 'kitchen'})
             await agent.publish_world_state('energy', {'kwh': 2.3, 'cost': 0.45})
         """
-        from ...core.topic_bus import get_topic_bus
-
-        bus = get_topic_bus()
+        bus = topic_bus.get_topic_bus()
         if bus:
             await bus.state_hub.publish_agent_data(self.name, key, data)
         else:
-            topic = f"agents/{self.name}/data/{key}"
+            topic = agent_topic(self.name, "data", key)
             await self.publish(topic, data)
 
     async def read_world_state(self, topic: str, timeout: float = 2.0) -> Any | None:
@@ -197,6 +198,7 @@ class NotAwaited(TypeError):
 
     @classmethod
     def on_a_node(cls, call: str) -> "NotAwaited":
+        """The error for calling ``agent.<call>()`` on a node without awaiting it."""
         return cls(
             f"agent.{call}() reads main's history over the broker on a node, so it must "
             f"be awaited: write `await agent.{call}(...)`"
@@ -219,10 +221,24 @@ class NotFetched:
     def __await__(self) -> Any:
         return self._fetch().__await__()
 
-    def _refuse(self, *_args: Any, **_kwargs: Any) -> Any:
+    def _refuse(self, *_args: Any, **_kwargs: Any) -> NoReturn:
         raise NotAwaited.on_a_node(self._call)
 
-    __iter__ = __len__ = __getitem__ = __contains__ = __bool__ = _refuse
+    # Every way of using it but awaiting it is refused alike.
+    def __iter__(self) -> NoReturn:
+        self._refuse()
+
+    def __len__(self) -> NoReturn:
+        self._refuse()
+
+    def __getitem__(self, _key: Any) -> NoReturn:
+        self._refuse()
+
+    def __contains__(self, _item: Any) -> NoReturn:
+        self._refuse()
+
+    def __bool__(self) -> NoReturn:
+        self._refuse()
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Discord bot interface."""
 
 import logging
@@ -18,7 +19,7 @@ from .social import SocialRateLimiter
 if TYPE_CHECKING:
     from ...orchestration import Orchestrator
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The most text one Discord message carries.
 MESSAGE_CHARS = 2000
@@ -47,10 +48,10 @@ class DiscordInterface:
         self.orchestrator = orchestrator
         self.token = token
         self.channel_id = channel_id
-        self.allowed_user_ids = frozenset(allowed_user_ids or ())
-        self.limiter = SocialRateLimiter()
-        self.outbox = outbox or Outbox()
-        self.choices = PendingChoices()
+        self.allowed_user_ids: frozenset[int] = frozenset(allowed_user_ids or ())
+        self.limiter: SocialRateLimiter = SocialRateLimiter()
+        self.outbox: Outbox = outbox or Outbox()
+        self.choices: PendingChoices = PendingChoices()
         #: The client, once `run()` has built it: what `send` talks through.
         self._client: Any = None
 
@@ -90,8 +91,14 @@ class DiscordInterface:
     # ── the bot ───────────────────────────────────────────────────────────────
 
     async def run(self) -> None:
+        """Log the bot in and answer messages from the allowed users until the client stops.
+
+        Returns at once, logging why, when ``discord.py`` is not installed or no user is allowed:
+        a bot that answers anyone is not started. While it runs, the bot is registered as the
+        ``discord`` outbound channel.
+        """
         try:
-            import discord
+            import discord  # optional dependency: the `discord` extra
         except ImportError:
             logger.error(  # noqa: TRY400  # the ImportError is the whole diagnosis
                 "discord.py not installed. Run: pip install discord.py"

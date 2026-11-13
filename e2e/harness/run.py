@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One run of the suite: where it writes, the ports it uses, the secrets it made up.
 
 Everything a run needs that must not collide with anything else on the machine
@@ -9,8 +10,6 @@ A developer's own instance, its ``.env`` and its state are never read or
 touched. That is what lets the suite run on a machine where Wactorz is already
 running.
 """
-
-from __future__ import annotations
 
 import secrets
 import socket

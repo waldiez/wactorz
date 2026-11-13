@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """No test module may shadow a dependency that is actually installed.
 
 Tests share one process and ``sys.modules`` is never restored, so a module-scope

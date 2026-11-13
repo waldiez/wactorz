@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Memory and system-prompt construction for MainActor.
 
 Holds user-fact persistence/extraction and the dynamic system-prompt rebuild
@@ -19,7 +20,7 @@ from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
 from ..prompts.main_actor_prompts import facts_extract_prompt, orchestrator_prompt
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
@@ -35,6 +36,12 @@ else:
 class MemoryMixin(_Host):
     """User facts + live system-prompt assembly. Mix into an LLMAgent host."""
 
+    #: What this agent's model requests have taken, kept by the base class's
+    #: accounting and added to here.
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost_usd: float
+
     #: The integrations the system prompt and fact extraction speak of. Every
     #: one unless the host says otherwise.
     _prompt_fragments: tuple[PromptFragment, ...] = DEFAULT_FRAGMENTS
@@ -43,6 +50,7 @@ class MemoryMixin(_Host):
     _stored_models: tuple[str, ...] = ()
 
     def get_user_facts(self) -> dict[str, Any]:
+        """The facts main keeps about the user, by key; empty before any is saved."""
         return self.recall("_user_facts") or {}
 
     def _preferred_timezone_name(self) -> str | None:

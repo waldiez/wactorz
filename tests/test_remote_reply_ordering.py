@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A remote agent that answers immediately must still be heard.
 
 Both delegation paths published the task and *then* started subscribing to the

@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -124,6 +123,20 @@ describe("TTSManager", () => {
         const m = new TTSManager();
         m.notify("hello agent");
         expect((globalThis as any).speechSynthesis.speak).not.toHaveBeenCalled();
+    });
+
+    it("notify() neither beeps nor speaks while the browser is muted", async () => {
+        localStorage.setItem("wactorz.tts", "1");
+        localStorage.setItem("wactorz-muted", "1");
+        const made = vi.fn();
+        const origAC = (globalThis as any).AudioContext;
+        (globalThis as any).AudioContext = made;
+        const { TTSManager } = await freshTTS();
+        const m = new TTSManager();
+        m.notify("hello agent");
+        expect((globalThis as any).speechSynthesis.speak).not.toHaveBeenCalled();
+        expect(made).not.toHaveBeenCalled();
+        (globalThis as any).AudioContext = origAC;
     });
 
     it("_ctx() returns null when AudioContext construction throws", async () => {
@@ -574,12 +587,14 @@ describe("TTSManager", () => {
         const { TTSManager } = await freshTTS();
         // Same fresh module graph → this is the exact singleton TTSManager ducks.
         const { ambient } = await import("../../../io/AmbientManager");
+        const stopDucking = ambient.followSpeech();
         const duckSpy = vi.spyOn(ambient, "duck");
 
         const m = new TTSManager();
         m.notify("boom");
         await vi.waitFor(() => expect(duckSpy).toHaveBeenCalledWith(false));
         expect(duckSpy).toHaveBeenCalledWith(true); // ducked on entry
+        stopDucking();
         expect((globalThis as any).speechSynthesis.speak).toHaveBeenCalled(); // browser fallback ran
 
         globalThis.fetch = origFetch;

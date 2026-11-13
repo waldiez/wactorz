@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent says something to a person, with a choice, and hears the pick.
 
 The agent publishes one ``agents/<id>/chat`` frame (``notify_user``); the
@@ -11,8 +12,6 @@ Everything here runs without a broker: the outbox is driven frame by frame,
 the channels are stand-ins that record what they were handed, and the broker
 link is a recorder.
 """
-
-from __future__ import annotations
 
 import json
 import logging
@@ -36,9 +35,10 @@ from wactorz.core.outbound import (
     numbered,
     pick_option,
 )
+from wactorz.core.persistence.db import ChatRow
 from wactorz.interfaces.chat.outbound import Outbox, PendingChoices, Sender
 from wactorz.interfaces.chat_interfaces import build_social_companions
-from wactorz.web import answers, events, mqtt, relay, runtime, ws
+from wactorz.web import answers, db_writer, events, mqtt, relay, runtime, ws
 
 # ── the vocabulary ───────────────────────────────────────────────────────────
 
@@ -82,6 +82,9 @@ class TestNumberedChoices:
         assert text.startswith("Changed?\n\n1. yes\n2. no\n")
         assert text.endswith("Reply with the number.")
         assert numbered("plain", []) == "plain"
+
+    def test_without_the_hint_the_list_is_only_a_record(self) -> None:
+        assert numbered("Changed?", ["yes", "no"], reply_hint=False) == "Changed?\n\n1. yes\n2. no"
 
     @pytest.mark.parametrize(
         ("reply", "index"),
@@ -413,7 +416,7 @@ class TestTheOutbox:
 
 
 @agent(name="hvac-watch")
-def hvac_watch(payload: dict) -> dict:
+def hvac_watch(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
@@ -421,7 +424,7 @@ class TestNotifyUser:
     @pytest.fixture(name="published")
     def published_fixture(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> tuple[Any, list]:
+    ) -> tuple[Any, list[Any]]:
         spec = spec_of(hvac_watch)
         assert spec is not None
         actor = spec.build(persistence_dir=str(tmp_path))
@@ -434,7 +437,7 @@ class TestNotifyUser:
         return actor, published
 
     async def test_a_question_carries_its_options_and_where_to_send_it(
-        self, published: tuple[Any, list]
+        self, published: tuple[Any, list[Any]]
     ) -> None:
         actor, frames = published
         message_id = await actor.notify_user(
@@ -452,7 +455,9 @@ class TestNotifyUser:
         assert payload["channel"] == "telegram"
         assert payload["user"] == "42"
 
-    async def test_a_plain_notification_reads_as_before(self, published: tuple[Any, list]) -> None:
+    async def test_a_plain_notification_reads_as_before(
+        self, published: tuple[Any, list[Any]]
+    ) -> None:
         actor, frames = published
         await actor.notify_user("done", extra_field=1)
         ((_topic, payload, _qos),) = frames
@@ -463,7 +468,7 @@ class TestNotifyUser:
         assert payload["id"]
 
     async def test_a_bad_choice_is_refused_before_anything_goes_out(
-        self, published: tuple[Any, list]
+        self, published: tuple[Any, list[Any]]
     ) -> None:
         actor, frames = published
         with pytest.raises(ValueError):
@@ -504,7 +509,9 @@ def quiet_monitor_fixture(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any
 
 
 class TestTheDashboardShowsTheQuestion:
-    def test_the_options_and_the_other_channel_reach_the_browser(self, quiet_monitor: list) -> None:
+    def test_the_options_and_the_other_channel_reach_the_browser(
+        self, quiet_monitor: list[Any]
+    ) -> None:
         event = events.parse_topic("agents/agent-1/chat", _telegram_frame())
         assert event is not None
         push = event["_push_chat"]
@@ -514,7 +521,7 @@ class TestTheDashboardShowsTheQuestion:
         entry = runtime.state["log_feed"][-1]
         assert entry["options"] == ["yes", "no"]
 
-    def test_a_plain_frame_carries_none_of_it(self, quiet_monitor: list) -> None:
+    def test_a_plain_frame_carries_none_of_it(self, quiet_monitor: list[Any]) -> None:
         event = events.parse_topic(
             "agents/agent-1/chat", json.dumps({"from": "hvac", "content": "hi"})
         )
@@ -526,7 +533,7 @@ class TestTheDashboardShowsTheQuestion:
         assert event is not None
         assert "channel" not in event["_push_chat"]
 
-    def test_an_answer_goes_on_the_feed_and_to_the_browsers(self, quiet_monitor: list) -> None:
+    def test_an_answer_goes_on_the_feed_and_to_the_browsers(self, quiet_monitor: list[Any]) -> None:
         answer = Answer(
             id="m1", agent_id="agent-1", option="no", index=1, channel="telegram", user="42"
         )
@@ -541,25 +548,29 @@ class TestTheDashboardShowsTheQuestion:
         )
         assert relay.is_relayed(answer.topic)
 
-    def test_a_frame_that_is_no_answer_leaves_the_feed_alone(self, quiet_monitor: list) -> None:
+    def test_a_frame_that_is_no_answer_leaves_the_feed_alone(
+        self, quiet_monitor: list[Any]
+    ) -> None:
         events.parse_topic("agents/agent-1/answer", json.dumps({"index": 0}))
         assert runtime.state["log_feed"] == []
 
-    async def test_a_question_is_stored_with_its_options(
-        self, quiet_monitor: list, monkeypatch: pytest.MonkeyPatch
+    async def test_a_question_is_stored_with_its_options_and_no_reply_hint(
+        self, quiet_monitor: list[Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         rows: list[dict[str, Any]] = []
 
         class _DB:
-            def write_chat_log(self, **row: Any) -> None:
-                rows.append(row)
+            def write_chat_logs(self, batch: "list[ChatRow]") -> None:
+                rows.extend(row._asdict() for row in batch)
 
         monkeypatch.setattr(runtime, "db", _DB())
         await mqtt.handle_message("agents/agent-1/chat", _telegram_frame())
+        await db_writer.writer.settled()
         (row,) = rows
         assert row["agent_name"] == "hvac"
         assert row["role"] == "assistant"
-        assert row["content"] == "Changed?\n\n1. yes\n2. no\n\nReply with the number."
+        # The dashboard answers with a button: "reply with the number" would be wrong there.
+        assert row["content"] == "Changed?\n\n1. yes\n2. no"
 
 
 class TestTheDashboardAnswers:
@@ -658,7 +669,9 @@ def test_the_companions_are_given_the_outbox(monkeypatch: pytest.MonkeyPatch) ->
         async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
             return ""
 
-        def handle_turn_stream(self, text: str, *, channel: str, user=None, attachments=None):
+        def handle_turn_stream(
+            self, text: str, *, channel: str, user=None, attachments=None
+        ) -> Any:
             raise NotImplementedError
 
         def commands(self) -> frozenset[str]:

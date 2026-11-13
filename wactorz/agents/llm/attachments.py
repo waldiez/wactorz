@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Turning stored attachments into something a model can read.
 
 A chat turn carries attachment ids; a model request carries content blocks. This
@@ -18,7 +19,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Largest request a model will accept. Everything in the turn shares it.
 _REQUEST_LIMIT_BYTES = 32 * 1024 * 1024

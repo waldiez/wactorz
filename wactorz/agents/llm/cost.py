@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Global LLM spend accounting and the configured cap.
 
 One counter per period plus an all-time total, both in the key-value store, so
@@ -8,14 +9,16 @@ that stub either must patch them here — the re-export in ``llm_agent`` is a
 separate binding and patching it does not reach this code.
 """
 
-import json
 import logging
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ...core.persistence import get_db
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from ...core.persistence import WactorzDB
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 # ── Global cost limit ────────────────────────────────────────────────────────
@@ -51,16 +54,12 @@ _GLOBAL_COST_ALLTIME_KEY = "_global_cost_alltime"
 _ALLTIME_SEED_KEY = "_global_cost_alltime_seeded"
 
 
-def _known_persisted_cost_total(db) -> float:
+def _known_persisted_cost_total(db: "WactorzDB") -> float:
     """Best available durable lifetime cost, used only for one-time migration."""
     total = 0.0
     try:
-        rows = db.conn.execute("SELECT value FROM kv_store WHERE key = '_final_cost'").fetchall()
-        for row in rows:
+        for _agent, value in db.kv_values("_final_cost"):
             try:
-                value = row[0]
-                if isinstance(value, str):
-                    value = json.loads(value)
                 if isinstance(value, dict):
                     total += float(value.get("cost_usd") or 0.0)
             except Exception as exc:
@@ -77,7 +76,7 @@ def _known_persisted_cost_total(db) -> float:
     return round(total, 6)
 
 
-def _bootstrap_active_global_cost(db, period: str) -> None:
+def _bootstrap_active_global_cost(db: "WactorzDB", period: str) -> None:
     """Top up the active period counter once when upgrading stored cost data.
 
     Older builds can have durable _final_cost / lifetime-ledger rows but no
@@ -104,7 +103,7 @@ def _bootstrap_active_global_cost(db, period: str) -> None:
         logger.debug("[cost-limit] bootstrap failed (%s): %s", period, exc)
 
 
-def _seed_alltime_cost(db) -> None:
+def _seed_alltime_cost(db: "WactorzDB") -> None:
     """Seed the all-time counter once from existing durable totals.
 
     Installs that predate this counter have _final_cost / lifetime-ledger data but
@@ -140,7 +139,7 @@ def get_global_alltime_cost() -> float:
         return 0.0
 
 
-def get_global_cost_info() -> dict:
+def get_global_cost_info() -> dict[str, Any]:
     """Return current period spend and limit. Used by GET /api/cost."""
     from ...config import CONFIG
 
@@ -189,10 +188,14 @@ class CostLimitError(RuntimeError):
 
     @classmethod
     def no_database(cls) -> "CostLimitError":
+        """The error for a spend check with no database to read the spend from."""
         return cls("Database not available")
 
     @classmethod
     def reached(cls, info: dict[str, Any]) -> "CostLimitError":
+        """The error for the spend limit in ``info`` being reached, which stops further model
+        calls.
+        """
         return cls(
             f"LLM cost limit of ${info['limit_usd']:.2f} reached "
             f"for {info['period_key']}. Blocking further LLM calls."
@@ -209,7 +212,7 @@ def set_cost_limit(limit_usd: float, period: str) -> None:
     db.kv_set("_system", "_cost_limit_override", {"limit_usd": limit_usd, "period": period})
 
 
-def reset_global_cost() -> dict:
+def reset_global_cost() -> dict[str, Any]:
     """Clear accumulated spend for all periods. Returns new spend info."""
     db = get_db()
     if db is None:
@@ -224,6 +227,12 @@ def reset_global_cost() -> dict:
 
 
 def accumulate_global_cost(delta: float) -> None:
+    """Add ``delta`` dollars to the spend of each period and to the all-time total; a delta not
+    above zero, or no database, changes nothing.
+
+    The spend is added whether or not a limit is set, so a limit set part-way through a period
+    starts from what was already spent.
+    """
     if delta <= 0:
         return
     db = get_db()
@@ -250,6 +259,9 @@ def accumulate_global_cost(delta: float) -> None:
 
 
 def check_cost_limit() -> None:
+    """Raise :class:`CostLimitError` when the period's spend limit is reached, and log a warning
+    as it nears; nothing without a limit.
+    """
     info = get_global_cost_info()
     if not info.get("limit_usd"):
         return

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A draft's `to` and `subject` may not smuggle extra headers.
 
 Both are joined with CRLF into a MIME message. A value carrying its own CRLF

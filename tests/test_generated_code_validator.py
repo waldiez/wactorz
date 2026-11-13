@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The check applied to model-written code before it is executed.
 
 ⚠ This reads the source, it is not a sandbox. It catches the names it lists,
@@ -10,13 +11,16 @@ The validator is exercised through the real class so the pattern lists under
 test are the ones production uses.
 """
 
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 
 from wactorz.agents.dynamic.agent import DynamicAgent
 
 
 @pytest.fixture(name="validate")
-def validate_fixture():
+def validate_fixture() -> "Callable[..., Any]":
     """The real method, bound to an instance built without running __init__.
 
     Construction needs an actor system; the check needs only the class-level

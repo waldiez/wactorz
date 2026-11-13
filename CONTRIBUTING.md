@@ -43,8 +43,7 @@ Run the tests and linters:
 
 ```bash
 make test           # Python + frontend tests
-make lint-py        # Python format + lint gate
-make lint           # frontend lint gate
+make lint           # Python + frontend lint gates (lint-py, lint-frontend for one side)
 ```
 
 There is also an end-to-end suite that runs the real thing — a broker, the app
@@ -73,7 +72,7 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
 ## Code Style
 
 - **Python**: `make lint-py` — ruff format + lint gate, and basedpyright over the package, tests and scripts
-- **TypeScript**: `make lint` — Prettier, ESLint and `tsc` typecheck
+- **TypeScript**: `make lint-frontend` — Prettier, ESLint and `tsc` typecheck
 
 Install the commit hooks to run these on every commit: `make precommit-install`. They run
 through [prek](https://github.com/j178/prek), a faster drop-in for pre-commit that reads the

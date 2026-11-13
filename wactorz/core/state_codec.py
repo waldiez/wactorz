@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Values JSON cannot hold, written so that they come back as what they were.
 
 An agent's state is JSON wherever it leaves the process that wrote it: in a
@@ -33,7 +34,7 @@ import logging
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The key of the object that stands for a value JSON cannot hold, naming its kind.
 VALUE_MARK = "__wactorz_value__"
@@ -102,10 +103,12 @@ class NoJsonFormError(TypeError):
 
     @classmethod
     def of(cls, value: Any) -> "NoJsonFormError":
+        """The error for ``value``, whose type has no JSON form."""
         return cls(f"a {type(value).__name__} has no JSON form")
 
     @classmethod
     def items_not_a_list(cls, mark: Any) -> "NoJsonFormError":
+        """The error for an encoded container marked ``mark`` whose items are not a list."""
         return cls(f"the items of a {mark} are not a list")
 
 

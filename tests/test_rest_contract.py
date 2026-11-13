@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import types
 import unittest
 from typing import Any, cast
@@ -27,23 +28,23 @@ class _FakeActor:
     total_output_tokens: int
     total_cost_usd: float
 
-    def get_status(self):
+    def get_status(self) -> dict[str, str]:
         return {"state": "idle"}
 
 
 class _FakeMapActor:
-    def __init__(self, payload):
+    def __init__(self, payload) -> None:
         self._payload = payload
 
-    def get_latest_map_payload(self):
+    def get_latest_map_payload(self) -> Any:
         return self._payload
 
 
 class _FakeRegistry:
-    def __init__(self, map_actor=None):
+    def __init__(self, map_actor=None) -> None:
         self._map_actor = map_actor
 
-    def find_by_name(self, name):
+    def find_by_name(self, name) -> Any | None:
         if name == "home-assistant-map-agent":
             return self._map_actor
         return None
@@ -60,7 +61,7 @@ def _iface(**main_actor: Any) -> RESTInterface:
 
 
 class RestContractTest(unittest.TestCase):
-    def test_actor_payload_matches_frontend_contract(self):
+    def test_actor_payload_matches_frontend_contract(self) -> None:
         iface = _iface()
         payload = iface._actor_payload(_FakeActor())  # pyright: ignore[reportArgumentType]
         self.assertEqual(
@@ -73,7 +74,7 @@ class RestContractTest(unittest.TestCase):
             },
         )
 
-    def test_metrics_payload_uses_rust_style_keys(self):
+    def test_metrics_payload_uses_rust_style_keys(self) -> None:
         iface = _iface()
         payload = iface._metrics_payload(_FakeActor())  # pyright: ignore[reportArgumentType]
         self.assertEqual(payload["messages_processed"], 7)
@@ -81,13 +82,13 @@ class RestContractTest(unittest.TestCase):
         self.assertEqual(payload["restart_count"], 1)
         self.assertIn("llm_cost_usd", payload)
 
-    def test_metrics_payload_reports_the_actors_counters(self):
+    def test_metrics_payload_reports_the_actors_counters(self) -> None:
         iface = _iface()
         payload = iface._metrics_payload(_FakeActor())  # pyright: ignore[reportArgumentType]
         self.assertEqual(payload["messages_received"], 9)
         self.assertEqual(payload["heartbeats"], 4)
 
-    def test_metrics_payload_reports_llm_spend_when_the_actor_tracks_it(self):
+    def test_metrics_payload_reports_llm_spend_when_the_actor_tracks_it(self) -> None:
         actor = _FakeActor()
         actor.total_input_tokens = 11
         actor.total_output_tokens = 22
@@ -97,18 +98,18 @@ class RestContractTest(unittest.TestCase):
         self.assertEqual(payload["llm_output_tokens"], 22)
         self.assertEqual(payload["llm_cost_usd"], 0.5)
 
-    def test_metrics_payload_reports_zero_spend_for_a_non_llm_actor(self):
+    def test_metrics_payload_reports_zero_spend_for_a_non_llm_actor(self) -> None:
         payload = _iface()._metrics_payload(_FakeActor())  # pyright: ignore[reportArgumentType]
         self.assertEqual(payload["llm_input_tokens"], 0)
         self.assertEqual(payload["llm_cost_usd"], 0.0)
 
-    def test_latest_ha_map_payload_reads_from_running_map_agent(self):
+    def test_latest_ha_map_payload_reads_from_running_map_agent(self) -> None:
         expected = {"type": "home_assistant_map_update", "devices": [{"device_id": "one"}]}
         registry = _FakeRegistry(map_actor=_FakeMapActor(expected))
         iface = _iface(_registry=registry)
         self.assertEqual(iface._latest_ha_map_payload(), expected)
 
-    def test_prometheus_monitor_returns_prometheus_content_type(self):
+    def test_prometheus_monitor_returns_prometheus_content_type(self) -> None:
         iface = _iface()
         response = iface._monitor.metrics_response()
         self.assertEqual(response.headers["Content-Type"], CONTENT_TYPE_LATEST)

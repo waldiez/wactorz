@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import argparse
 import asyncio
 import json
@@ -5,6 +6,7 @@ import pathlib
 import tempfile
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from wactorz.core.actor import Actor, ActorState, Message, SupervisorStrategy
 from wactorz.core.registry import ActorSystem, Supervisor
@@ -28,17 +30,17 @@ STATE_DIR = _STATE.name
 
 
 class ProbeActor(Actor):
-    def __init__(self, tracker: ActorTracker, **kwargs):
+    def __init__(self, tracker: ActorTracker, **kwargs) -> None:
         super().__init__(name=tracker.name, persistence_dir=STATE_DIR, **kwargs)
         self._tracker = tracker
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         self._tracker.starts += 1
         if self._tracker.crash_remaining > 0:
             self._tracker.crash_remaining -= 1
             self.state = ActorState.FAILED
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         return None
 
 
@@ -52,10 +54,10 @@ def _make_system() -> ActorSystem:
     system = ActorSystem()
 
     class _NoOpMQTT:
-        async def publish(self, topic, payload):
+        async def publish(self, topic, payload) -> None:
             return None
 
-        async def disconnect(self):
+        async def disconnect(self) -> None:
             return None
 
     system._mqtt_client = _NoOpMQTT()  # pyright: ignore[reportAttributeAccessIssue]
@@ -112,7 +114,7 @@ async def _wait_until_settled(
     """
     expected = set(trackers)
     deadline = time.monotonic() + timeout
-    previous: tuple | None = None
+    previous: tuple[Any, ...] | None = None
     unchanged_since = time.monotonic()
 
     while time.monotonic() < deadline:
@@ -126,7 +128,7 @@ async def _wait_until_settled(
         await asyncio.sleep(0.02)
 
 
-async def _run_scenario(scenario: dict) -> dict:
+async def _run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     system = _make_system()
     strategy = SupervisorStrategy(scenario["strategy"])
     trackers: dict[str, ActorTracker] = {}
@@ -138,7 +140,7 @@ async def _run_scenario(scenario: dict) -> dict:
         )
         trackers[tracker.name] = tracker
 
-        def factory(tracker=tracker):
+        def factory(tracker=tracker) -> "ProbeActor":
             return ProbeActor(tracker=tracker)
 
         system.supervisor.supervise(
@@ -171,7 +173,7 @@ async def _run_scenario(scenario: dict) -> dict:
     return result
 
 
-async def run_fixtures(path: pathlib.Path = FIXTURE_PATH) -> dict:
+async def run_fixtures(path: pathlib.Path = FIXTURE_PATH) -> dict[str, Any]:
     payload = json.loads(path.read_text())
     results = []
     for scenario in payload["scenarios"]:
@@ -179,7 +181,7 @@ async def run_fixtures(path: pathlib.Path = FIXTURE_PATH) -> dict:
     return {"contract": payload["contract"], "results": results}
 
 
-def _expected_payload(path: pathlib.Path = FIXTURE_PATH) -> dict:
+def _expected_payload(path: pathlib.Path = FIXTURE_PATH) -> dict[str, Any]:
     payload = json.loads(path.read_text())
     results = []
     for scenario in payload["scenarios"]:

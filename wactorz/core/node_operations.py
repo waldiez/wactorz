@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the model may ask a node for: named operations that only read.
 
 A node's shell is reachable over SSH from main's installer, and main's model
@@ -35,14 +36,19 @@ class OperationRefused(ValueError):
 
     @classmethod
     def unknown(cls, name: str) -> "OperationRefused":
+        """The error for ``name`` being none of the operations."""
         return cls(f"{name!r} is not an operation; the operations are {', '.join(OPERATIONS)}")
 
     @classmethod
     def takes_no(cls, name: str, key: str) -> "OperationRefused":
+        """The error for the operation ``name`` given ``key``, which it does not take."""
         return cls(f"{name} takes no {key!r}")
 
     @classmethod
     def out_of_bounds(cls, name: str, key: str, low: int, high: int) -> "OperationRefused":
+        """The error for the operation ``name``'s ``key`` outside the whole numbers ``low`` to
+        ``high``.
+        """
         return cls(f"{name}: {key} must be a whole number from {low} to {high}")
 
 

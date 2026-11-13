@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Secret redaction for the logging path.
 
 Redaction happens at the **sink**, not the call site: a filter here cannot be
@@ -175,6 +176,7 @@ class SecretRedactingFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """Redact the record's message and traceback in place; never drops the record."""
         cleaned = redacted_message(record)
         if cleaned is not None and (cleaned != record.msg or record.args):
             record.msg = cleaned

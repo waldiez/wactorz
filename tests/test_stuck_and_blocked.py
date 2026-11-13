@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What stops running is seen, and said, by something that is still running.
 
 Three ways a process looks alive while doing nothing, each invisible to what
@@ -24,6 +25,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -126,6 +128,14 @@ def _reported(caplog: pytest.LogCaptureFixture) -> bool:
     return "The event loop has not run for" in caplog.text
 
 
+def _each_report_had_a_block(
+    caplog: pytest.LogCaptureFixture, monitors: list[LoopLagMonitor], report_after: float
+) -> bool:
+    """Whether every block reported was one a monitor measured: answered no sooner than reported."""
+    reports = caplog.text.count("The event loop has not run for")
+    return reports <= sum(monitor.longest >= report_after for monitor in monitors)
+
+
 class TestTheEventLoop:
     async def test_a_loop_that_is_running_has_its_lag_recorded(self) -> None:
         before = _observed()
@@ -212,22 +222,38 @@ class TestTheEventLoop:
         await until(lambda: not thread.is_alive(), "the watching thread ending")
         assert caplog.text.count("The event loop has not run for") == 1
 
+    @pytest.mark.parametrize("blocked", [False, True], ids=["running freely", "held once"])
     async def test_stopping_again_and_again_never_reports_a_block(
-        self, caplog: pytest.LogCaptureFixture
+        self, caplog: pytest.LogCaptureFixture, blocked: bool
     ) -> None:
         # Whatever the thread is in the middle of when the stop arrives. The
         # window that mattered was a narrow one, between two of its steps, so
         # it is looked for by stopping many monitors rather than by timing one.
         caplog.set_level(logging.WARNING, logger="wactorz.monitoring.loop_lag")
+        report_after = 0.05
+        monitors: list[LoopLagMonitor] = []
 
-        for _ in range(500):
-            monitor = LoopLagMonitor(interval=0.0005, report_after=0.05)
+        for i in range(500):
+            monitor = LoopLagMonitor(interval=0.0005, report_after=report_after)
+            monitors.append(monitor)
             monitor.start()
             await asyncio.sleep(0.002)
+            if blocked and i == 250:
+                # The loop's thread kept off the CPU, as a loaded runner can,
+                # for as long as it takes the monitor to see it.
+                _holds_the_loop(lambda: _reported(caplog))
             monitor.stop()
+        # Time for a report a stop wrongly made to be logged.
         await asyncio.sleep(0.2)
 
-        assert not _reported(caplog)
+        # A loaded runner can keep the loop's thread off the CPU for longer than
+        # a report waits, and that block is real: the loop then answers late,
+        # and the monitor records it. What a stop must never do is report one
+        # that did not happen, so every report has a monitor that waited.
+        await until(
+            lambda: _each_report_had_a_block(caplog, monitors, report_after),
+            "every report matched by a block a monitor measured",
+        )
 
     async def test_a_monitor_started_again_watches_with_one_thread(self) -> None:
         monitor = LoopLagMonitor(interval=0.05)
@@ -272,7 +298,7 @@ def no_systemd_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(name="systemd")
-def systemd_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def systemd_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     """A socket standing in for systemd's, which the process is told about.
 
     Named by a path relative to the test's own directory. A socket's path has a

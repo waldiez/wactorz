@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A value the JSON-backed stores cannot hold is refused at the write.
 
 Stored as its ``str()``, a datetime or a numpy float came back as a string after
@@ -6,6 +7,7 @@ wrote it. Refused at the write, the error names the key and what to do instead.
 """
 
 import datetime
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -19,7 +21,7 @@ WHEN = datetime.datetime(2026, 10, 6, 12, 0, tzinfo=datetime.timezone.utc)
 
 
 @pytest.fixture(name="db")
-def db_fixture(tmp_path: Path):
+def db_fixture(tmp_path: Path) -> "Iterator[WactorzDB]":
     with WactorzDB(str(tmp_path / "wactorz.db")) as db:
         yield db
 

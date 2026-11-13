@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """WeatherAgent - natural-language weather via Open-Meteo (no API key).
 
 Built for the way ordinary people actually ask:
@@ -36,7 +37,7 @@ from ..agents.llm.base import LLMProvider
 from ..config import CONFIG
 from ..core.actor import Actor, Message, MessageType
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 _GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 _FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -641,7 +642,7 @@ def parse_query(raw: str, today: date | None = None) -> dict[str, Any]:
     when = _resolve_when(low, today)
     location = self_location or _extract_location(text)
 
-    payload: dict = {"action": when["action"]}
+    payload: dict[str, Any] = {"action": when["action"]}
     if location:
         payload["location"] = location
     if self_location:
@@ -676,6 +677,7 @@ class WeatherAgent(Actor):
         self._geo_cache: dict[str, tuple[float, float, str]] = {}
 
     async def on_start(self) -> None:
+        """Restore the default and last locations the agent remembers, and publish its manifest."""
         stored = self.recall("default_location") if hasattr(self, "recall") else None
         if stored:
             self._default_location = stored
@@ -710,11 +712,18 @@ class WeatherAgent(Actor):
     # ── Entry points ──────────────────────────────────────────────────────
 
     async def chat(self, message: str) -> str:
+        """Answer a message in plain words: read what is asked, fetch it, and say it."""
         payload = await self._parse_smart(message)
         result = await self._handle_cmd(payload)
         return self._format(result)
 
     async def handle_message(self, msg: Message) -> None:
+        """Answer a task with the weather it asks for, sent to its reply address.
+
+        A payload with an ``action`` is taken as it is; otherwise its text, query or place is
+        read as a question. The reply carries the data and the answer in words. Other kinds of
+        message are ignored.
+        """
         if msg.type != MessageType.TASK:
             return
         raw = msg.payload
@@ -1164,7 +1173,7 @@ class WeatherAgent(Actor):
     # ── Verdict helpers (answer "will it rain?" style questions) ────────────
 
     @staticmethod
-    def _precip_str(r: dict) -> str:
+    def _precip_str(r: dict[str, Any]) -> str:
         prob = r.get("precip_prob")
         mm = r.get("precip_mm")
         bits = []
@@ -1175,7 +1184,7 @@ class WeatherAgent(Actor):
         return f", precip {' / '.join(bits)}" if bits else ""
 
     @staticmethod
-    def _verdict_now(result: dict, concern: str | None) -> str:
+    def _verdict_now(result: dict[str, Any], concern: str | None) -> str:
         if concern == "rain":
             if result.get("code") in _RAINY or (result.get("precip") or 0) > 0:
                 return "Yes — it's raining."

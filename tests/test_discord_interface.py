@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The Discord bot: who it answers, and how.
 
 It fails closed: without an allow-list it does not log in at all, because a bot

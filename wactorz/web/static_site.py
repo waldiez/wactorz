@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Static asset + docs serving for the monitor.
 
 Serves the built SPA (``static/app``), its public assets, and the rendered docs
@@ -15,7 +16,7 @@ from aiohttp import web
 from .. import config
 from . import runtime
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 Response = web.Response | web.FileResponse | web.StreamResponse
 

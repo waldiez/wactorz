@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Application assembly and run loop.
 
 Builds the actor system (LLM provider, MQTT, persistence, supervision tree) and
@@ -6,32 +7,61 @@ runs the selected interface. Parsed arguments are supplied by :mod:`wactorz.cli`
 
 import argparse
 import asyncio
+import functools
 import logging
 import os
 import signal
 import sys
 import threading
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
 from wactorz import config, pipelines, plugins, retention
+from wactorz.agents.catalog_agent import CatalogAgent
+from wactorz.agents.home_assistant_agent import HomeAssistantAgent
+from wactorz.agents.home_assistant_map_agent import HomeAssistantMapAgent
+from wactorz.agents.home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
+from wactorz.agents.installer_agent import InstallerAgent
 from wactorz.agents.lookup import find_main_actor
-from wactorz.agents.main.spawns import SPAWN_REGISTRY_KEY
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.spawn_registry import (
+    NAME_KEYED_REGISTRY_KEY,
+    SPAWN_REGISTRY_KEY,
+    SpawnRegistry,
+    placed_on,
+)
+from wactorz.agents.monitor_agent import MonitorActor
 from wactorz.agents.prompts.assemble import PromptFragment
 from wactorz.agents.prompts.fragments import DEFAULT_FRAGMENTS
 from wactorz.agents.prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
+from wactorz.agents.rule_agent import RuleAgent, RuleConfig
+from wactorz.agents.scheduled_agent import ScheduledAgent
 from wactorz.broker_certificates import prepare_broker_files
 from wactorz.cli import get_args
 from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS, AppConfig
 from wactorz.core import cancellation, own_tasks
+from wactorz.core.actor import Actor, SupervisorStrategy
 from wactorz.core.cancellation import cancel_all_until_done, cancel_until_done
+from wactorz.core.mqtt import broker_exposure_warning
 from wactorz.core.mqtt_publisher import MQTTPublisher
 from wactorz.core.paths import ensure_state_dir, resolve_state_dir, set_state_dir
+from wactorz.core.persistence import (
+    PersistenceAPI,
+    PickleStore,
+    WactorzDB,
+    init_persistence,
+    maintenance,
+)
+from wactorz.core.registry import ActorRegistry, ActorSystem
 from wactorz.core.state_lock import StateInUseError, StateLock
+from wactorz.core.topic_bus import init_topic_bus
+from wactorz.core.topics import NAMESPACE_REFUSAL
 from wactorz.dev_reload import start_reloader
 from wactorz.errors import StartupError
+from wactorz.llm_factory import provider_for
 from wactorz.monitoring.log_buffer import install as install_log_buffer
 from wactorz.monitoring.log_buffer import uninstall as uninstall_log_buffer
 from wactorz.monitoring.log_setup import install_fallback, setup_logging, uninstall_fallback
@@ -42,15 +72,15 @@ from wactorz.orchestration import (
     as_orchestrator,
     resolve_orchestrator,
 )
-from wactorz.web import runtime
+from wactorz.web import auth, runtime
+from wactorz.web import mqtt as web_mqtt
 from wactorz.web.auth import exposure_refusal
 
 if TYPE_CHECKING:
     from wactorz.agents.llm_agent import LLMProvider
-    from wactorz.core.registry import ActorSystem
     from wactorz.orchestration import Orchestrator
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Set as the shutdown sequence begins, so the signal handler stops asking the app
 #: task to stop once it is stopping. A threading.Event rather than an asyncio one:
@@ -93,8 +123,8 @@ BUILT_IN_AGENT_NAMES = frozenset(
 )
 
 
-def placed_on_nodes(registry: Any) -> dict[str, str]:
-    """Agent name to node, for every spawn-registry entry that places its agent on a node.
+def placed_on_nodes(registry: SpawnRegistry) -> dict[str, str]:
+    """Agent name to node, for every name the spawn registry keeps only on nodes.
 
     A library agent moved to a node is recorded there like any other. Started
     here as well, it would run twice, answering beside the copy the node
@@ -103,8 +133,8 @@ def placed_on_nodes(registry: Any) -> dict[str, str]:
     return {name: node for name, node in placed_by(registry).items() if node}
 
 
-def placed_by(registry: Any) -> dict[str, str]:
-    """Agent name to where the spawn registry places it: a node's name, or "" for main.
+def placed_by(registry: SpawnRegistry) -> dict[str, str]:
+    """Agent name to where the spawn registry places it: "" when one of the name is on main, else a node.
 
     Every entry is main's to restore when it starts, wherever it places the
     agent: one that came back from a node is restored here, from its record.
@@ -112,13 +142,18 @@ def placed_by(registry: Any) -> dict[str, str]:
     as well, which would start it twice, the first copy only to be stopped by
     the restore a moment later.
     """
-    if not isinstance(registry, dict):
-        return {}
     placed: dict[str, str] = {}
-    for name, entry in registry.items():
-        if isinstance(entry, dict):
-            placed[str(name)] = str(entry.get("node") or "").strip()
+    for entry in sorted(registry, key=placed_on):
+        placed.setdefault(entry["name"], placed_on(entry))
     return placed
+
+
+def stored_spawn_registry(db: Any) -> SpawnRegistry:
+    """Main's spawn registry as ``db`` holds it, read before main is running."""
+    return SpawnRegistry.stored(
+        db.kv_get("main", SPAWN_REGISTRY_KEY, None),
+        db.kv_get("main", NAME_KEYED_REGISTRY_KEY, None),
+    )
 
 
 def startable_plugins(found: Iterable[plugins.AgentPlugin]) -> list[plugins.AgentPlugin]:
@@ -177,8 +212,8 @@ async def _start_web_ui(
     port: int,
     mqtt_broker: str,
     mqtt_port: int,
-    actor_registry=None,
-    persistence_db=None,
+    actor_registry: ActorRegistry | None = None,
+    persistence_db: WactorzDB | None = None,
     system: "ActorSystem | None" = None,
 ) -> None:
     """Start the monitor web server as a quiet background asyncio task."""
@@ -410,58 +445,167 @@ class InterfaceError(StartupError):
 
     @classmethod
     def no_token(cls, variable: str) -> "InterfaceError":
+        """The error for an interface whose token, in the environment variable ``variable``, is not
+        set.
+        """
         return cls(f"{variable} not set.")
 
     @classmethod
     def unknown(cls, interface: str) -> "InterfaceError":
+        """The error for an ``interface`` name that is none of the interfaces this can run."""
         return cls(
             f"unknown interface {interface!r}: use cli, rest, discord, whatsapp, "
             f"telegram or {HEADLESS}"
         )
 
 
-async def build_system(
-    args: argparse.Namespace, on_system: "Callable[[ActorSystem], object] | None" = None
-):
-    from wactorz.agents.catalog_agent import CatalogAgent
-    from wactorz.agents.home_assistant_agent import HomeAssistantAgent
-    from wactorz.agents.home_assistant_map_agent import HomeAssistantMapAgent
-    from wactorz.agents.home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
-    from wactorz.agents.installer_agent import InstallerAgent
-    from wactorz.agents.llm_agent import LLMProvider
-    from wactorz.agents.main.actor import MainActor
-    from wactorz.agents.monitor_agent import MonitorActor
-    from wactorz.core.actor import Actor, SupervisorStrategy
-    from wactorz.core.mqtt import broker_exposure_warning
-    from wactorz.core.registry import ActorSystem
-    from wactorz.llm_factory import provider_for
-    from wactorz.web import auth
+@dataclass(frozen=True)
+class _Factories:
+    """What builds each supervised agent: called fresh on every (re)start by the Supervisor.
 
-    minimal = bool(getattr(args, "minimal", False) or CONFIG.minimal)
-    provider = await _build_provider(args, minimal)
+    Every agent it builds is given the unified persistence API, and the LLM
+    provider for its role; the provider is stateless, so one instance serves
+    them all.
+    """
 
-    # ── Resolve the durable state directory (honours WACTORZ_STATE_DIR) ───────
-    _sd = ensure_state_dir()
+    state_dir: str
+    provider: "LLMProvider | None"
+    db: WactorzDB
+    pickle_store: PickleStore
+    prompt_fragments: tuple[PromptFragment, ...]
 
-    # Said once, before the first connection: the broker is where spawn code
-    # travels, so an exposed one is a bigger surface than it looks.
-    _broker_host = args.mqtt_broker or CONFIG.mqtt_host
-    _exposure = broker_exposure_warning(_broker_host, CONFIG.mqtt_username)
-    if _exposure:
-        logger.warning("[startup] %s", _exposure)
+    def _wired(self, actor: Actor) -> Actor:
+        """``actor``, given the unified persistence API under its own name."""
+        actor._persistence_api = PersistenceAPI(self.db, self.pickle_store, actor.name)
+        return actor
 
-    # Said once too: a key short enough to guess is worth hearing about while
-    # there is still a terminal open to read it.
-    _weak_key = auth.weak_key_warning(CONFIG.api_key)
-    if _weak_key:
-        logger.warning("[startup] %s", _weak_key)
+    def main(self) -> MainActor:
+        main_actor = self._wired(
+            MainActor(
+                llm_provider=provider_for("main", self.provider),
+                name="main",
+                persistence_dir=self.state_dir,
+                prompt_fragments=self.prompt_fragments,
+            )
+        )
+        return cast(MainActor, main_actor)
 
-    # ── Build the ActorSystem first (MQTT starts here) ────────────────────────
-    system = ActorSystem(
-        mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
-        mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
-        state_dir=_sd,
+    def monitor(self) -> Actor:
+        return self._wired(
+            MonitorActor(
+                check_interval=15.0,
+                heartbeat_timeout=60.0,
+                auto_restart=False,
+                persistence_dir=self.state_dir,
+            )
+        )
+
+    def installer(self) -> Actor:
+        return self._wired(InstallerAgent(name="installer", persistence_dir=self.state_dir))
+
+    def home_assistant(self) -> Actor:
+        return self._wired(
+            HomeAssistantAgent(
+                llm_provider=provider_for("ha", self.provider),
+                name="home-assistant-agent",
+                persistence_dir=self.state_dir,
+            )
+        )
+
+    def home_assistant_map(self) -> Actor:
+        return self._wired(
+            HomeAssistantMapAgent(name="home-assistant-map-agent", persistence_dir=self.state_dir)
+        )
+
+    def home_assistant_state_bridge(self) -> Actor:
+        return self._wired(
+            HomeAssistantStateBridgeAgent(
+                name="home-assistant-state-bridge", persistence_dir=self.state_dir
+            )
+        )
+
+    def catalog(self) -> Actor:
+        return self._wired(CatalogAgent(name="catalog", persistence_dir=self.state_dir))
+
+    def plugin(self, plugin: plugins.AgentPlugin) -> Callable[[], Actor]:
+        """The factory of the agent ``plugin`` declares."""
+        return functools.partial(self._build_plugin, plugin)
+
+    def _build_plugin(self, plugin: plugins.AgentPlugin) -> Actor:
+        return self._wired(
+            plugin.build(
+                persistence_dir=self.state_dir,
+                llm_provider=provider_for("dynamic", self.provider),
+            )
+        )
+
+    def pipeline(self, pipe: pipelines.Pipeline) -> list[tuple[str, Callable[[], Actor]]]:
+        """One supervised factory per agent of ``pipe``: its steps, schedule and rules."""
+        factories: list[tuple[str, Callable[[], Actor]]] = [
+            (step.name, self.plugin(step)) for step in pipe.steps
+        ]
+        if pipe.schedule is not None:
+            factories.append((pipe.schedule_name, functools.partial(self._schedule, pipe)))
+        for rule_name, rule in zip(pipe.rule_names, pipe.rules, strict=True):
+            factories.append((rule_name, functools.partial(self._rule, rule_name, rule)))
+        return factories
+
+    def _schedule(self, pipe: pipelines.Pipeline) -> Actor:
+        return self._wired(
+            ScheduledAgent(
+                name=pipe.schedule_name,
+                schedule=pipe.schedule,
+                publish_topic=pipe.tick_topic,
+                description=f"ticks pipeline {pipe.name}",
+                persistence_dir=self.state_dir,
+            )
+        )
+
+    def _rule(self, name: str, rule: RuleConfig) -> Actor:
+        return self._wired(RuleAgent(rule, name=name, persistence_dir=self.state_dir))
+
+
+def _supervise(
+    system: ActorSystem,
+    name: str,
+    factory: Callable[[], Actor],
+    max_restarts: int = 5,
+    restart_delay: float = 1.0,
+) -> None:
+    """Supervise ``name``, restarted on its own when it fails."""
+    system.supervisor.supervise(
+        name,
+        factory,
+        strategy=SupervisorStrategy.ONE_FOR_ONE,
+        max_restarts=max_restarts,
+        restart_delay=restart_delay,
     )
+
+
+def _say_startup_warnings(broker_host: str) -> None:
+    """Warn about an exposed broker and a weak API key, once, before the first connection.
+
+    The broker is where spawn code travels, so an exposed one is a bigger
+    surface than it looks; and a key short enough to guess is worth hearing
+    about while there is still a terminal open to read it.
+    """
+    exposure = broker_exposure_warning(broker_host, CONFIG.mqtt_username)
+    if exposure:
+        logger.warning("[startup] %s", exposure)
+    weak_key = auth.weak_key_warning(CONFIG.api_key)
+    if weak_key:
+        logger.warning("[startup] %s", weak_key)
+
+
+async def _connect(
+    args: argparse.Namespace,
+    state_dir: str,
+    on_system: "Callable[[ActorSystem], object] | None",
+) -> ActorSystem:
+    """The actor system, with its MQTT publisher and its TopicBus, handed to ``on_system`` first."""
+    broker = args.mqtt_broker or CONFIG.mqtt_host
+    port = args.mqtt_port or CONFIG.mqtt_port
+    system = ActorSystem(mqtt_broker=broker, mqtt_port=port, state_dir=state_dir)
     global _current_system
     _current_system = system
     if on_system is not None:
@@ -470,275 +614,151 @@ async def build_system(
         on_system(system)
     # MQTT client must exist before factories run so injected actors can publish
     system._mqtt_client = await MQTTPublisher.create(
-        args.mqtt_broker or CONFIG.mqtt_host,
-        args.mqtt_port or CONFIG.mqtt_port,
-        db_path=Path(_sd) / "mqtt_outbox.db",
+        broker,
+        port,
+        db_path=Path(state_dir) / "mqtt_outbox.db",
         dead_letter_days=RETENTION_OUTBOX_DAYS,
     )
-
-    # ── Initialise TopicBus (reactive pub/sub coordination layer) ─────────────
-    # Must be done here because cli bypasses system.start() and goes directly
-    # to system.supervisor.start() — so we initialise the bus manually.
-    from wactorz.core.topic_bus import init_topic_bus
-
+    # The reactive pub/sub coordination layer. Set up here rather than by
+    # system.start(): the CLI goes straight to system.supervisor.start().
     system.topic_bus = init_topic_bus(
-        mqtt_client=system._mqtt_client,
-        mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
-        mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
+        mqtt_client=system._mqtt_client, mqtt_broker=broker, mqtt_port=port
     )
     logger.info("TopicBus initialised")
+    return system
 
-    # ── Initialise persistence layer (SQLite + Pickle) ──────────────────────
-    from wactorz.core.persistence import PersistenceAPI, init_persistence
 
-    _db, _pickle_store = init_persistence(
-        db_path=Path(_sd) / "wactorz.db",
-        state_dir=_sd,
-        run_migration=True,
-    )
-    logger.info("Persistence layer initialised (SQLite + Pickle)")
-
-    # ── Factory helpers (called fresh on each (re)start by the Supervisor) ────
-    def _wire_persistence(actor: Actor) -> Actor:
-        """Attach the unified persistence API to an actor."""
-        actor._persistence_api = PersistenceAPI(_db, _pickle_store, actor.name)
-        return actor
-
-    def make_provider() -> LLMProvider | None:
-        return provider  # stateless — same instance is fine
-
-    prompt_fragments = prompt_fragments_for(CONFIG)
-
-    def make_main() -> MainActor:
-        main_actor = _wire_persistence(
-            MainActor(
-                llm_provider=provider_for("main", make_provider()),
-                name="main",
-                persistence_dir=_sd,
-                prompt_fragments=prompt_fragments,
-            )
-        )
-        return cast(MainActor, main_actor)
-
-    def make_monitor() -> Actor:
-        return _wire_persistence(
-            MonitorActor(
-                check_interval=15.0,
-                heartbeat_timeout=60.0,
-                auto_restart=False,
-                persistence_dir=_sd,
-            )
-        )
-
-    def make_installer() -> Actor:
-        return _wire_persistence(InstallerAgent(name="installer", persistence_dir=_sd))
-
-    def make_ha_agent() -> Actor:
-        return _wire_persistence(
-            HomeAssistantAgent(
-                llm_provider=provider_for("ha", make_provider()),
-                name="home-assistant-agent",
-                persistence_dir=_sd,
-            )
-        )
-
-    def make_ha_map_agent() -> Actor:
-        return _wire_persistence(
-            HomeAssistantMapAgent(
-                name="home-assistant-map-agent",
-                persistence_dir=_sd,
-            )
-        )
-
-    def make_ha_state_bridge() -> Actor:
-        return _wire_persistence(
-            HomeAssistantStateBridgeAgent(
-                name="home-assistant-state-bridge",
-                persistence_dir=_sd,
-            )
-        )
-
-    def make_catalog() -> Actor:
-        return _wire_persistence(CatalogAgent(name="catalog", persistence_dir=_sd))
-
-    def pipeline_factories(pipe: pipelines.Pipeline) -> list[tuple[str, Callable[[], Actor]]]:
-        """One supervised factory per agent of ``pipe``: its steps, schedule and rules."""
-        from wactorz.agents.rule_agent import RuleAgent
-        from wactorz.agents.scheduled_agent import ScheduledAgent
-
-        factories: list[tuple[str, Callable[[], Actor]]] = [
-            (step.name, make_plugin_factory(step)) for step in pipe.steps
-        ]
-        if pipe.schedule is not None:
-
-            def make_schedule(
-                spec: dict[str, Any] = pipe.schedule, topic: str = pipe.tick_topic
-            ) -> Actor:
-                return _wire_persistence(
-                    ScheduledAgent(
-                        name=pipe.schedule_name,
-                        schedule=spec,
-                        publish_topic=topic,
-                        description=f"ticks pipeline {pipe.name}",
-                        persistence_dir=_sd,
-                    )
-                )
-
-            factories.append((pipe.schedule_name, make_schedule))
-        for rule_name, rule in zip(pipe.rule_names, pipe.rules, strict=True):
-
-            def make_rule(name: str = rule_name, cfg: Any = rule) -> Actor:
-                return _wire_persistence(RuleAgent(cfg, name=name, persistence_dir=_sd))
-
-            factories.append((rule_name, make_rule))
-        return factories
-
-    def make_plugin_factory(plugin: plugins.AgentPlugin) -> Callable[[], Actor]:
-        def make() -> Actor:
-            return _wire_persistence(
-                plugin.build(
-                    persistence_dir=_sd, llm_provider=provider_for("dynamic", make_provider())
-                )
-            )
-
-        return make
-
+def _supervise_built_ins(system: ActorSystem, factories: _Factories, *, minimal: bool) -> None:
+    """Supervise the agents wactorz itself brings, in the order they start."""
     if minimal:
         logger.info("Minimal profile: starting the monitor and this deployment's agents only.")
     else:
-        system.supervisor.supervise(
-            "main",
-            make_main,
-            strategy=SupervisorStrategy.ONE_FOR_ONE,
-            max_restarts=10,
-            restart_delay=2.0,
-        )
-    system.supervisor.supervise(
-        "monitor",
-        make_monitor,
-        strategy=SupervisorStrategy.ONE_FOR_ONE,
-        max_restarts=10,
-        restart_delay=1.0,
-    )
+        _supervise(system, "main", factories.main, max_restarts=10, restart_delay=2.0)
+    _supervise(system, "monitor", factories.monitor, max_restarts=10, restart_delay=1.0)
     if not minimal:
-        system.supervisor.supervise(
-            "installer",
-            make_installer,
-            strategy=SupervisorStrategy.ONE_FOR_ONE,
-            max_restarts=3,
-            restart_delay=2.0,
-        )
+        _supervise(system, "installer", factories.installer, max_restarts=3, restart_delay=2.0)
     if home_assistant_agents_enabled(CONFIG):
-        (
-            system.supervisor.supervise(
-                "home-assistant-agent",
-                make_ha_agent,
-                strategy=SupervisorStrategy.ONE_FOR_ONE,
-                max_restarts=5,
-                restart_delay=1.0,
-            )
-            .supervise(
-                "home-assistant-map-agent",
-                make_ha_map_agent,
-                strategy=SupervisorStrategy.ONE_FOR_ONE,
-                max_restarts=5,
-                restart_delay=1.0,
-            )
-            .supervise(
-                "home-assistant-state-bridge",
-                make_ha_state_bridge,
-                strategy=SupervisorStrategy.ONE_FOR_ONE,
-                max_restarts=5,
-                restart_delay=1.0,
-            )
-        )
+        _supervise(system, "home-assistant-agent", factories.home_assistant)
+        _supervise(system, "home-assistant-map-agent", factories.home_assistant_map)
+        _supervise(system, "home-assistant-state-bridge", factories.home_assistant_state_bridge)
     else:
         logger.info("Home Assistant agents not started: HA_URL and HA_TOKEN are not set.")
     if not minimal:
-        system.supervisor.supervise(
-            "catalog",
-            make_catalog,
-            strategy=SupervisorStrategy.ONE_FOR_ONE,
-            max_restarts=10,
-            restart_delay=2.0,
-        )
+        _supervise(system, "catalog", factories.catalog, max_restarts=10, restart_delay=2.0)
 
-    # The agents this deployment brings -- WACTORZ_AGENTS, wactorz.agents entry
-    # points, wactorz.run(agents=...) -- supervised beside the built-ins, with
-    # the same persistence. One that is not for autostart waits in the
-    # catalogue to be asked for.
-    recorded = placed_by(_db.kv_get("main", SPAWN_REGISTRY_KEY, None))
-    elsewhere = {name: node for name, node in recorded.items() if node}
+
+def _supervise_plugins(
+    system: ActorSystem, factories: _Factories, recorded: dict[str, str]
+) -> None:
+    """Supervise the agents this deployment brings, beside the built-ins and with the same persistence.
+
+    WACTORZ_AGENTS, the wactorz.agents entry points of listed packages and
+    wactorz.run(agents=...). One that is not for autostart waits in the
+    catalogue to be asked for; one main has a record of is main's to restore,
+    here or on the node it was moved to.
+    """
     for plugin in startable_plugins(plugins.discover().values()):
-        if plugin.name in elsewhere:
+        node = recorded.get(plugin.name)
+        if node:
             logger.info(
-                "Not starting %r here: it was moved to node %r, which runs it.",
-                plugin.name,
-                elsewhere[plugin.name],
+                "Not starting %r here: it was moved to node %r, which runs it.", plugin.name, node
             )
-            continue
-        if plugin.name in recorded:
+        elif plugin.name in recorded:
             logger.info(
                 "Not supervising %r from its plugin: main restores it from its record.",
                 plugin.name,
             )
-            continue
-        system.supervisor.supervise(
-            plugin.name,
-            make_plugin_factory(plugin),
-            strategy=SupervisorStrategy.ONE_FOR_ONE,
-            max_restarts=5,
-            restart_delay=1.0,
-        )
+        else:
+            _supervise(system, plugin.name, factories.plugin(plugin))
 
-    # The pipelines this deployment declares: each step, schedule and rule is
-    # an agent of its own, supervised like the plugins above. The definition
-    # is the record; nothing of it goes through the spawn registry.
-    started_pipelines = startable_pipelines(pipelines.discover().values())
-    for pipe in started_pipelines:
-        for agent_name, factory in pipeline_factories(pipe):
+
+def _supervise_pipelines(
+    system: ActorSystem, factories: _Factories, elsewhere: dict[str, str]
+) -> list[pipelines.Pipeline]:
+    """Supervise every agent of the pipelines this deployment declares, and return the pipelines.
+
+    Each step, schedule and rule is an agent of its own, supervised like a
+    plugin. The definition is the record; nothing of it goes through the spawn
+    registry.
+    """
+    started = startable_pipelines(pipelines.discover().values())
+    for pipe in started:
+        for agent_name, factory in factories.pipeline(pipe):
             if agent_name in elsewhere:
                 logger.info(
                     "Not starting %r here: it was moved to node %r, which runs it.",
                     agent_name,
                     elsewhere[agent_name],
                 )
-                continue
-            system.supervisor.supervise(
-                agent_name,
-                factory,
-                strategy=SupervisorStrategy.ONE_FOR_ONE,
-                max_restarts=5,
-                restart_delay=1.0,
-            )
+            else:
+                _supervise(system, agent_name, factory)
+    return started
 
-    # Bind the monitor web UI BEFORE starting the supervisor. Agent startup
-    # touches the MQTT broker, and on a slow/unreachable/auth-rejected broker
-    # that can stall — previously the UI started *after* supervisor.start(), so a
-    # stalled broker left the addon serving a blank page on boot. Starting the UI
-    # first means it is always reachable (showing "connecting…" rather than
-    # nothing) regardless of broker state. The registry is populated live as
-    # agents register, so the overview fills in as they come up.
+
+def _start_maintenance() -> None:
+    """Start the background store maintenance, after the stores exist and before the agents that write to them.
+
+    The checkpoint it schedules is the one SQLite would otherwise take inline,
+    on whichever `persist()` crossed its threshold. Retention is registered
+    first, so it runs ahead of the checkpoint that folds its deletes back into
+    the database.
+    """
+    maintenance.register("retention", retention.prune)
+    maintenance.start()
+
+
+def _record_pipelines(main_actor: MainActor, started: list[pipelines.Pipeline]) -> None:
+    """Record each pipeline beside the planner's rules, so `/rules` lists it and `/rules delete` stops it."""
+    known = main_actor.get_pipeline_rules()
+    for pipe in started:
+        if pipe.name not in known:
+            main_actor.save_pipeline_rule(pipe.record())
+
+
+async def build_system(
+    args: argparse.Namespace, on_system: "Callable[[ActorSystem], object] | None" = None
+) -> tuple[ActorSystem, "MainActor | None", WactorzDB, "Orchestrator"]:
+    """Build and start the actor system: MQTT, persistence, the supervision tree and the web UI.
+
+    Returns the system, main (None in the minimal profile), the database and
+    the orchestrator that answers chat.
+    """
+    minimal = bool(getattr(args, "minimal", False) or CONFIG.minimal)
+    provider = await _build_provider(args, minimal)
+    # The durable state directory (honours WACTORZ_STATE_DIR).
+    state_dir = ensure_state_dir()
+    _say_startup_warnings(args.mqtt_broker or CONFIG.mqtt_host)
+    system = await _connect(args, state_dir, on_system)
+
+    db, pickle_store = init_persistence(
+        db_path=Path(state_dir) / "wactorz.db", state_dir=state_dir, run_migration=True
+    )
+    logger.info("Persistence layer initialised (SQLite + Pickle)")
+    factories = _Factories(state_dir, provider, db, pickle_store, prompt_fragments_for(CONFIG))
+
+    _supervise_built_ins(system, factories, minimal=minimal)
+    recorded = placed_by(stored_spawn_registry(db))
+    _supervise_plugins(system, factories, recorded)
+    started_pipelines = _supervise_pipelines(
+        system, factories, {name: node for name, node in recorded.items() if node}
+    )
+
+    # The web UI is bound BEFORE the supervisor starts. Agent startup touches
+    # the MQTT broker, and on a slow, unreachable or auth-rejected broker that
+    # can stall; bound first, the UI is always reachable (showing
+    # "connecting…" rather than a blank page) whatever the broker's state. The
+    # registry is populated live as agents register, so the overview fills in
+    # as they come up.
     if not getattr(args, "no_monitor", False):
         await _start_web_ui(
             port=args.monitor_port,
             mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
             mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
             actor_registry=system.registry,
-            persistence_db=_db,
+            persistence_db=db,
             system=system,
         )
-
-    # After the stores exist and before the agents that write to them: the
-    # checkpoint it schedules is the one SQLite would otherwise take inline, on
-    # whichever `persist()` crossed its threshold.
-    from wactorz.core.persistence import maintenance
-
-    # Before the rotation starts, so it runs ahead of the checkpoint that folds
-    # its deletes back into the database.
-    maintenance.register("retention", retention.prune)
-    maintenance.start()
-
+    _start_maintenance()
     await system.supervisor.start()
 
     main_actor = find_main_actor(system.registry)
@@ -747,16 +767,14 @@ async def build_system(
     orchestrator = install_orchestrator(
         system, main_actor, requested=getattr(args, "orchestrator", None)
     )
+    # The question books held while nothing could place their agents, admitted
+    # now; and the profile latched, so a main restarting later is waited for.
+    await web_mqtt.system_started(with_main=not minimal)
     if main_actor is not None:
-        # Recorded beside the planner's rules, so `/rules` lists a declared
-        # pipeline and `/rules delete` stops the whole of it.
-        known = main_actor.get_pipeline_rules()
-        for pipe in started_pipelines:
-            if pipe.name not in known:
-                main_actor.save_pipeline_rule(pipe.record())
+        _record_pipelines(main_actor, started_pipelines)
 
     logger.info("Wactorz system started. Supervision tree active.")
-    return system, main_actor, _db, orchestrator
+    return system, main_actor, db, orchestrator
 
 
 def install_orchestrator(
@@ -889,7 +907,7 @@ async def _shut_down(system: "ActorSystem | None") -> None:
 
 async def app(
     args: argparse.Namespace, *, handle_signals: bool = True, configure_logging: bool = True
-):
+) -> None:
     """Run the system described by ``args`` until it is stopped.
 
     ``handle_signals`` installs the SIGINT/SIGTERM handlers; a host with a loop
@@ -952,9 +970,20 @@ def loop_refusal(loop: asyncio.AbstractEventLoop) -> str:
     )
 
 
+def namespace_refusal() -> str:
+    """Why the configured namespace cannot be used, or an empty string.
+
+    Refused rather than dropped: without it this install would run on the topics
+    every install without one shares, which is what a namespace is set to avoid.
+    """
+    if NAMESPACE_REFUSAL is None:
+        return ""
+    return f"{NAMESPACE_REFUSAL}. Set it to one plain word, such as `house`, or leave it empty."
+
+
 def _check_startable(args: argparse.Namespace, *, handle_signals: bool) -> None:
     """What is settled before anything is built; see :func:`app`."""
-    refused = loop_refusal(asyncio.get_running_loop())
+    refused = loop_refusal(asyncio.get_running_loop()) or namespace_refusal()
     if refused:
         raise StartupError(refused)
     # Before anything reads the state directory: a second process on it would

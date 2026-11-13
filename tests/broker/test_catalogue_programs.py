@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A catalogue program's own broker connection, on main and on a node.
 
 Some programs open a connection of their own, besides the one their host

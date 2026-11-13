@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Telegram bot interface."""
 
 import asyncio
@@ -15,7 +16,7 @@ from .social import SocialRateLimiter
 if TYPE_CHECKING:
     from ...orchestration import Orchestrator
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The most text one Telegram message carries.
 MESSAGE_CHARS = 4096
@@ -60,9 +61,9 @@ class TelegramInterface:
         ids = set(allowed_user_ids or ())
         if allowed_user_id:
             ids.add(int(allowed_user_id))
-        self.allowed_user_ids = frozenset(ids)
-        self.limiter = SocialRateLimiter()
-        self.outbox = outbox or Outbox()
+        self.allowed_user_ids: frozenset[int] = frozenset(ids)
+        self.limiter: SocialRateLimiter = SocialRateLimiter()
+        self.outbox: Outbox = outbox or Outbox()
         #: The bot, once `run()` has built it: what `send` talks through.
         self._bot: Any = None
         #: Questions sent with buttons, by the token their buttons carry.
@@ -143,10 +144,16 @@ class TelegramInterface:
     # ── the bot ───────────────────────────────────────────────────────────────
 
     async def run(self) -> None:
+        """Poll Telegram and answer the allowed users, until cancelled.
+
+        Returns at once, logging why, when ``python-telegram-bot`` is not installed. With no
+        allowed users it runs in setup mode, answering only ``/start`` with the sender's id.
+        While it runs, the bot is registered as the ``telegram`` outbound channel.
+        """
         try:
-            from telegram import Update
-            from telegram.constants import ChatAction
-            from telegram.ext import (
+            from telegram import Update  # optional dependency: the `telegram` extra
+            from telegram.constants import ChatAction  # optional dependency: the `telegram` extra
+            from telegram.ext import (  # optional dependency: the `telegram` extra
                 Application,
                 CallbackQueryHandler,
                 CommandHandler,

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Deleting an agent, and everything that has to go with it.
 
 Delete is not a stronger stop. A stop keeps the state so the agent can resume;
@@ -22,6 +23,7 @@ the monitor all purge, so a delete completes even when one of them is down.
 """
 
 import json
+import uuid
 from typing import Any
 
 import pytest
@@ -30,8 +32,10 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.lifecycle import LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.core.actor import derive_actor_id
+from wactorz.core.manifests import AgentManifest
 
 _STORE_LOCKED = "database is locked"
 
@@ -110,10 +114,11 @@ class _Main:
         *,
         local: dict[str, _Agent] | None = None,
         spawn_registry: dict[str, dict[str, Any]] | None = None,
+        shared: tuple[dict[str, Any], ...] = (),
         heartbeat_node: str = "",
         supervisor: _Supervisor | None = None,
-        manifests: dict[str, Any] | None = None,
-        topics: dict[str, list[dict[str, Any]]] | None = None,
+        manifests: dict[str, AgentManifest] | None = None,
+        topics: dict[str, list[AgentManifest]] | None = None,
     ) -> None:
         main = MainActor.__new__(MainActor)
         main.name = "main"
@@ -133,6 +138,8 @@ class _Main:
         self.removed_from_registry: list[str] = []
         self.deletions: list[tuple[str, str]] = []
         self._spawn_registry = dict(spawn_registry or {})
+        #: Entries of a name kept in more than one place, each with its id.
+        self._shared = shared
 
         async def _publish(topic: str, payload: Any, **kw: Any) -> None:
             self.published.append((topic, payload, kw))
@@ -143,16 +150,26 @@ class _Main:
         def _record(name: str, reason: str = "user request") -> None:
             self.deletions.append((name, reason))
 
-        setattr(main.spawns, "_get_spawn_registry", lambda: dict(self._spawn_registry))
-        setattr(main.spawns, "_remove_from_spawn_registry", self.removed_from_registry.append)
+        setattr(main.spawns, "_get_spawn_registry", self._spawns)
+
+        def _removed(name: str, node: str | None = None, *, actor_id: str | None = None) -> None:
+            self.removed_from_registry.append(name)
+
+        setattr(main.spawns, "_remove_from_spawn_registry", _removed)
         setattr(main, "_mqtt_publish", _publish)
         setattr(main, "_update_node_desired_state", _desired)
         setattr(main, "_node_running_agent", lambda _n: heartbeat_node)
         setattr(main.lifecycle, "_record_agent_deletion", _record)
         self.actor = main
 
-    async def delete(self, name: str) -> None:
-        await self.actor.delete_spawned_agent(name)
+    def _spawns(self) -> SpawnRegistry:
+        registry = SpawnRegistry.from_names(dict(self._spawn_registry))
+        for entry in self._shared:
+            registry = registry.with_entry(entry)
+        return registry
+
+    async def delete(self, name: str, node: str | None = None) -> None:
+        await self.actor.delete_spawned_agent(name, node)
 
     def published_topics(self) -> list[str]:
         return [t for t, _, _ in self.published]
@@ -381,6 +398,66 @@ def delete_block(**cfg: Any) -> str:
     return f"<delete>{json.dumps(cfg)}</delete>"
 
 
+#: Two agents called sensor: one on main, one on rpi, each under an id of its own.
+SENSOR_HERE = {"name": "sensor", "node": "", "actor_id": "11111111-1111-4111-8111-111111111111"}
+SENSOR_ON_RPI = {
+    "name": "sensor",
+    "node": "rpi",
+    "actor_id": "22222222-2222-4222-8222-222222222222",
+}
+
+
+class TestDeletingOneOfASharedName:
+    """Two agents may share a name on different hosts; a delete names one, by its address."""
+
+    def _main(self) -> "_Main":
+        return _Main(local={"sensor": _Agent("sensor")}, shared=(SENSOR_HERE, SENSOR_ON_RPI))
+
+    async def test_the_one_on_a_node_is_deleted_there_and_the_one_here_keeps_running(
+        self,
+    ) -> None:
+        main = self._main()
+
+        await main.delete("sensor", "rpi")
+
+        assert ("nodes/rpi/stop", {"name": "sensor", "delete": True}, {"qos": 1}) in main.published
+        assert main.registry.find_by_name("sensor") is not None
+        assert not main.registry.unregistered
+
+    async def test_the_topics_cleared_are_the_node_agents_own(self) -> None:
+        main = self._main()
+        here = actor_id_for("sensor")
+
+        await main.delete("sensor", "rpi")
+
+        purged = main.retained_purges()
+        assert f"agents/{SENSOR_ON_RPI['actor_id']}/manifest" in purged
+        assert not [topic for topic in purged if here in topic]
+
+    async def test_a_block_naming_the_bare_name_deletes_nothing_and_says_the_addresses(
+        self,
+    ) -> None:
+        main = self._main()
+
+        _, deleted, _, refused = await main.actor._process_delete_commands(
+            delete_block(name="sensor")
+        )
+
+        assert not deleted
+        assert len(refused) == 1 and "`sensor@main` or `sensor@rpi`" in refused[0]
+        assert not main.published
+
+    async def test_a_block_naming_an_address_deletes_that_one(self) -> None:
+        main = self._main()
+
+        _, deleted, _, refused = await main.actor._process_delete_commands(
+            delete_block(name="sensor@rpi")
+        )
+
+        assert deleted == ["sensor@rpi"] and not refused
+        assert ("nodes/rpi/stop", {"name": "sensor", "delete": True}, {"qos": 1}) in main.published
+
+
 class TestDeleteBlocksTheModelWrote:
     """`<delete>` blocks, and the names main refuses to act on.
 
@@ -396,7 +473,7 @@ class TestDeleteBlocksTheModelWrote:
     async def test_a_named_agent_is_deleted(self) -> None:
         main = self._main(local={"collector": _Agent("collector")})
 
-        clean, deleted, missing = await main.actor._process_delete_commands(
+        clean, deleted, missing, _ = await main.actor._process_delete_commands(
             delete_block(name="collector")
         )
 
@@ -409,14 +486,16 @@ class TestDeleteBlocksTheModelWrote:
         # exactly right.
         main = self._main(local={"collector": _Agent("collector")})
 
-        _, deleted, _ = await main.actor._process_delete_commands("<delete>collector</delete>")
+        _, deleted, _, _ = await main.actor._process_delete_commands("<delete>collector</delete>")
 
         assert deleted == ["collector"]
 
     async def test_the_agent_key_is_accepted_as_well_as_name(self) -> None:
         main = self._main(local={"collector": _Agent("collector")})
 
-        _, deleted, _ = await main.actor._process_delete_commands(delete_block(agent="collector"))
+        _, deleted, _, _ = await main.actor._process_delete_commands(
+            delete_block(agent="collector")
+        )
 
         assert deleted == ["collector"]
 
@@ -429,7 +508,7 @@ class TestDeleteBlocksTheModelWrote:
         # can no longer spawn or deploy anything.
         main = self._main(local={protected: _Agent(protected)})
 
-        _, deleted, missing = await main.actor._process_delete_commands(
+        _, deleted, missing, _ = await main.actor._process_delete_commands(
             delete_block(name=protected)
         )
 
@@ -437,12 +516,31 @@ class TestDeleteBlocksTheModelWrote:
         assert not missing
         assert not main.registry.unregistered
 
+    @pytest.mark.parametrize("protected", ["main", "installer", "catalog"])
+    @pytest.mark.parametrize("node", ["main", "local"])
+    async def test_a_protected_agent_named_by_its_address_is_refused(
+        self, protected: str, node: str
+    ) -> None:
+        # `main@main` is main: the address must not get past the check the
+        # bare name meets.
+        main = self._main(local={protected: _Agent(protected)})
+
+        _, deleted, missing, _ = await main.actor._process_delete_commands(
+            delete_block(name=f"{protected}@{node}")
+        )
+
+        assert (deleted, missing) == ([], [])
+        assert not main.registry.unregistered
+        assert not main.published
+
     async def test_an_unknown_name_is_reported_rather_than_ignored(self) -> None:
         # The reader asked for something to be deleted; silence would read as
         # having done it.
         main = self._main()
 
-        _, deleted, missing = await main.actor._process_delete_commands(delete_block(name="ghost"))
+        _, deleted, missing, _ = await main.actor._process_delete_commands(
+            delete_block(name="ghost")
+        )
 
         assert not deleted
         assert missing == ["ghost"]
@@ -452,7 +550,9 @@ class TestDeleteBlocksTheModelWrote:
         # otherwise it comes back on the next restart.
         main = self._main(spawn_registry={"sensor": {"node": "rpi"}})
 
-        _, deleted, missing = await main.actor._process_delete_commands(delete_block(name="sensor"))
+        _, deleted, missing, _ = await main.actor._process_delete_commands(
+            delete_block(name="sensor")
+        )
 
         assert deleted == ["sensor"]
         assert not missing
@@ -460,14 +560,16 @@ class TestDeleteBlocksTheModelWrote:
     async def test_an_agent_known_only_by_manifest_is_deletable(self) -> None:
         main = self._main(manifests={"remote-thing": {"name": "remote-thing"}})
 
-        _, deleted, _ = await main.actor._process_delete_commands(delete_block(name="remote-thing"))
+        _, deleted, _, _ = await main.actor._process_delete_commands(
+            delete_block(name="remote-thing")
+        )
 
         assert deleted == ["remote-thing"]
 
     async def test_a_malformed_block_is_skipped(self) -> None:
         main = self._main()
 
-        _, deleted, missing = await main.actor._process_delete_commands("<delete>{</delete>")
+        _, deleted, missing, _ = await main.actor._process_delete_commands("<delete>{</delete>")
 
         assert not deleted
         assert not missing
@@ -475,7 +577,7 @@ class TestDeleteBlocksTheModelWrote:
     async def test_an_empty_block_deletes_nothing(self) -> None:
         main = self._main()
 
-        _, deleted, missing = await main.actor._process_delete_commands("<delete></delete>")
+        _, deleted, missing, _ = await main.actor._process_delete_commands("<delete></delete>")
 
         assert not deleted
         assert not missing
@@ -483,7 +585,7 @@ class TestDeleteBlocksTheModelWrote:
     async def test_every_block_is_read(self) -> None:
         main = self._main(local={"a": _Agent("a"), "b": _Agent("b")})
 
-        _, deleted, _ = await main.actor._process_delete_commands(
+        _, deleted, _, _ = await main.actor._process_delete_commands(
             delete_block(name="a") + delete_block(name="b")
         )
 
@@ -492,7 +594,7 @@ class TestDeleteBlocksTheModelWrote:
     async def test_the_blocks_are_stripped_from_the_reply(self) -> None:
         main = self._main(local={"a": _Agent("a")})
 
-        clean, _, _ = await main.actor._process_delete_commands(
+        clean, _, _, _ = await main.actor._process_delete_commands(
             f"Removing that. {delete_block(name='a')} Done."
         )
 
@@ -507,7 +609,6 @@ def test_the_runner_derives_the_same_id_as_the_server() -> None:
     than holding two copies to each other: the id keys a held broker session
     and every registry entry, so a change to it strands both.
     """
-    import uuid
 
     name = "kitchen-collector"
     node_copy = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))

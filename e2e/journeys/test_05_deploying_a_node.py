@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`/deploy` from the chat puts a node on another machine, and the node reports in.
 
 The machine is a container with Python and an SSH server. Everything else on it

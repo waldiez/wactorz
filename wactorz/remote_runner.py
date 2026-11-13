@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Compatibility shim for the single-file node runner.
 
 A node used to be given a copy of this module and nothing else, so it carried

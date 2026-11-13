@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """HomeAssistantActuatorAgent — reactive actuator for external automations.
 
 Subscribes to one or more MQTT topics, filters incoming detection payloads,
@@ -21,7 +22,7 @@ from typing import Any
 
 from wactorz.config import CONFIG
 
-from ..core.actor import Actor, ActorState, Message, MessageType, has_derived_id
+from ..core.actor import Actor, ActorState, Message, MessageType, has_stable_id
 from ..core.integrations.home_assistant.ha_helper import normalize_ha_ws_url
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
 from ..core.mqtt import (
@@ -30,8 +31,9 @@ from ..core.mqtt import (
     mqtt_client,
     session_kwargs,
 )
+from ..core.topics import agent_topic
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration dataclasses
@@ -54,13 +56,15 @@ class ActuatorAction:
     domain: str  # e.g. "light", "climate", "cover"
     service: str  # e.g. "turn_on", "set_temperature", "open_cover"
     entity_id: str  # e.g. "light.living_room_lamp"
-    service_data: dict = field(default_factory=dict)  # e.g. {"color_name": "red"}
+    service_data: dict[str, Any] = field(default_factory=dict)  # e.g. {"color_name": "red"}
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
+        """The action as JSON, one key per field."""
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> ActuatorAction:
+    def from_dict(cls, d: dict[str, Any]) -> ActuatorAction:
+        """The action :meth:`to_dict` wrote; ``service_data`` may be left out."""
         return cls(
             domain=d["domain"],
             service=d["service"],
@@ -72,7 +76,7 @@ class ActuatorAction:
 _PAYLOAD_REF_PREFIX = "$payload"
 
 
-def _lookup_payload_path(payload: dict, path: str) -> Any:
+def _lookup_payload_path(payload: dict[str, Any], path: str) -> Any:
     """Resolve "$payload.a.b" against the trigger payload. Returns None if missing."""
     value: Any = payload
     for part in path.split(".")[1:]:  # skip the leading "$payload"
@@ -88,7 +92,7 @@ def _lookup_payload_path(payload: dict, path: str) -> Any:
     return value
 
 
-def resolve_payload_refs(data: Any, payload: dict) -> Any:
+def resolve_payload_refs(data: Any, payload: dict[str, Any]) -> Any:
     """Recursively replace "$payload.x.y" strings in service_data with values
     from the trigger payload. Non-reference values are returned unchanged.
     """
@@ -114,11 +118,13 @@ class ActuatorCondition:
     operator: str  # one of: eq, ne, gt, lt, gte, lte
     value: Any  # e.g. "above_horizon" or 0
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
+        """The condition as JSON, one key per field."""
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> ActuatorCondition:
+    def from_dict(cls, d: dict[str, Any]) -> ActuatorCondition:
+        """The condition :meth:`to_dict` wrote."""
         return cls(
             entity_id=d["entity_id"],
             attribute=d["attribute"],
@@ -126,7 +132,7 @@ class ActuatorCondition:
             value=d["value"],
         )
 
-    def evaluate(self, entity_state: dict) -> bool:
+    def evaluate(self, entity_state: dict[str, Any]) -> bool:
         """Return True if the condition holds for the given HA state object."""
         cmp = _OPERATORS.get(self.operator)
         if cmp is None:
@@ -160,10 +166,11 @@ class ActuatorConfig:
     mqtt_topics: list[str]
     actions: list[ActuatorAction]
     conditions: list[ActuatorCondition] = field(default_factory=list)
-    detection_filter: dict | None = None  # key-value match on incoming payload
+    detection_filter: dict[str, Any] | None = None  # key-value match on incoming payload
     cooldown_seconds: float = 10.0
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
+        """The configuration as JSON, as :meth:`from_dict` reads it back."""
         return {
             "automation_id": self.automation_id,
             "description": self.description,
@@ -175,7 +182,10 @@ class ActuatorConfig:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> ActuatorConfig:
+    def from_dict(cls, d: dict[str, Any]) -> ActuatorConfig:
+        """The configuration :meth:`to_dict` wrote; everything but the id and the topics may be
+        left out.
+        """
         return cls(
             automation_id=d["automation_id"],
             description=d.get("description", ""),
@@ -208,9 +218,9 @@ class HomeAssistantActuatorAgent(Actor):
         super().__init__(**kwargs)
 
         self.config = config
-        self.ha_url = (CONFIG.ha_url or "").rstrip("/")
-        self.ha_token = (CONFIG.ha_token or "").strip()
-        self.ha_ws_url = normalize_ha_ws_url(self.ha_url)
+        self.ha_url: str = (CONFIG.ha_url or "").rstrip("/")
+        self.ha_token: str = (CONFIG.ha_token or "").strip()
+        self.ha_ws_url: str = normalize_ha_ws_url(self.ha_url)
 
         self._ha: HAWebSocketClient | None = None
         self._ws_ready: asyncio.Event = asyncio.Event()  # set when HA WS is connected
@@ -220,6 +230,9 @@ class HomeAssistantActuatorAgent(Actor):
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
     async def on_start(self) -> None:
+        """Restore the actuation count and time, publish the manifest, and start listening on the
+        configured topics, with a connection to Home Assistant kept alive.
+        """
         self._last_actuation_time = float(self.recall("last_actuation_time", 0.0))
         self._actuations_count = int(self.recall("actuations_count", 0))
         self.persist("config", self.config.to_dict())
@@ -242,6 +255,7 @@ class HomeAssistantActuatorAgent(Actor):
         )
 
     async def on_stop(self) -> None:
+        """Remember the actuation count and time for the next start."""
         self.persist("last_actuation_time", self._last_actuation_time)
         self.persist("actuations_count", self._actuations_count)
 
@@ -285,7 +299,7 @@ class HomeAssistantActuatorAgent(Actor):
         # `actuator` detail keeps this connection distinct from the actor's
         # command listener and from any subscription hub it may own.
         identifier = agent_client_id(str(self.actor_id), self._node, "actuator")
-        durable = has_derived_id(self.name, str(self.actor_id))
+        durable = has_stable_id(self)
         session = session_kwargs(AGENT_SESSION_EXPIRY_SECONDS) if durable else {}
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
@@ -319,7 +333,7 @@ class HomeAssistantActuatorAgent(Actor):
 
     # ── Detection processing ───────────────────────────────────────────────────
 
-    async def _on_detection(self, payload: dict) -> None:
+    async def _on_detection(self, payload: dict[str, Any]) -> None:
         """Process one incoming MQTT message through filter → cooldown → conditions → actions."""
         if not self._matches_filter(payload):
             return
@@ -359,7 +373,7 @@ class HomeAssistantActuatorAgent(Actor):
         self.metrics.tasks_completed += 1
 
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/actuations",
+            agent_topic(self.actor_id, "actuations"),
             {
                 "automation_id": self.config.automation_id,
                 "actions": [a.to_dict() for a in self.config.actions],
@@ -368,7 +382,7 @@ class HomeAssistantActuatorAgent(Actor):
             },
         )
 
-    def _matches_filter(self, payload: dict) -> bool:
+    def _matches_filter(self, payload: dict[str, Any]) -> bool:
         """Return True if all detection_filter entries match the payload.
 
         Values can be literals (equality) or operator dicts e.g. {"gt": 0.8}.
@@ -497,6 +511,7 @@ class HomeAssistantActuatorAgent(Actor):
         )
 
     async def handle_message(self, msg: Message) -> None:
+        """Answer any task with the actuator's status, in words under ``result`` and as fields."""
         if msg.type != MessageType.TASK:
             return
         # `result` first, and it is not decoration: the chat surface reads a

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The application, as a process.
 
 Not the app imported and driven in-process - that is what the unit suite does,
@@ -10,8 +11,6 @@ want a private one can have it without disturbing the shared session backend.
 Its whole console stream - stdout and stderr into one file, in order - is kept,
 because `a01` asserts on the order of two lines in it.
 """
-
-from __future__ import annotations
 
 import ctypes
 import os
@@ -30,6 +29,7 @@ from .run import NODE_NAME, REPO_ROOT, Run
 #: Settings a developer plausibly has in `.env` that would change what a
 #: scenario tests, and that this suite does not set itself.
 LEFT_EMPTY = (
+    "WACTORZ_EXTENSIONS",
     "LLM_FAKE_INTENT",
     "LLM_API_KEY",
     "LLM_MODEL",

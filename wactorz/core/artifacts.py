@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Models and other large files that main keeps once, by content, and names by version.
 
 An agent's own blobs (see `wactorz.core.blobs`) belong to that agent: written by
@@ -21,7 +22,9 @@ what they point at would not be in the tar.
 **Some formats run code when they load**: a pickle, a joblib file, a whole
 torch module. They are refused unless the caller allows them, and recorded as
 such, so that whatever loads one later can refuse it in turn. Every other
-format here is data: loading it runs nothing from the file.
+format here is data: loading it runs nothing from the file. A ``state_dict`` is
+read on its way in, as an agent will read it, where torch is installed: one the
+safe load refuses is refused here, rather than by the first agent to start.
 
 Two pointers may sit on a name, beside its versions: ``active``, the version
 agents serve, and ``shadow``, a version under trial that sees the same data and
@@ -32,8 +35,21 @@ version never moves a pointer: a move is its own act, with who made it and why.
 A version a pointer names cannot be removed until the pointer is moved off it.
 ``docs/design/model-pointers.md`` records the decision.
 
+A version may also say what it is judged on (`wactorz.core.judgement`): the
+labels a trial, and later an evaluation, holds its answers against. A version
+stored without one takes the previous version's, and it may be set or changed
+later, keeping who changed it and when; it is about the version, not its
+bytes, so it is the one thing about a version that changes.
+
+A name may carry a policy (`wactorz.core.promotion`): when its shadow may
+become active, kept under ``policies`` in the index beside the pointers and
+written back as read, so a release that does not know the key keeps it.
+
 The index is changed under a lock on the store's directory, so a command adding
-a model while the server runs does not lose what either of them wrote. The
+a model while the server runs does not lose what either of them wrote. Under the
+same lock, each pointer change is appended to a journal beside the index, with
+who made it and why: whoever made it, in whichever process, main reads the
+journal into the history and trims what it read (`pointer_changes`). The
 directory's name starts with ``..``, which no agent's name may, so it never
 collides with an agent's own; and it is part of what ``wactorz-state export``
 writes.
@@ -43,7 +59,9 @@ import contextlib
 import hashlib
 import io
 import json
+import logging
 import os
+import pickle
 import re
 import shutil
 import tarfile
@@ -54,9 +72,20 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import IO, Any, cast
 
+from . import torch_checkpoints
 from .atomic_io import write_text
+from .judgement import Judgement, JudgementError
+from .judgement import from_json as judgement_from_json
 from .model_contents import stored_contents
+from .promotion import Policy, PolicyError
+from .promotion import from_json as policy_from_json
 from .state_lock import StateInUseError, StateLock
+from .torch_checkpoints import CheckpointRefusedError
+
+logger: logging.Logger = logging.getLogger(__name__)
+
+#: How many earlier declarations of what a version is judged on are kept with it.
+JUDGEMENTS_KEPT = 20
 
 #: The directory, inside the state directory, that artifacts are kept in.
 STORE_DIRNAME = "..artifacts"
@@ -78,6 +107,12 @@ _READ_FORMATS = (1, INDEX_FORMAT)
 #: version plays, and these are the roles. Anything else said of a version is
 #: metadata.
 POINTERS = ("active", "shadow")
+
+#: The most metadata a version may carry, as JSON. It travels with every pin:
+#: in each spawn config, signed command and spawn-registry record that names
+#: the version, so it is kept to what an agent reads (a threshold, a
+#: calibration constant, the dataset's name), not a model card.
+METADATA_MAX_BYTES = 64 * 1024
 
 #: A SHA-256, as a file in the store is named.
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -112,7 +147,12 @@ FORMATS: dict[str, Format] = {
         Format("safetensors", (".safetensors",), False, "tensors in safetensors"),
         Format("npz", (".npz",), False, "numpy arrays, loaded with allow_pickle=False"),
         Format("npy", (".npy",), False, "a numpy array, loaded with allow_pickle=False"),
-        Format("state_dict", (), False, "a torch state_dict, loaded with weights_only=True"),
+        Format(
+            "state_dict",
+            (),
+            False,
+            "a torch checkpoint of tensors and numeric arrays, loaded with weights_only=True",
+        ),
         Format("gguf", (".gguf",), False, "a GGUF model, as llama.cpp loads"),
         Format("tflite", (".tflite",), False, "a TensorFlow Lite model"),
         Format("skops", (".skops",), False, "a scikit-learn model saved with skops"),
@@ -139,14 +179,19 @@ class ArtifactError(Exception):
 
     @classmethod
     def bad_version(cls, reference: str) -> "ArtifactError":
+        """The error for a version in ``reference`` that is no pointer name and no number from 1."""
         return cls(f"{reference!r}: a version is 'latest', 'active', 'shadow' or a number from 1")
 
     @classmethod
     def not_a_reference(cls, wanted: Any) -> "ArtifactError":
+        """The error for ``wanted`` not being a reference to an artifact."""
         return cls(f"{wanted!r} is not a reference to an artifact")
 
     @classmethod
     def names_the_pointer(cls, reference: str, which: str, name: str) -> "ArtifactError":
+        """The error for a pointer move to ``reference``, which names the ``which`` pointer
+        itself rather than a version of ``name``.
+        """
         return cls(
             f"{reference!r} would mean the {which} pointer itself: name the version "
             f"to move it to, as {name}:3 or {name}:latest"
@@ -154,78 +199,127 @@ class ArtifactError(Exception):
 
     @classmethod
     def not_a_pointer(cls, which: str) -> "ArtifactError":
+        """The error for ``which`` naming none of the pointers."""
         return cls(f"{which!r} is not a pointer: one of {', '.join(POINTERS)}")
 
     @classmethod
     def names_one_version(cls, reference: str) -> "ArtifactError":
+        """The error for removing every version with a ``reference`` that names one."""
         return cls(f"{reference!r} names one version; every version is removed by the bare name")
 
     @classmethod
     def names_every_version(cls, reference: str) -> "ArtifactError":
+        """The error for removing one version with a ``reference`` that names every version."""
         return cls(f"{reference!r} would remove every version: name one, or ask for every version")
 
     # ── What a spawn config names ─────────────────────────────────────────
 
     @classmethod
     def artifacts_not_a_mapping(cls) -> "ArtifactError":
+        """The error for a spawn's artifacts named as something other than a mapping of key to
+        reference.
+        """
         return cls("artifacts are named as a mapping, like {'model': 'imu-detector:3'}")
 
     @classmethod
     def pinned_not_a_mapping(cls) -> "ArtifactError":
+        """The error for a spawn config whose pinned artifacts are not a mapping."""
         return cls("its artifacts are not a mapping")
 
     @classmethod
     def bad_key(cls, error: str) -> "ArtifactError":
+        """The error for an artifact key refused as a name, with ``error`` saying why."""
         return cls(f"the key {error}")
 
     @classmethod
     def not_pinned(cls, entry: Any) -> "ArtifactError":
+        """The error for ``entry`` not being a pinned artifact."""
         return cls(f"{entry!r} is not a pinned artifact")
 
     @classmethod
+    def metadata_not_a_mapping(cls, entry: Any) -> "ArtifactError":
+        """The error for a pinned ``entry`` whose metadata is not a mapping."""
+        return cls(f"{entry!r} has metadata that is not a mapping")
+
+    @classmethod
     def no_sha256(cls, entry: Any) -> "ArtifactError":
+        """The error for a pinned ``entry`` that names no SHA-256."""
         return cls(f"{entry!r} does not name a SHA-256")
 
     @classmethod
     def no_size(cls, entry: Any) -> "ArtifactError":
+        """The error for a pinned ``entry`` that does not say its size."""
         return cls(f"{entry!r} does not say its size")
 
     @classmethod
     def no_version(cls, entry: Any) -> "ArtifactError":
+        """The error for a pinned ``entry`` that does not say its version."""
         return cls(f"{entry!r} does not say its version")
 
     @classmethod
     def unknown_entry_format(cls, entry: Any) -> "ArtifactError":
+        """The error for a pinned ``entry`` in a format this release does not know."""
         return cls(f"{entry!r} is not in a format this release knows")
 
     @classmethod
     def follows_no_pointer(cls, entry: Any, follows: Any) -> "ArtifactError":
+        """The error for a pinned ``entry`` that follows ``follows``, which is not a pointer."""
         return cls(f"{entry!r} follows {follows!r}, which is not a pointer")
 
     @classmethod
     def not_held(cls, entry: Mapping[str, Any]) -> "ArtifactError":
+        """The error for a pinned ``entry`` whose file this store does not hold."""
         return cls(f"{entry.get('name')}:{entry.get('version')} is not held here")
 
     @classmethod
     def bytes_changed(cls, reference: str) -> "ArtifactError":
+        """The error for ``reference`` now holding bytes other than those it was pinned to."""
         return cls(f"{reference} no longer holds the bytes it was pinned to")
 
     # ── What is offered to the store ──────────────────────────────────────
 
     @classmethod
     def missing(cls, path: Path) -> "ArtifactError":
+        """The error for a file to store at ``path`` that does not exist."""
         return cls(f"{path} does not exist")
 
     @classmethod
     def metadata_not_json(cls, exc: Exception) -> "ArtifactError":
+        """The error for metadata that does not parse as JSON."""
         return cls(f"its metadata is not JSON: {exc}")
 
     @classmethod
+    def metadata_too_large(cls, size: int) -> "ArtifactError":
+        """The error for metadata of ``size`` bytes as JSON, over the most a version may carry."""
+        return cls(
+            f"its metadata is {size} bytes as JSON, over {METADATA_MAX_BYTES}: "
+            "keep what an agent reads in metadata, and put larger things inside the artifact"
+        )
+
+    @classmethod
+    def refused_checkpoint(cls, path: Path, exc: CheckpointRefusedError) -> "ArtifactError":
+        """The error for a checkpoint at ``path`` that cannot be loaded without running code, and
+        the reason in ``exc``.
+        """
+        return cls(
+            f"{path} is not a state_dict agents can load without running code ({exc.reason}): "
+            "save it with only tensors, numbers, containers and numeric numpy arrays, or store "
+            "it as --format torch with --allow-code if you would run its maker's code"
+        )
+
+    @classmethod
+    def not_a_checkpoint(cls, path: Path, exc: Exception) -> "ArtifactError":
+        """The error for ``path`` not being a torch checkpoint at all."""
+        return cls(f"{path} is not a torch checkpoint: {exc}")
+
+    @classmethod
     def directory_with_format(cls, path: Path) -> "ArtifactError":
+        """The error for a directory at ``path`` given a file's format."""
         return cls(f"{path} is a directory, which is kept as {DIRECTORY_FORMAT!r}")
 
     @classmethod
     def format_unsaid(cls, path: Path) -> "ArtifactError":
+        """The error for a file at ``path`` whose ending names no format, with none given."""
         return cls(
             f"the ending of {path.name} does not say its format; name one of "
             f"{', '.join(sorted(FORMATS))}"
@@ -233,50 +327,72 @@ class ArtifactError(Exception):
 
     @classmethod
     def file_not_directory(cls, path: Path) -> "ArtifactError":
+        """The error for a directory format given ``path``, which is a file."""
         return cls(f"{path} is a file, not a directory")
 
     @classmethod
     def unknown_format(cls, named: str) -> "ArtifactError":
+        """The error for ``named`` being none of the formats."""
         return cls(f"{named!r} is not a format: one of {', '.join(sorted(FORMATS))}")
 
     @classmethod
     def link(cls, path: Path) -> "ArtifactError":
+        """The error for ``path`` being a symbolic link, which is not kept."""
         return cls(f"{path} is a link; only what it points at could be kept")
 
     @classmethod
     def not_file_or_directory(cls, path: Path) -> "ArtifactError":
+        """The error for ``path`` being neither a file nor a directory."""
         return cls(f"{path} is neither a file nor a directory")
 
     # ── The archive a directory is kept as ────────────────────────────────
 
     @classmethod
     def archive_outside(cls, member: str) -> "ArtifactError":
+        """The error for an archive ``member`` that would unpack outside its directory."""
         return cls(f"the archive names {member!r}, outside where it unpacks")
 
     @classmethod
     def archive_not_a_file(cls, member: str) -> "ArtifactError":
+        """The error for an archive ``member`` that is not a regular file."""
         return cls(f"the archive holds {member!r}, which is not a file")
 
     @classmethod
     def archive_unreadable(cls, member: str) -> "ArtifactError":
+        """The error for an archive ``member`` that cannot be read out of the archive."""
         return cls(f"the archive cannot give {member!r}")
+
+    @classmethod
+    def unportable_name(cls, path: Path) -> "ArtifactError":
+        """The error for ``path`` having a name Windows would read as a path, so a Windows node
+        could not unpack it.
+        """
+        return cls(
+            f"{path} has a name with a backslash or a ':', which Windows reads as a path; rename it"
+        )
 
     # ── The store itself ──────────────────────────────────────────────────
 
     @classmethod
     def unreadable_index(cls, path: Path, exc: Exception) -> "ArtifactError":
+        """The error for an index at ``path`` that cannot be read, with the reason ``exc``."""
         return cls(f"the index at {path} cannot be read: {exc}")
 
     @classmethod
     def unknown_index(cls, path: Path) -> "ArtifactError":
+        """The error for an index at ``path`` in a format this release does not read."""
         return cls(f"the index at {path} is not one this release reads")
 
     @classmethod
     def busy(cls, root: Path, exc: Exception) -> "ArtifactError":
+        """The error for the store at ``root`` staying locked by another process past the wait."""
         return cls(f"the store at {root} stayed busy: {exc}")
 
     @classmethod
     def pointer_bytes_changed(cls, name: str, which: str, reference: str) -> "ArtifactError":
+        """The error for ``name``'s ``which`` pointer naming ``reference``, whose bytes have
+        changed since it was set.
+        """
         return cls(
             f"{name}'s {which} pointer names {reference}, which no "
             "longer holds the bytes it was set to; move the pointer"
@@ -284,6 +400,7 @@ class ArtifactError(Exception):
 
     @classmethod
     def pointer_dangles(cls, name: str, which: str, version: int) -> "ArtifactError":
+        """The error for ``name``'s ``which`` pointer naming a ``version`` that is not stored."""
         return cls(
             f"{name}'s {which} pointer names {name}:{version}, which is not stored; "
             "move the pointer"
@@ -295,10 +412,13 @@ class CodeRefusedError(ArtifactError):
 
     @classmethod
     def runs_code(cls, path: Path, description: str) -> "CodeRefusedError":
+        """The error for the file at ``path``, a ``description``, which runs code when it loads."""
         return cls(f"{path.name} is {description}, which runs code when it loads: refused")
 
 
 class ArtifactNotFoundError(ArtifactError):
+    """A reference to an artifact the store does not hold."""
+
     def __init__(self, reference: str) -> None:
         super().__init__(f"no artifact {reference!r}")
 
@@ -312,26 +432,32 @@ class ArtifactConflictError(ArtifactError):
 
     @classmethod
     def already(cls, reference: str, which: str) -> "ArtifactConflictError":
+        """The error for moving the ``which`` pointer to ``reference``, which it names already."""
         return cls(f"{reference} is already {which}")
 
     @classmethod
     def shadow_is_active(cls, reference: str) -> "ArtifactConflictError":
+        """The error for making ``reference`` the shadow while it is the active version."""
         return cls(f"{reference} is active; a shadow is a different version")
 
     @classmethod
     def unset(cls, name: str, which: str) -> "ArtifactConflictError":
+        """The error for an action on ``name``'s ``which`` pointer when it is not set."""
         return cls(f"{name} has no {which} version")
 
     @classmethod
     def no_shadow_to_promote(cls, name: str) -> "ArtifactConflictError":
+        """The error for promoting ``name``'s shadow when it has none."""
         return cls(f"{name} has no shadow version to promote")
 
     @classmethod
     def nothing_to_roll_back(cls, name: str) -> "ArtifactConflictError":
+        """The error for rolling ``name`` back when its active version has no earlier one."""
         return cls(f"{name}'s active version has no earlier one to go back to")
 
     @classmethod
     def in_use(cls, name: str, version: int, which: str) -> "ArtifactConflictError":
+        """The error for removing ``name:version`` while the ``which`` pointer names it."""
         return cls(f"{name}:{version} is the {which} version; move the pointer first")
 
 
@@ -349,6 +475,20 @@ class Artifact:
     #: Where it came from and what it is: the source, the dataset, the code
     #: revision, its metrics. Whatever the one who added it said.
     metadata: dict[str, Any] = field(default_factory=dict)
+    #: What it is judged on (`wactorz.core.judgement`), as stored; None when nothing says.
+    judged_on: dict[str, Any] | None = None
+    #: What it was judged on before, oldest first, each with who declared it and when.
+    judged_on_history: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def judgement(self) -> Judgement | None:
+        """`judged_on` read back, or None when nothing says or what is stored no longer reads."""
+        if self.judged_on is None:
+            return None
+        try:
+            return judgement_from_json(self.judged_on)
+        except JudgementError:
+            return None
 
     @property
     def reference(self) -> str:
@@ -392,6 +532,12 @@ class Pointer:
         """The pointer as the retained ``models/<name>/<pointer>`` topic carries it."""
         return asdict(self)
 
+
+#: What a journalled change did: a pointer set to a version, a pointer unset,
+#: or the shadow unset because its version became active.
+MOVED = "moved"
+CLEARED = "cleared"
+PROMOTED = "promoted"
 
 #: What follows the name in a reference: None for a bare name, ``"latest"``, one
 #: of `POINTERS`, or a version number.
@@ -442,7 +588,7 @@ class ArtifactStore:
     """The artifacts kept under one directory."""
 
     def __init__(self, root: str | os.PathLike[str]) -> None:
-        self.root = Path(root)
+        self.root: Path = Path(root)
 
     @classmethod
     def in_state_dir(cls, state_dir: str | os.PathLike[str]) -> "ArtifactStore":
@@ -456,7 +602,18 @@ class ArtifactStore:
 
     @property
     def index_path(self) -> Path:
+        """The file the store's index is kept in."""
         return self.root / "index.json"
+
+    @property
+    def journal_path(self) -> Path:
+        """Each pointer change not yet read into the history, one JSON object a line."""
+        return self.root / "pointer-moves.jsonl"
+
+    @property
+    def rejected_journal_path(self) -> Path:
+        """Lines of the journal that were not a change, kept for a person to read."""
+        return self.root / "pointer-moves.rejected.jsonl"
 
     def path_of(self, artifact: Artifact) -> Path:
         """The file holding ``artifact``."""
@@ -556,7 +713,7 @@ class ArtifactStore:
         `ArtifactError` when the reference is not one or a pointer dangles.
         """
         name, selector = parse_reference(reference)
-        artifacts, pointers = self._read_all()
+        artifacts, pointers, _policies = self._read_all()
         return _resolve_in(artifacts, pointers, name, selector, reference)
 
     def pointer(self, name: str, which: str) -> Pointer | None:
@@ -591,12 +748,15 @@ class ArtifactStore:
         format_name: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         allow_code: bool = False,
+        judged_on: Judgement | None = None,
     ) -> Artifact:
         """Store the file or directory at ``source`` as the next version of ``name``.
 
         ``format_name`` is guessed from the ending when not given; a file whose
         ending does not say must name it. A format that runs code is refused
-        unless ``allow_code``. Raises `ArtifactError` saying why it was refused.
+        unless ``allow_code``. ``judged_on`` is what the version is judged on;
+        without it, the previous version's is copied, saying from which. Raises
+        `ArtifactError` saying why it was refused.
         """
         path = Path(source)
         error = name_error(name)
@@ -607,17 +767,21 @@ class ArtifactStore:
         fmt = _format_for(path, format_name)
         if fmt.runs_code and not allow_code:
             raise CodeRefusedError.runs_code(path, fmt.description)
+        if fmt.name == "state_dict":
+            _check_state_dict(path)
         try:
-            json.dumps(dict(metadata or {}))
+            said = json.dumps(dict(metadata or {}))
         except (TypeError, ValueError) as exc:
             raise ArtifactError.metadata_not_json(exc) from exc
+        if len(said.encode()) > METADATA_MAX_BYTES:
+            raise ArtifactError.metadata_too_large(len(said.encode()))
 
         self.objects.mkdir(parents=True, exist_ok=True)
         # Copied in and hashed before the lock is taken: a model takes as long to
         # read as it does, and nobody else needs to wait for that.
         sha256, size = self._take_in(path, fmt)
         with self._locked():
-            index, pointers = self._read_all()
+            index, pointers, policies = self._read_all()
             versions = index.setdefault(name, [])
             entry = {
                 "version": max((v["version"] for v in versions), default=0) + 1,
@@ -628,9 +792,84 @@ class ArtifactStore:
                 "added_at": time.time(),
                 "metadata": dict(metadata or {}),
             }
+            kept = judged_on.to_json() if judged_on is not None else _inherited(versions)
+            if kept is not None:
+                entry["judged_on"] = kept
             versions.append(entry)
-            self._write_all(index, pointers)
+            self._write_all(index, pointers, policies)
         return _artifact(name, entry)
+
+    def judge(self, reference: str, judged_on: Judgement | None) -> Artifact:
+        """Say what the version ``reference`` names is judged on, or with None that nothing does.
+
+        The declaration it replaces is kept in the version's history. Declaring
+        the same terms again changes nothing. Raises `ArtifactNotFoundError`
+        when no version is named, `ArtifactError` when the reference is not one.
+        """
+        name, selector = parse_reference(reference)
+        with self._locked():
+            index, pointers, policies = self._read_all()
+            version = _resolve_in(index, pointers, name, selector, reference).version
+            entry = next(v for v in index[name] if v["version"] == version)
+            was = _artifact(name, entry)
+            if judged_on is None and was.judged_on is None:
+                return was
+            if judged_on is not None and judged_on.same_terms(was.judgement):
+                return was
+            if was.judged_on is not None:
+                history = [*was.judged_on_history, was.judged_on][-JUDGEMENTS_KEPT:]
+                entry["judged_on_history"] = history
+            if judged_on is None:
+                entry.pop("judged_on", None)
+            else:
+                entry["judged_on"] = judged_on.to_json()
+            self._write_all(index, pointers, policies)
+        return _artifact(name, entry)
+
+    def policy(self, name: str) -> Policy | None:
+        """When ``name``'s shadow may become active, as set; None when nothing is set."""
+        stored = self._read_all()[2].get(name)
+        if stored is None:
+            return None
+        try:
+            return policy_from_json(stored)
+        except PolicyError:
+            return None
+
+    def set_policy(self, name: str, policy: Policy) -> Policy:
+        """Set when ``name``'s shadow may become active.
+
+        A policy is about the name, not a version, and holds across retrains.
+        Setting the same terms again changes nothing. Raises
+        `ArtifactNotFoundError` for a name with no version, so a typo is not
+        kept.
+        """
+        error = name_error(name)
+        if error:
+            raise ArtifactError(error)
+        with self._locked():
+            index, pointers, policies = self._read_all()
+            if not index.get(name):
+                raise ArtifactNotFoundError(name)
+            was = self.policy(name)
+            if was is not None and policy.same_terms(was):
+                return was
+            policies[name] = policy.to_json()
+            self._write_all(index, pointers, policies)
+        return policy
+
+    def clear_policy(self, name: str) -> Policy | None:
+        """Unset ``name``'s policy; what it was, or None when there was none."""
+        error = name_error(name)
+        if error:
+            raise ArtifactError(error)
+        with self._locked():
+            index, pointers, policies = self._read_all()
+            was = self.policy(name)
+            if name in policies:
+                policies.pop(name)
+                self._write_all(index, pointers, policies)
+        return was
 
     def remove(self, reference: str, *, every_version: bool = False) -> list[Artifact]:
         """Remove the version ``reference`` names, or with ``every_version`` all of a name's.
@@ -651,11 +890,14 @@ class ArtifactStore:
                 else ArtifactError.names_every_version(reference)
             )
         with self._locked():
-            index, pointers = self._read_all()
+            index, pointers, policies = self._read_all()
             versions = index.get(name, [])
+            dropped: dict[str, Pointer] = {}
             if everything:
                 gone, kept = versions, []
+                dropped = _pointers_of(name, pointers)
                 pointers.pop(name, None)
+                policies.pop(name, None)
             else:
                 if not versions:
                     raise ArtifactNotFoundError(reference)
@@ -671,7 +913,9 @@ class ArtifactStore:
                 index[name] = kept
             else:
                 index.pop(name, None)
-            self._write_all(index, pointers)
+            self._write_all(index, pointers, policies)
+            now = time.time()
+            self._journal([_change(CLEARED, was, at=now) for was in dropped.values()])
             still_held = {v["sha256"] for entries in index.values() for v in entries}
             for entry in gone:
                 if entry["sha256"] not in still_held:
@@ -696,9 +940,13 @@ class ArtifactStore:
         if selector is None or selector == which:
             raise ArtifactError.names_the_pointer(reference, which, name)
         with self._locked():
-            artifacts, pointers = self._read_all()
-            moved = _move_in(artifacts, pointers, which, name, selector, reference, by, reason)
-            self._write_all(artifacts, pointers)
+            artifacts, pointers, policies = self._read_all()
+            changes: list[dict[str, Any]] = []
+            moved = _move_in(
+                artifacts, pointers, which, name, selector, reference, by, reason, changes
+            )
+            self._write_all(artifacts, pointers, policies)
+            self._journal(changes)
         return moved
 
     def rollback(self, name: str, *, by: str, reason: str | None = None) -> Pointer:
@@ -715,7 +963,7 @@ class ArtifactStore:
         if error:
             raise ArtifactError(error)
         with self._locked():
-            artifacts, pointers = self._read_all()
+            artifacts, pointers, policies = self._read_all()
             active = pointers.get(name, {}).get("active")
             if active is None:
                 raise ArtifactConflictError.unset(name, "active")
@@ -723,25 +971,27 @@ class ArtifactStore:
             if previous is None:
                 raise ArtifactConflictError.nothing_to_roll_back(name)
             reference = f"{name}:{previous}"
+            changes: list[dict[str, Any]] = []
             moved = _move_in(
-                artifacts, pointers, "active", name, int(previous), reference, by, reason
+                artifacts, pointers, "active", name, int(previous), reference, by, reason, changes
             )
-            self._write_all(artifacts, pointers)
+            self._write_all(artifacts, pointers, policies)
+            self._journal(changes)
         return moved
 
-    def clear(self, which: str, name: str) -> Pointer:
+    def clear(self, which: str, name: str, *, by: str = "", reason: str | None = None) -> Pointer:
         """Unset ``name``'s ``which`` pointer; what it was. Raises `ArtifactError` when it was unset.
 
-        Cleared, ``active`` leaves the bare name meaning the newest again.
-        Nothing is left to record who cleared it on; the caller says so where
-        it reports the change.
+        Cleared, ``active`` leaves the bare name meaning the newest again. A
+        cleared pointer has no entry left in the index to say who cleared it
+        or why, so the journal says (`pointer_changes`).
         """
         which = _pointer_name(which)
         error = name_error(name)
         if error:
             raise ArtifactError(error)
         with self._locked():
-            artifacts, pointers = self._read_all()
+            artifacts, pointers, policies = self._read_all()
             standing = pointers.get(name, {})
             if which not in standing:
                 raise ArtifactConflictError.unset(name, which)
@@ -750,8 +1000,60 @@ class ArtifactStore:
                 pointers[name] = standing
             else:
                 pointers.pop(name, None)
-            self._write_all(artifacts, pointers)
-        return _pointer(name, which, was)
+            self._write_all(artifacts, pointers, policies)
+            cleared = _pointer(name, which, was)
+            self._journal([_change(CLEARED, cleared, at=time.time(), by=by, reason=reason)])
+        return cleared
+
+    def pointer_changes(self) -> tuple[list[dict[str, Any]], bytes]:
+        """The journalled changes, oldest first, and the lines they were read from.
+
+        Each is ``change`` (`MOVED`, `CLEARED` or `PROMOTED`), ``at``, ``by``,
+        ``reason`` and ``pointer``, the pointer as the change set it or, for a
+        clear, as it stood before. Only whole lines are read: a last line with
+        no end yet is left for later. The lines read go to
+        `forget_pointer_changes` once what they say is recorded.
+        """
+        if not self.journal_path.exists():
+            # Asked on every look of main's: most find nothing, and need no lock to say so.
+            return [], b""
+        with self._locked():
+            try:
+                body = self.journal_path.read_bytes()
+            except FileNotFoundError:
+                return [], b""
+        read = body[: body.rfind(b"\n") + 1]
+        return [change for line in read.splitlines() if (change := _journal_line(line))], read
+
+    def forget_pointer_changes(self, read: bytes) -> list[bytes]:
+        """Drop the lines `pointer_changes` read, keeping what came since; the lines set aside.
+
+        Dropped only while the journal still starts with them: a reader that
+        finds them gone, dropped by another that read them too, drops nothing,
+        so a line journalled meanwhile is never lost. A line that is not a
+        change -- one cut short when a process died writing it -- is moved to
+        ``pointer-moves.rejected.jsonl`` beside the journal rather than lost,
+        and returned so the caller can say so.
+        """
+        if not read:
+            return []
+        with self._locked():
+            try:
+                body = self.journal_path.read_bytes()
+            except FileNotFoundError:
+                return []
+            if not body.startswith(read):
+                return []
+            rejected = [line for line in read.splitlines() if not _journal_line(line)]
+            if rejected:
+                with self.rejected_journal_path.open("ab") as aside:
+                    aside.write(b"".join(line + b"\n" for line in rejected))
+            rest = body[len(read) :]
+            if rest:
+                write_text(self.journal_path, rest.decode("utf-8", errors="replace"))
+            else:
+                self.journal_path.unlink()
+        return rejected
 
     def promote(self, name: str, *, by: str, reason: str | None = None) -> Pointer:
         """Move ``name``'s ``active`` to where ``shadow`` points and clear ``shadow``, as one change.
@@ -762,16 +1064,23 @@ class ArtifactStore:
         if error:
             raise ArtifactError(error)
         with self._locked():
-            artifacts, pointers = self._read_all()
+            artifacts, pointers, policies = self._read_all()
             standing = pointers.get(name, {})
             if "shadow" not in standing:
                 raise ArtifactConflictError.no_shadow_to_promote(name)
             target = _resolve_in(artifacts, pointers, name, "shadow", f"{name}:shadow")
             standing["active"] = _pointer_entry(target, standing.get("active"), by, reason)
-            del standing["shadow"]
+            tried = _pointer(name, "shadow", standing.pop("shadow"))
             pointers[name] = standing
-            self._write_all(artifacts, pointers)
-        return _pointer(name, "active", standing["active"])
+            self._write_all(artifacts, pointers, policies)
+            active = _pointer(name, "active", standing["active"])
+            self._journal(
+                [
+                    _change(MOVED, active, at=active.moved_at, by=by, reason=reason),
+                    _change(PROMOTED, tried, at=active.moved_at, by=by, reason=reason),
+                ]
+            )
+        return active
 
     # ── Inside ────────────────────────────────────────────────────────────
 
@@ -823,30 +1132,57 @@ class ArtifactStore:
                 raise
             part.unlink(missing_ok=True)
 
-    def _read_all(self) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
-        """The index: every name's versions, and every name's pointers."""
+    def _read_all(
+        self,
+    ) -> tuple[
+        dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]
+    ]:
+        """The index: every name's versions, every name's pointers, and every name's policy."""
         if not self.index_path.exists():
-            return {}, {}
+            return {}, {}, {}
         try:
             stored = json.loads(self.index_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise ArtifactError.unreadable_index(self.index_path, exc) from exc
         if not isinstance(stored, dict) or stored.get("format") not in _READ_FORMATS:
             raise ArtifactError.unknown_index(self.index_path)
-        return stored.get("artifacts", {}), stored.get("pointers", {})
+        policies = stored.get("policies")
+        return (
+            stored.get("artifacts", {}),
+            stored.get("pointers", {}),
+            policies if isinstance(policies, dict) else {},
+        )
 
     def _write_all(
         self,
         index: Mapping[str, list[dict[str, Any]]],
         pointers: Mapping[str, dict[str, Any]],
+        policies: Mapping[str, dict[str, Any]] | None = None,
     ) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
-        body = {
+        body: dict[str, Any] = {
             "format": INDEX_FORMAT,
             "artifacts": {name: index[name] for name in sorted(index)},
             "pointers": {name: pointers[name] for name in sorted(pointers) if pointers[name]},
         }
+        if policies:
+            body["policies"] = {name: policies[name] for name in sorted(policies)}
         write_text(self.index_path, json.dumps(body, indent=2))
+
+    def _journal(self, changes: list[dict[str, Any]]) -> None:
+        """Append ``changes`` to the journal; called under the lock, after the index is written."""
+        if not changes:
+            return
+        lines = "".join(json.dumps(change, sort_keys=True) + "\n" for change in changes)
+        with self.journal_path.open("a+b") as journal:
+            journal.seek(0, os.SEEK_END)
+            if journal.tell():
+                journal.seek(-1, os.SEEK_END)
+                if journal.read(1) != b"\n":
+                    # A line cut short by a process that died writing it: end
+                    # it, so it is read as the broken line it is, alone.
+                    lines = "\n" + lines
+            journal.write(lines.encode("utf-8"))
 
     @contextlib.contextmanager
     def _locked(self) -> Iterator[None]:
@@ -877,6 +1213,10 @@ def _artifact(name: str, entry: Mapping[str, Any]) -> Artifact:
         runs_code=bool(entry["runs_code"]),
         added_at=float(entry["added_at"]),
         metadata=dict(entry.get("metadata") or {}),
+        judged_on=dict(entry["judged_on"]) if isinstance(entry.get("judged_on"), dict) else None,
+        judged_on_history=[
+            dict(h) for h in entry.get("judged_on_history") or [] if isinstance(h, dict)
+        ],
     )
 
 
@@ -899,6 +1239,26 @@ def _pointer(name: str, which: str, entry: Mapping[str, Any]) -> Pointer:
     )
 
 
+def _change(
+    change: str, pointer: Pointer, *, at: float, by: str = "", reason: str | None = None
+) -> dict[str, Any]:
+    """One line of the journal: what ``change`` did to ``pointer``, when, by whom and why."""
+    return {"change": change, "at": at, "by": by, "reason": reason, "pointer": asdict(pointer)}
+
+
+def _journal_line(line: bytes) -> dict[str, Any] | None:
+    """One line of the journal as the change it holds, or None for one that holds none."""
+    try:
+        change = json.loads(line)
+        if change["change"] not in (MOVED, CLEARED, PROMOTED):
+            return None
+        float(change["at"])
+        Pointer(**change["pointer"])
+    except (ValueError, TypeError, KeyError):
+        return None
+    return change
+
+
 def _pointers_of(name: str, pointers: Mapping[str, dict[str, Any]]) -> dict[str, Pointer]:
     return {which: _pointer(name, which, entry) for which, entry in pointers.get(name, {}).items()}
 
@@ -912,21 +1272,31 @@ def _move_in(
     reference: str,
     by: str,
     reason: str | None,
+    changes: list[dict[str, Any]],
 ) -> Pointer:
-    """`ArtifactStore.move`, over an index already read and held: changes ``pointers``."""
+    """`ArtifactStore.move`, over an index already read and held: changes ``pointers``.
+
+    What it changed is appended to ``changes``, for the journal.
+    """
     target = _resolve_in(artifacts, pointers, name, selector, reference)
     standing = pointers.get(name, {})
     current = standing.get(which)
     if current is not None and current["version"] == target.version:
         raise ArtifactConflictError.already(target.reference, which)
     other = "shadow" if which == "active" else "active"
+    tried = None
     if standing.get(other, {}).get("version") == target.version:
         if which == "shadow":
             raise ArtifactConflictError.shadow_is_active(target.reference)
-        standing.pop(other, None)
+        tried = _pointer(name, other, standing.pop(other))
     standing[which] = _pointer_entry(target, current, by, reason)
     pointers[name] = standing
-    return _pointer(name, which, standing[which])
+    moved = _pointer(name, which, standing[which])
+    changes.append(_change(MOVED, moved, at=moved.moved_at, by=by, reason=reason))
+    if tried is not None:
+        # Active moved onto the version on trial: that is a promotion.
+        changes.append(_change(PROMOTED, tried, at=moved.moved_at, by=by, reason=reason))
+    return moved
 
 
 def _pointer_entry(
@@ -976,7 +1346,12 @@ def _resolve_in(
 
 
 def pinned(artifact: Artifact) -> dict[str, Any]:
-    """``artifact`` as a spawn config carries it: enough to fetch it and check it."""
+    """``artifact`` as a spawn config carries it: enough to fetch it and check it, and what was said of it.
+
+    The metadata goes with it so that the agent reading the version reads what
+    its author said of it too: the threshold a detector flags above, the
+    dataset it was trained on.
+    """
     return {
         "name": artifact.name,
         "version": artifact.version,
@@ -984,13 +1359,16 @@ def pinned(artifact: Artifact) -> dict[str, Any]:
         "format": artifact.format,
         "size": artifact.size,
         "runs_code": artifact.runs_code,
+        "metadata": dict(artifact.metadata),
     }
 
 
 def check_pinned(entry: Any) -> dict[str, Any]:
     """``entry`` if it is a well-formed pinned artifact; `ArtifactError` saying why it is not.
 
-    Asked by a node of what main sent, before it fetches anything.
+    Asked by a node of what main sent, before it fetches anything. The entry
+    comes back with ``metadata`` always a dict: empty when the one who pinned
+    it sent none, as a main from before metadata travelled does.
     """
     if not isinstance(entry, Mapping):
         raise ArtifactError.not_pinned(entry)
@@ -1009,7 +1387,10 @@ def check_pinned(entry: Any) -> dict[str, Any]:
     follows = entry.get("follows")
     if follows is not None and follows not in POINTERS:
         raise ArtifactError.follows_no_pointer(entry, follows)
-    return dict(entry)
+    metadata = entry.get("metadata")
+    if metadata is not None and not isinstance(metadata, Mapping):
+        raise ArtifactError.metadata_not_a_mapping(entry)
+    return {**entry, "metadata": dict(metadata or {})}
 
 
 def pinned_in(config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1056,13 +1437,31 @@ def unpack_directory(archive: Path, target: Path) -> None:
         shutil.rmtree(work, ignore_errors=True)
 
 
+def _plain_parts(name: str) -> tuple[str, ...] | None:
+    """The parts of the archive path ``name``, or None unless each is a plain name.
+
+    Judged by the name, the same on every system: a backslash is a separator on
+    Windows and a ``:`` names a drive or a file's hidden stream there, so a name
+    that is harmless on Linux could climb out of the folder where Windows unpacks.
+    """
+    relative = PurePosixPath(name)
+    if relative.is_absolute():
+        return None
+    parts = relative.parts
+    if any(part in {".", ".."} or "\\" in part or ":" in part for part in parts):
+        return None
+    return parts
+
+
 def _unpack_member(tar: tarfile.TarFile, member: tarfile.TarInfo, into: Path) -> None:
-    relative = PurePosixPath(member.name)
-    if relative.is_absolute() or ".." in relative.parts:
+    parts = _plain_parts(member.name)
+    if parts is None:
         raise ArtifactError.archive_outside(member.name)
-    if not relative.parts:
+    if not parts:
         return
-    destination = into.joinpath(*relative.parts)
+    destination = into.joinpath(*parts)
+    if not destination.resolve().is_relative_to(into.resolve()):
+        raise ArtifactError.archive_outside(member.name)
     if member.isdir():
         destination.mkdir(parents=True, exist_ok=True)
         return
@@ -1133,6 +1532,29 @@ def describe(artifact: Artifact) -> dict[str, Any]:
     return {**asdict(artifact), "reference": artifact.reference, "pinned": artifact.pinned}
 
 
+def _inherited(versions: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """What the newest of ``versions`` is judged on, as a new version takes it, or None."""
+    if not versions or not isinstance(versions[-1].get("judged_on"), dict):
+        return None
+    return {**versions[-1]["judged_on"], "from_version": versions[-1]["version"]}
+
+
+def _check_state_dict(path: Path) -> None:
+    """Refuse a state_dict agents could not load, or say it went in unread where torch is not installed."""
+    try:
+        checked = torch_checkpoints.check(path)
+    except CheckpointRefusedError as exc:
+        raise ArtifactError.refused_checkpoint(path, exc) from exc
+    except (RuntimeError, ValueError, OSError, EOFError, pickle.UnpicklingError) as exc:
+        raise ArtifactError.not_a_checkpoint(path, exc) from exc
+    if not checked:
+        logger.warning(
+            "%s is stored unread: torch is not installed here, so whether agents can load it "
+            "as a state_dict is found out when one starts",
+            path,
+        )
+
+
 def _format_for(path: Path, named: str | None) -> Format:
     if path.is_dir():
         if named not in (None, DIRECTORY_FORMAT):
@@ -1179,6 +1601,10 @@ def _write_tar(directory: Path, out: IO[bytes]) -> None:
     with tarfile.open(fileobj=out, mode="w|", format=tarfile.PAX_FORMAT) as tar:
         for path in _entries(directory):
             relative = path.relative_to(directory).as_posix()
+            # Refused here rather than where it is unpacked: stored, it could not
+            # be unpacked on every system that may be asked to.
+            if not _plain_parts(relative):
+                raise ArtifactError.unportable_name(path)
             info = tarfile.TarInfo(relative)
             info.mtime = 0
             info.uid = info.gid = 0

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Encoding a value for a store that keeps JSON.
 
 SQLite and the in-memory store keep values as JSON text. A value JSON cannot

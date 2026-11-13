@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Intent routing for MainActor.
 
 Classifies each user turn (ACTUATE / HA / PIPELINE / OTHER) with one cheap LLM
@@ -10,7 +11,7 @@ self._result_futures, self.actor_id).
 import asyncio
 import logging
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from wactorz.config import CONFIG
 from wactorz.llm_factory import provider_for
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
 else:
     _Host = object
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class RoutingMixin(_Host):
@@ -39,6 +40,12 @@ class RoutingMixin(_Host):
     described — this docstring used to list the attributes in prose and nothing
     checked that the list was true.
     """
+
+    #: What this agent's model requests have taken, kept by the base class's
+    #: accounting and added to here.
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost_usd: float
 
     #: The integrations whose intents this router offers and accepts. Every one
     #: unless the host says otherwise, so a host built without a say in the
@@ -163,7 +170,7 @@ class RoutingMixin(_Host):
             logger.warning("[%s] Could not fetch HA entities for actuate: %s", self.name, e)
 
         task_id = f"actuate_{uuid.uuid4().hex[:8]}"
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self._result_futures[task_id] = future
 
         try:

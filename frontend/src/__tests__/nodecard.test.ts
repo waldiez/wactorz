@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi } from "vitest";
 import { readingsFrom } from "../agents/nodeReadings";
@@ -12,7 +11,7 @@ import {
     readingParts,
     throttleText,
     type NodeCardData,
-} from "../ui/dashboard/nodeCard";
+} from "../ui/overview/nodeCard";
 
 const PI = {
     manifest_v: 1,

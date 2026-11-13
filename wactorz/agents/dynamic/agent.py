@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """DynamicAgent - A generic actor shell whose behavior is defined by LLM-generated code.
 
 The LLM writes three async functions:
@@ -18,6 +19,7 @@ The `agent` parameter gives access to:
 """
 
 import asyncio
+import dataclasses
 import inspect
 import logging
 import re
@@ -27,11 +29,14 @@ import traceback
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
+from ...core import topic_bus
 from ...core.actor import Actor, ActorState, Message, MessageType
 from ...core.cancellation import cancel_all_until_done
+from ...core.heartbeats import DynamicAgentHeartbeat
 from ...core.paths import resolve_state_dir
 from ...core.questions import Question
 from ...core.state_versions import StateUpgradeError
+from ...core.topics import agent_topic
 from ...core.turns import current_turn, outside_any_turn
 from ...monitoring import agent_metrics
 from ..llm_agent import accumulate_global_cost
@@ -47,7 +52,7 @@ from .sanitize import sanitize_code
 if TYPE_CHECKING:
     from ..llm_agent import LLMProvider
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class _ProgramHalted(Exception):
@@ -133,11 +138,17 @@ class DynamicAgent(Actor):
         output_schema: dict[str, Any] | None = None,  # returned result fields
         llm_provider: Any = None,  # optional LLM for agent.llm.chat()
         trusted: bool = False,  # True = catalog agent, skip safety validator
+        task_timeout_s: float | None = None,  # recipe's own handle_task() limit
         artifacts: Mapping[str, Mapping[str, Any]] | None = None,  # see `AgentAPI.artifact_path`
+        spawn_contract: topic_bus.TopicContract | None = None,  # what its spawn config declared
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._code = code
+        if task_timeout_s is not None:
+            # A recipe whose tasks legitimately run long (real-time playback, a
+            # hardware move) declares so; every other agent keeps the default.
+            self._HANDLE_TASK_TIMEOUT = float(task_timeout_s)
         #: The program this agent was given, before any repair. A repair keeps
         #: to the modules it imports (see `imports_a_repair_adds`); measured
         #: against this rather than the last repair, so rounds cannot add one
@@ -148,10 +159,15 @@ class DynamicAgent(Actor):
         self._artifacts = {key: dict(entry) for key, entry in (artifacts or {}).items()}
         self.poll_interval = poll_interval
         self.description = description
-        self.input_schema = input_schema or {}
-        self.output_schema = output_schema or {}
+        self.input_schema: dict[str, Any] = input_schema or {}
+        self.output_schema: dict[str, Any] = output_schema or {}
         self._llm_provider = llm_provider
         self._trusted = trusted  # catalog agents bypass safety checks
+        #: The topics this agent's spawn config declared, from whoever spawned
+        #: it. Put on the bus at each start, since a stop takes an agent's
+        #: contracts off it; and given at construction, so that an agent the
+        #: supervisor builds again, from what the first was built from, has it.
+        self.spawn_contract = spawn_contract
 
         # Compiled functions — populated in on_start
         self._fn_setup = None
@@ -159,12 +175,12 @@ class DynamicAgent(Actor):
         self._fn_handle_task = None
 
         # Namespace shared across all calls (agent can store state here)
-        self._ns: dict = {}
+        self._ns: dict[str, Any] = {}
 
         # Cost tracking (populated by LLMInterface if LLM is used)
-        self.total_input_tokens = 0
-        self.total_output_tokens = 0
-        self.total_cost_usd = 0.0
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
+        self.total_cost_usd: float = 0.0
         self._last_period_cost_usd = 0.0
 
         # Error tracking for health classification
@@ -190,7 +206,7 @@ class DynamicAgent(Actor):
         # loop, subscription listeners), as opposed to the actor's own loops in
         # ``_tasks``. An in-place code repair tears these down and starts the
         # program again; the actor's message loop and heartbeat keep running.
-        self._program_tasks: list[asyncio.Task] = []
+        self._program_tasks: list[asyncio.Task[Any]] = []
         #: Set once the program has asked to end, so a second ask — or a
         #: process loop still finishing its tick — does not repeat the work.
         self._ending = False
@@ -227,6 +243,12 @@ class DynamicAgent(Actor):
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     async def on_start(self) -> None:
+        """Compile the agent's program and start it, then publish its manifest.
+
+        A program that does not compile is sent to the model to fix, a few times at most; a fix
+        that compiles is kept for the next start. One that still does not compile leaves the
+        agent failed, with the error published.
+        """
         # ── Compile with LLM self-correction on syntax errors ─────────────
         current_code = self._code
         error_msg = self._compile_code(current_code)
@@ -248,7 +270,7 @@ class DynamicAgent(Actor):
                     # ── Write fixed code back to spawn registry so restart uses it ──
                     self._persist_fixed_code(fixed)
                     await self._mqtt_publish(
-                        f"agents/{self.actor_id}/logs",
+                        agent_topic(self.actor_id, "logs"),
                         {
                             "type": "log",
                             "message": f"Syntax error fixed by LLM after {attempt} attempt(s).",
@@ -275,6 +297,7 @@ class DynamicAgent(Actor):
             return
 
         self._start_program()
+        self._declare_spawn_contract()
 
         # Publish manifest immediately so main's registry knows this agent exists
         # even if it never calls publish() (pure handle_task agents, etc.)
@@ -302,7 +325,7 @@ class DynamicAgent(Actor):
             return False
         return True
 
-    def _track_program_task(self, task: asyncio.Task) -> None:
+    def _track_program_task(self, task: asyncio.Task[Any]) -> None:
         """Track a task the generated program owns, for stop and for repair."""
         self._tasks.append(task)
         self._program_tasks.append(task)
@@ -350,7 +373,7 @@ class DynamicAgent(Actor):
             main = find_main_actor(registry)
             if main is not None:
                 try:
-                    main._remove_from_spawn_registry(self.name)
+                    main._remove_from_spawn_registry(self.name, actor_id=self.actor_id)
                 except Exception:
                     logger.debug("[%s] Could not drop the spawn entry", self.name, exc_info=True)
             try:
@@ -385,6 +408,7 @@ class DynamicAgent(Actor):
                     len(still_running),
                 )
         self._program_tasks = [task for task in self._program_tasks if not task.done()]
+        subscribed = bool(self._subscribed_topics)
         self._subscribed_topics.clear()
         # The subscription connection is shared and outlives any one program, so
         # cancelling tasks above does not stop its callbacks. Unbind explicitly.
@@ -392,6 +416,12 @@ class DynamicAgent(Actor):
         if hub is not None:
             await hub.clear()
         release_open_resources(self._api, self._ns, self.name)
+        if subscribed and self.state not in (ActorState.STOPPED, ActorState.FAILED):
+            # The manifest names what the program subscribes to, and that is now
+            # nothing: say so, or main goes on listing the old program's topics
+            # if the repaired one subscribes to none. Not on a stop, which
+            # withdraws the manifest instead.
+            await self._api._publish_manifest()
 
     async def _replace_program(self, fixed: str) -> str | None:
         """Swap the running program for repaired code and start it from setup().
@@ -430,7 +460,7 @@ class DynamicAgent(Actor):
         """The last metrics before the heartbeat loop stops, flagged final."""
         try:
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/metrics",
+                agent_topic(self.actor_id, "metrics"),
                 self._build_metrics()
                 if hasattr(self, "_build_metrics")
                 else {
@@ -447,14 +477,29 @@ class DynamicAgent(Actor):
         except Exception as exc:
             logger.debug("[%s] Final metrics publish failed: %s", self.name, exc)
 
+    def _declare_spawn_contract(self) -> None:
+        """Put on the bus what this agent's spawn declared, if it declared anything.
+
+        Under the id this agent runs with, which its spawn config need not name.
+        """
+        bus = topic_bus.get_topic_bus()
+        if self.spawn_contract is None or not bus:
+            return
+        contract = dataclasses.replace(self.spawn_contract, actor_id=self.actor_id)
+        bus.register_contract(contract)
+        logger.info(
+            "[%s] Declared the topics its spawn named: pub=%s sub=%s",
+            self.name,
+            contract.publishes,
+            contract.subscribes,
+        )
+
     def _unregister_from_bus(self) -> None:
         """Drop this agent's contracts so stale ones do not accumulate."""
         try:
-            from ...core.topic_bus import get_topic_bus
-
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus:
-                bus.unregister(self.name)
+                bus.unregister(self.name, self.actor_id, self._node)
                 logger.debug("[%s] Unregistered from TopicBus", self.name)
         except Exception as exc:
             logger.debug("[%s] Could not unregister from TopicBus: %s", self.name, exc)
@@ -478,6 +523,33 @@ class DynamicAgent(Actor):
         except Exception as e:
             logger.warning("[%s] on_answer() error: %s", self.name, e)
 
+    async def on_model_swapped(self, key: str, model: Any) -> None:
+        """The new version, to the program's ``on_model(agent, key, model)`` if it has one.
+
+        A program that keeps what it loaded in a local or in ``agent.state``
+        replaces it here; one that reads ``agent.load_model(key)`` on each
+        call needs nothing. ``model`` is None when the program opens the file
+        itself through ``agent.artifact_path(key)``, which now names the new
+        version. An error in the hook is the program's, said in the log: the
+        swap itself has landed.
+        """
+        hook = self._ns.get("on_model")
+        if not callable(hook):
+            await super().on_model_swapped(key, model)
+            return
+        try:
+            result = hook(self._api, key, model)
+            if inspect.isawaitable(result):
+                await _bounded_call(result, self._HANDLE_TASK_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("[%s] on_model() timed out", self.name)
+        except _ProgramHalted as halted:
+            if isinstance(halted.original, KeyboardInterrupt):
+                raise halted.original from None
+            logger.warning("[%s] on_model() error: %s", self.name, halted.original)
+        except Exception as e:
+            logger.warning("[%s] on_model() error: %s", self.name, e)
+
     async def _run_generated_cleanup(self) -> None:
         """Give the generated code its chance to let go, under a timeout."""
         cleanup = self._ns.get("cleanup")
@@ -494,6 +566,9 @@ class DynamicAgent(Actor):
                 logger.warning("[%s] cleanup() error: %s", self.name, e)
 
     async def on_stop(self) -> None:
+        """Keep the agent's final cost, publish its last metrics, leave the topic bus, run the
+        program's own cleanup, and release what it left open.
+        """
         # ── Persist final cost metrics so they survive agent deletion ──────
         # Without this, cost data dies with the agent object and the UI
         # can't show lifetime costs for deleted agents.
@@ -596,14 +671,13 @@ class DynamicAgent(Actor):
 
         try:
             # Running model-written agent code is what a DynamicAgent is for.
-            # pylint: disable=exec-used
             exec(compile(clean, f"<{self.name}>", "exec"), self._ns)  # noqa: S102
             self._fn_setup = self._ns.get("setup")
             self._fn_process = self._ns.get("process")
             self._fn_handle_task = self._ns.get("handle_task")
             fns = [
                 f
-                for f in ["setup", "process", "handle_task", "cleanup", "on_answer"]
+                for f in ["setup", "process", "handle_task", "cleanup", "on_answer", "on_model"]
                 if f in self._ns
             ]
             logger.info("[%s] Code compiled OK. Functions: %s", self.name, fns)
@@ -630,7 +704,7 @@ class DynamicAgent(Actor):
         )
         logger.warning("[%s] %s", self.name, reason)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": reason, "timestamp": time.time()},
         )
         return reason
@@ -660,7 +734,7 @@ class DynamicAgent(Actor):
         )
         logger.info("[%s] Asking LLM to fix syntax error: %s", self.name, error_msg[:120])
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {
                 "type": "log",
                 "message": f"Syntax error — asking LLM to fix: {error_msg[:120]}",
@@ -711,7 +785,7 @@ class DynamicAgent(Actor):
                     # ── Write fixed code back to spawn registry so restart uses it ──
                     self._persist_fixed_code(self._code)
                     await self._mqtt_publish(
-                        f"agents/{self.actor_id}/logs",
+                        agent_topic(self.actor_id, "logs"),
                         {
                             "type": "log",
                             "message": f"setup() runtime error fixed by LLM after {attempt} attempt(s).",
@@ -735,6 +809,15 @@ class DynamicAgent(Actor):
 
                 if attempt >= self._MAX_SETUP_RETRIES:
                     break  # exhausted retries
+
+                if self._trusted and isinstance(e, ModuleNotFoundError):
+                    # A package that is not installed is not a bug in the code,
+                    # and the model cannot install it. Asked anyway, it rewrites
+                    # working code around the import, and a rewrite that happens
+                    # to start is saved over the original — for a catalogue
+                    # agent, over code that was reviewed.
+                    await self._report_missing_module(e)
+                    break
 
                 # Ask LLM to fix the runtime error
                 fixed = await self._fix_runtime_with_llm(current_code, str(e), err)
@@ -777,6 +860,21 @@ class DynamicAgent(Actor):
                     attempt + 1,
                 )
         return last_error
+
+    async def _report_missing_module(self, error: ModuleNotFoundError) -> None:
+        """Tell the user which package this agent could not import, and what to do."""
+        module = error.name or str(error)
+        logger.error(
+            "[%s] setup() needs module %r, which is not installed — not asking the model "
+            "to rewrite the code",
+            self.name,
+            module,
+        )
+        await self.notify_user(
+            f"{self.name} could not start: the Python module '{module}' is not installed. "
+            f"Spawn {self.name} again to install its packages, or install the package that "
+            f"provides '{module}' on this machine and then run /agents restart {self.name}."
+        )
 
     async def _run_setup(self) -> None:
         """Run setup() as a background task with LLM self-correction on failure.
@@ -890,7 +988,7 @@ class DynamicAgent(Actor):
         )
         logger.info("[%s] Asking LLM to fix runtime error: %s", self.name, error_msg[:120])
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {
                 "type": "log",
                 "message": f"Runtime error — asking LLM to fix: {error_msg[:120]}",
@@ -999,7 +1097,7 @@ class DynamicAgent(Actor):
             phase,
         )
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {
                 "type": "log",
                 "message": f"{phase} runtime error fixed by LLM in-place.",
@@ -1073,7 +1171,7 @@ class DynamicAgent(Actor):
                         self.name,
                         self._consecutive_errors,
                     )
-                    self.state = ActorState.FAILED
+                    self.state: ActorState = ActorState.FAILED
                     return
                 backoff = min(2**self._consecutive_errors, 30)
                 await asyncio.sleep(backoff)
@@ -1215,7 +1313,7 @@ class DynamicAgent(Actor):
         self._process_seconds.add(seconds)
         agent_metrics.PROCESS_DURATION.labels(agent=self.name).observe(seconds)
 
-    def _build_metrics(self) -> dict:
+    def _build_metrics(self) -> dict[str, Any]:
         """The actor's counters, plus the p50 and p95 of recent tasks and cycles.
 
         Here as well as in Prometheus because a node serves no `/metrics`: this
@@ -1315,6 +1413,10 @@ class DynamicAgent(Actor):
         return None
 
     async def handle_message(self, msg: Message) -> Any:
+        """Run a task through the program's ``handle_task``, as a task of its own when there is
+        one, so a reply the handler waits for can still reach the mailbox; other messages are
+        ignored.
+        """
         if msg.type == MessageType.TASK:
             # ``handle_task`` may await ``agent.send_to()``. Its RESULT must be
             # consumed by this actor's mailbox, so keep that mailbox free while
@@ -1364,7 +1466,7 @@ class DynamicAgent(Actor):
             event["turn"] = turn
         # QoS 1, for the same reason as chat: an error frame lost during a
         # monitor reconnect is the one an operator most wants to have seen.
-        await self._mqtt_publish(f"agents/{self.actor_id}/errors", event, qos=1)
+        await self._mqtt_publish(agent_topic(self.actor_id, "errors"), event, qos=1)
         # Direct actor message to monitor (works without MQTT broker)
         if self._registry:
             monitor = self._registry.find_by_name("monitor")
@@ -1384,7 +1486,7 @@ class DynamicAgent(Actor):
                     )
         # Mirror to /alert so the dashboard picks it up immediately
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/alert",
+            agent_topic(self.actor_id, "alert"),
             {
                 "actor_id": self.actor_id,
                 "name": self.name,
@@ -1424,22 +1526,22 @@ class DynamicAgent(Actor):
             if self._registry:
                 main = find_main_actor(self._registry)
                 if main is not None:
-                    reg = main._get_spawn_registry()
-                    if self.name in reg:
-                        entry = dict(reg[self.name])
-                        if entry.get("code") != fixed_code or "trusted" in entry:
-                            entry["code"] = fixed_code
-                            entry["_code_fixed_at"] = time.time()
-                            # `trusted` vouches for the catalogue's own source;
-                            # kept, a restart would run the model's repair past
-                            # the safety check.
-                            entry.pop("trusted", None)
-                            main._save_to_spawn_registry(entry)
-                            logger.info(
-                                "[%s] Fixed code written to spawn registry (%s chars).",
-                                self.name,
-                                len(fixed_code),
-                            )
+                    entry = main._get_spawn_registry().by_id(self.actor_id)
+                    if entry is not None and (
+                        entry.get("code") != fixed_code or "trusted" in entry
+                    ):
+                        entry["code"] = fixed_code
+                        entry["_code_fixed_at"] = time.time()
+                        # `trusted` vouches for the catalogue's own source;
+                        # kept, a restart would run the model's repair past
+                        # the safety check.
+                        entry.pop("trusted", None)
+                        main._save_to_spawn_registry(entry)
+                        logger.info(
+                            "[%s] Fixed code written to spawn registry (%s chars).",
+                            self.name,
+                            len(fixed_code),
+                        )
 
             # ── 2. Update Supervisor factory (survives Supervisor-driven restart) ─
             # The factory closure captures the original kwargs including the old code.
@@ -1479,17 +1581,20 @@ class DynamicAgent(Actor):
             logger.warning("[%s] Could not persist fixed code: %s", self.name, exc)
 
     def get_status(self) -> dict[str, Any]:
+        """The actor's status, with the agent's description and program."""
         s = super().get_status()
         s["description"] = self.description
         s["code"] = self._code
         s["agent_type"] = "dynamic"
         return s
 
-    def _build_heartbeat(self) -> dict[str, Any]:
-        hb = super()._build_heartbeat()
-        hb["code"] = self._code  # include code in every heartbeat
-        hb["description"] = self.description
-        hb["agent_type"] = "dynamic"
+    def _build_heartbeat(self) -> DynamicAgentHeartbeat:
+        hb: DynamicAgentHeartbeat = {
+            **super()._build_heartbeat(),
+            "code": self._code,  # include code in every heartbeat
+            "description": self.description,
+            "agent_type": "dynamic",
+        }
         return hb
 
     def _current_task_description(self) -> str:

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The agent a node runs is the agent main runs.
 
 A node used to carry its own retelling of the agent contract, because the file
@@ -26,6 +27,7 @@ import pytest
 from wactorz import cli
 from wactorz.agents.dynamic.agent import DynamicAgent
 from wactorz.agents.dynamic.api import AgentAPI
+from wactorz.core import mqtt as core_mqtt
 from wactorz.core.actor import derive_actor_id
 from wactorz.core.node_signing import REQUEST_SIGNATURE_FIELD, node_key, request_signed_for
 from wactorz.node import cli as node_cli
@@ -47,6 +49,18 @@ def _agent(runner: NodeRunner, code: str = "", **config: Any) -> NodeAgent:
 class TestItIsTheSameAgent:
     def test_a_node_agent_is_a_dynamic_agent(self, runner: NodeRunner) -> None:
         assert isinstance(_agent(runner), DynamicAgent)
+
+    @pytest.mark.parametrize("timeout", [None, 140.0])
+    def test_task_timeouts_match_local_agents(
+        self, runner: NodeRunner, tmp_path: Path, timeout: float | None
+    ) -> None:
+        config: dict[str, Any] = {} if timeout is None else {"task_timeout_s": timeout}
+        remote = _agent(runner, **config)
+        local = DynamicAgent(name="local-timeout", code="", persistence_dir=str(tmp_path), **config)
+
+        assert remote._HANDLE_TASK_TIMEOUT == local._HANDLE_TASK_TIMEOUT
+        expected = 60.0 if timeout is None else timeout
+        assert expected == remote._HANDLE_TASK_TIMEOUT
 
     def test_generated_code_is_handed_the_shared_api(self, runner: NodeRunner) -> None:
         # Not a lookalike: the class itself, so a method added for main is on a
@@ -259,11 +273,10 @@ class TestTheNameANodeAnswersTo:
 
 class TestReachingAnAgentElsewhere:
     async def test_send_to_addresses_an_unknown_agent_by_name(self, runner: NodeRunner) -> None:
-        """A node cannot look up which machine holds an agent — main can.
+        """An agent no manifest has placed is sent to by name.
 
-        Refusing for want of that lookup made `send_to` unusable from a node
-        entirely. Every node subscribes to `agents/by-name/+/task`, so naming
-        the agent reaches it wherever among them it runs.
+        Every node subscribes to `agents/by-name/+/task`, so naming the agent
+        reaches it wherever among them it runs, as before nodes read manifests.
         """
         agent = _agent(runner)
         sent: list[tuple[str, Any]] = []
@@ -286,7 +299,36 @@ class TestReachingAnAgentElsewhere:
         (topic, payload) = sent[0]
         assert topic == "agents/by-name/elsewhere/task"
         assert payload["city"] == "Athens"
-        assert payload["_reply_topic"].startswith("agents/by-name/edge-agent/reply/")
+        assert payload["_reply_topic"].startswith("agents/at/node-a/edge-agent/reply/")
+
+    async def test_send_to_reaches_an_agent_on_its_nodes_own_topic(
+        self, runner: NodeRunner
+    ) -> None:
+        # Two nodes run the name; the manifests say where, and pc takes its tasks
+        # on its own topic.
+        for node in ("pc", "pi"):
+            runner.directory.take(
+                f"agents/id-{node}/manifest",
+                json.dumps({"name": "counter", "node": node, "tasks_by_node": True}).encode(),
+            )
+        agent = _agent(runner)
+        sent: list[str] = []
+
+        async def _publish(topic: str, _payload: Any, **_kw: Any) -> None:
+            sent.append(topic)
+
+        agent._mqtt_publish = _publish  # type: ignore[method-assign]
+        await runner.registry.register(agent)
+
+        with contextlib.suppress(ConnectionRefusedError, asyncio.TimeoutError):
+            await asyncio.wait_for(
+                agent._api.send_to("counter@pc", {"n": 1}, timeout=0.05), timeout=2
+            )
+        refused = await agent._api.send_to("counter", {"n": 1}, timeout=0.05)
+
+        assert sent == ["agents/at/pc/counter/task"]
+        assert refused is not None
+        assert "`counter@pc` or `counter@pi`" in refused["error"]
 
     async def test_an_agent_on_this_node_is_reached_in_process(self, runner: NodeRunner) -> None:
         # No broker involved when both are here: the registry delivers it.
@@ -309,15 +351,78 @@ class TestReachingAnAgentElsewhere:
         assert isinstance(result, dict)
         assert result["did"] == "the thing"
 
+    async def test_send_to_reaches_an_agent_on_an_older_node_by_name(
+        self, runner: NodeRunner
+    ) -> None:
+        # A library agent on a node from before this release: its manifest names
+        # neither its node nor how to reach it.
+        runner.directory.take(
+            "agents/legacy-worker/manifest",
+            json.dumps({"name": "worker", "actor_id": "legacy-worker"}).encode(),
+        )
+        agent = _agent(runner)
+        sent: list[str] = []
+
+        async def _publish(topic: str, _payload: Any, **_kw: Any) -> None:
+            sent.append(topic)
+
+        agent._mqtt_publish = _publish  # type: ignore[method-assign]
+        await runner.registry.register(agent)
+
+        with contextlib.suppress(ConnectionRefusedError, asyncio.TimeoutError):
+            await asyncio.wait_for(agent._api.send_to("worker", {}, timeout=0.05), timeout=2)
+
+        assert sent == ["agents/by-name/worker/task"]
+
+    async def test_one_here_is_asked_in_process_whatever_an_old_manifest_says(
+        self, runner: NodeRunner
+    ) -> None:
+        # A node that has gone left its `worker` manifest retained, and this
+        # one's has not come back yet: the registry here is first-hand.
+        runner.directory.take(
+            "agents/gone/manifest",
+            json.dumps({"name": "worker", "node": "gone", "tasks_by_node": True}).encode(),
+        )
+        await runner.spawn_agent(
+            {
+                "name": "worker",
+                "code": "async def handle_task(agent, payload):\n    return {'did': payload['do']}\n",
+            }
+        )
+        await runner.spawn_agent({"name": "caller", "code": ""})
+        caller = runner.get("caller")
+        assert caller is not None
+
+        result = await asyncio.wait_for(
+            caller._api.send_to("worker", {"do": "the thing"}, timeout=2), timeout=5
+        )
+
+        assert isinstance(result, dict)
+        assert result["did"] == "the thing"
+
 
 class TestCommandsSentStraightToTheAgent:
-    """`stop` and `delete` can arrive on `agents/<id>/commands`, bypassing the
-    node's control plane — its agents hold a command listener of their own.
+    """`stop` and `delete` asked of the agent itself bypass the node's control plane.
 
     The base class handles only half of it here, which is why the node agent
     overrides it: the node's own bookkeeping is what makes a stop a stop and a
     delete irreversible.
     """
+
+    async def test_it_holds_no_connection_for_commands(
+        self, runner: NodeRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Main stops and starts it through its node, and a node's broker account
+        # may not read the topic such a connection would subscribe to.
+        def _no_connection(*_args: Any, **_kwargs: Any) -> None:
+            pytest.fail("an agent on a node opened a connection for commands")
+
+        monkeypatch.setattr(core_mqtt, "mqtt_client", _no_connection)
+        await runner.spawn_agent({"name": "edge-agent", "code": ""})
+        agent = runner.get("edge-agent")
+        assert agent is not None
+
+        assert await asyncio.wait_for(agent._command_listener(), timeout=5) is None
 
     async def test_a_stop_takes_the_agent_off_the_node(self, runner: NodeRunner) -> None:
         await runner.spawn_agent({"name": "edge-agent", "code": ""})
@@ -435,9 +540,9 @@ class TestTasksArriveOnATopic:
                 "async def handle_task(agent, payload):\n"
                 "    await asyncio.sleep(3600)\n"
             ),
+            task_timeout_s=0.05,
         )
         agent._compile_code(agent._code)
-        agent._HANDLE_TASK_TIMEOUT = 0.05  # type: ignore[misc]
 
         result = await asyncio.wait_for(agent.run_task({}), timeout=5)
 

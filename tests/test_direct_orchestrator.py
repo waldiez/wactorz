@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Chat in the minimal profile: the model-free orchestrator.
 
 No main runs there, so a message has to reach an agent on its own. ``@name
@@ -248,7 +249,7 @@ class TestStreaming:
 
 
 @agent(name="imu-anomaly", description="scores a reading")
-def score(reading: dict) -> dict:
+def score(reading: dict[str, Any]) -> dict[str, Any]:
     return {"score": abs(reading["ax"]) + abs(reading["ay"]), "reading": reading}
 
 

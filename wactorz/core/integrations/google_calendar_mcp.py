@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Google Calendar MCP integration client (hosted MCP + REST fallback)."""
 
 from datetime import datetime
@@ -35,10 +36,14 @@ CALENDAR_CONFIG = GoogleMcpConfig(
 
 
 def calendar_mcp_config_status() -> dict[str, Any]:
+    """What is configured for Google Calendar, for the agent's status answer; never a secret's
+    value.
+    """
     return CALENDAR_CONFIG.config_status()
 
 
 def calendar_mcp_url() -> str:
+    """The Google Calendar MCP endpoint, without a trailing slash."""
     return CALENDAR_CONFIG.mcp_url()
 
 
@@ -49,7 +54,7 @@ def _parse_iso(value: str) -> datetime | None:
         return None
 
 
-def _format_when(start: dict, end: dict) -> str:
+def _format_when(start: dict[str, Any], end: dict[str, Any]) -> str:
     # The reader's year, so a date near the boundary is judged where they are.
     now_year = datetime.now().astimezone().year
     if start.get("date") and not start.get("dateTime"):
@@ -69,7 +74,7 @@ def _format_when(start: dict, end: dict) -> str:
     return label
 
 
-def _format_events(items: list[dict]) -> str:
+def _format_events(items: list[dict[str, Any]]) -> str:
     if not items:
         return "No events found for that time range."
     lines: list[str] = []
@@ -94,7 +99,7 @@ class GoogleCalendarMcpClient(GoogleMcpClient):
             "list_calendars": self._rest_list_calendars,
         }
 
-    async def _rest_list_events(self, arguments: dict) -> str:
+    async def _rest_list_events(self, arguments: dict[str, Any]) -> str:
         calendar_id = arguments.get("calendarId") or arguments.get("calendar_id") or "primary"
         params: dict[str, str] = {"singleEvents": "true", "orderBy": "startTime"}
         if arguments.get("startTime"):
@@ -109,7 +114,7 @@ class GoogleCalendarMcpClient(GoogleMcpClient):
             raise GoogleRestError(rest_error_message(data))
         return _format_events(data.get("items", []))
 
-    async def _rest_create_event(self, arguments: dict) -> str:
+    async def _rest_create_event(self, arguments: dict[str, Any]) -> str:
         calendar_id = arguments.get("calendarId") or arguments.get("calendar_id") or "primary"
         summary = arguments.get("summary") or "New event"
         start = {"dateTime": arguments.get("startTime")}
@@ -130,7 +135,7 @@ class GoogleCalendarMcpClient(GoogleMcpClient):
         when = _format_when(data.get("start", {}), data.get("end", {}))
         return f"Created '{summary}'" + (f" — {when}" if when else "") + "."
 
-    async def _rest_delete_event(self, arguments: dict) -> str:
+    async def _rest_delete_event(self, arguments: dict[str, Any]) -> str:
         event_id = arguments.get("eventId") or arguments.get("event_id")
         if not event_id:
             raise GoogleRestError.missing_id("event")
@@ -143,7 +148,7 @@ class GoogleCalendarMcpClient(GoogleMcpClient):
             raise GoogleRestError(rest_error_message(data))
         return "Event deleted."
 
-    async def _rest_list_calendars(self, arguments: dict) -> str:
+    async def _rest_list_calendars(self, arguments: dict[str, Any]) -> str:
         status, data = await self._rest_request(
             "GET", "/users/me/calendarList", params={"maxResults": "50"}
         )

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Stopping an actor never consumes the caller's own cancellation.
 
 `Actor.stop()` cancels the actor's tasks and waits for them. Whoever called it

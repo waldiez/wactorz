@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Base Actor - the foundation of the Actor Model framework.
 Every agent IS an actor. Actors communicate via message passing only.
 """
@@ -15,7 +16,8 @@ import sys
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -23,26 +25,35 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 from ..monitoring import actor_metrics
 from ..monitoring.agent_metrics import RecentDurations
-from . import models
+from . import models, topic_bus
 from .artifacts import ArtifactError
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
+from .heartbeats import AgentHeartbeat
+from .identity import derive_actor_id
+from .labels import Label, LabelError, Labels, LabelSpec
+from .manifests import AgentManifest
 from .outbound import DASHBOARD, Answer, OptionsError, answer_topic, check_channel, check_options
 from .paths import agent_state_dir, resolve_state_dir
 from .persistence.api import EPHEMERAL_KEYS, SQLITE_KEYS
 from .persistence.pickle_store import encode_state, read_state_file
+from .persistence.stores import get_db
 from .questions import (
+    CUT_SHORT,
     QUESTIONS_KEY,
     Question,
     answered,
     book_frame,
     book_of,
+    context_text,
     questions_in,
     questions_topic,
 )
 from .state_versions import Upgrade, declared_version, upgraded
 from .subscriptions import SubscriptionHub, is_durable_actor
-from .topic_bus import StreamWindow, get_topic_bus
+from .task_text import TaskEnvelope
+from .topic_bus import StreamWindow
+from .topics import agent_topic, wire_topic
 from .turns import TURN_KEY, current_turn, is_task_topic, outside_any_turn, working_on
 
 if TYPE_CHECKING:
@@ -70,7 +81,7 @@ class SupervisorStrategy(str, Enum):
     REST_FOR_ONE = "rest_for_one"
 
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Objects the per-heartbeat size walk may visit before it stops descending.
 SIZE_WALK_BUDGET = 2000
@@ -93,31 +104,45 @@ def forbidden(command: str, *, protected: bool, essential: bool) -> bool:
     return (protected and command == "delete") or (essential and command == "stop")
 
 
-def derive_actor_id(name: str) -> str:
-    """The actor id a named actor gets, derived from its name and nothing else.
+def has_stable_id(actor: object) -> bool:
+    """Whether this actor's id survives a restart, and so can hold a broker session.
 
-    Deterministic on purpose: the same agent must come back as the same id
-    across restarts, because the broker keys a held session on it and the
-    registry keys everything else on it.
-
-    Exported because several places need to *recognise* a derived id rather than
-    mint one -- deciding whether an actor can hold a broker session, addressing
-    an agent by name. Spelled once so those cannot drift apart: if the formula
-    changed under a copy, nothing would raise, sessions would simply stop being
-    resumed and durability would quietly become clean.
+    An actor's id is stable when it was given one, as an agent main spawned is
+    given the id its spawn registry keeps, or when it derives one from its name.
+    Either way the same agent reconnects as the same client and resumes whatever
+    the broker held for it. An anonymous actor is given a fresh id every
+    incarnation, so a session kept under the old id is unreachable -- keeping
+    one is not harmful, it is pointless, and it costs the broker state until it
+    expires.
     """
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
+    return bool(getattr(actor, "stable_id", False))
 
 
-def has_derived_id(name: str, actor_id: str) -> bool:
-    """Whether this identity comes from the name, and so survives a restart.
+def _takes_actor_id(actor_class: Callable[..., Any]) -> bool:
+    """Whether ``actor_class`` can be handed ``actor_id`` when it is called."""
+    try:
+        parameters = inspect.signature(actor_class).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "actor_id" or p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters)
 
-    A named actor reconnects as the same client and resumes whatever the broker
-    held for it. An anonymous one is given a fresh id every incarnation, so a
-    session kept under the old id is unreachable -- keeping one is not harmful,
-    it is pointless, and it costs the broker state until it expires.
+
+def build_actor(
+    actor_class: Callable[..., Actor], actor_id: str | None, kwargs: Mapping[str, Any]
+) -> Actor:
+    """``actor_class(**kwargs)``, running under ``actor_id`` when one is given.
+
+    The id is handed to a constructor that takes it, and set on the actor once
+    built otherwise, before anything has started: a catalogue class or a
+    factory written without the parameter still runs under the id main keeps.
     """
-    return derive_actor_id(name) == str(actor_id)
+    if actor_id and _takes_actor_id(actor_class):
+        return actor_class(**kwargs, actor_id=actor_id)
+    actor = actor_class(**kwargs)
+    if actor_id:
+        actor.actor_id = actor_id
+        actor.stable_id = True
+    return actor
 
 
 class ActorState(str, Enum):
@@ -201,7 +226,7 @@ class Message:
             and bool(self.payload.get("_monitor_notification"))
         )
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """A JSON-serialisable form, for MQTT and the dashboard."""
         return {
             "type": self.type.value,
@@ -298,9 +323,8 @@ def ask_payload(payload: Any, *, task_id: str, reply_to: str) -> dict[str, Any]:
     ``_reply_to`` says where the RESULT goes.
     """
     body = dict(payload) if isinstance(payload, dict) else {"text": str(payload)}
-    body["_task_id"] = task_id
-    body["_reply_to"] = reply_to
-    return body
+    envelope: TaskEnvelope = {"_task_id": task_id, "_reply_to": reply_to}
+    return {**body, **envelope}
 
 
 class ReplyError(RuntimeError):
@@ -322,10 +346,12 @@ class AskError(RuntimeError):
 
     @classmethod
     def no_registry(cls, asker: str, target: str) -> AskError:
+        """The error for ``asker`` asking ``target`` with no registry to find it in."""
         return cls(f"[{asker}] cannot ask {target!r}: no registry attached")
 
     @classmethod
     def mailbox_full(cls, target: str) -> AskError:
+        """The error for asking ``target`` while its mailbox is full."""
         return cls(f"{target!r} is not taking messages: its mailbox is full")
 
 
@@ -334,10 +360,12 @@ class NotFoundError(LookupError):
 
     @classmethod
     def agent(cls, target: str) -> NotFoundError:
+        """The error for asking ``target`` when no agent by that name is running."""
         return cls(f"no agent named {target!r} is running")
 
     @classmethod
     def question(cls, asker: str, question_id: str) -> NotFoundError:
+        """The error for ``asker`` waiting on ``question_id``, which names no question it asked."""
         return cls(f"[{asker}] no question with id {question_id!r}")
 
 
@@ -350,10 +378,14 @@ class NoAnswerError(asyncio.TimeoutError):
 
     @classmethod
     def from_agent(cls, target: str, timeout: float) -> NoAnswerError:
+        """The error for ``target`` giving no answer within ``timeout`` seconds."""
         return cls(f"{target!r} did not answer within {timeout:g}s")
 
     @classmethod
     def to_question(cls, asker: str, text: str, timeout: float | None) -> NoAnswerError:
+        """The error for no answer to ``asker``'s question ``text``, within ``timeout`` seconds
+        when there was one.
+        """
         waited = "" if timeout is None else f" within {timeout:g}s"
         return cls(f"[{asker}] no answer to {text[:60]!r}{waited}")
 
@@ -389,7 +421,11 @@ class AskHost(Protocol):
     _registry: Any
     _result_futures: Any
 
-    async def send(self, target_id: str, msg_type: Any, payload: Any) -> bool: ...
+    async def send(self, target_id: str, msg_type: Any, payload: Any) -> bool:
+        """Send ``target_id`` a message of ``msg_type`` carrying ``payload``; whether it was
+        delivered.
+        """
+        ...
 
 
 async def ask_through(
@@ -447,6 +483,36 @@ def reply_value(reply: Any, *, task_id: str, target: str) -> Any:
     return cleaned
 
 
+def declared_topics(value: Any) -> tuple[str, ...]:
+    """``SUBSCRIBES`` or ``PUBLISHES`` as a tuple of topics: one string, several, or none."""
+    if isinstance(value, str):
+        return (value,) if value else ()
+    return tuple(str(topic) for topic in value or () if topic)
+
+
+#: Whether `Actor.spawn` leaves the child it builds stopped: see `born_stopped`.
+_BORN_STOPPED: ContextVar[bool] = ContextVar("born_stopped", default=False)
+
+
+@contextlib.contextmanager
+def born_stopped() -> Iterator[None]:
+    """Within this block, `Actor.spawn` builds its child and does not start it.
+
+    For putting back an agent that was stopped on purpose when the process last
+    ran. The child is registered and known to the supervisor, in the state a
+    stop leaves an actor in, so it is listed and can be started; ``on_start``
+    and ``on_stop`` are not called, and nothing of it runs. A context variable
+    rather than an argument, since a spawn from a config goes through a helper
+    per kind of agent, and through a task of its own when packages are
+    installed first: a task started inside the block keeps the setting.
+    """
+    token = _BORN_STOPPED.set(True)
+    try:
+        yield
+    finally:
+        _BORN_STOPPED.reset(token)
+
+
 class Actor(ABC):
     """Base Actor class. All agents inherit from this.
     Actors are fully async and communicate only through messages.
@@ -458,20 +524,23 @@ class Actor(ABC):
         name: str | None = None,
         persistence_dir: str | None = None,
         mailbox_size: int = 1000,
-    ):
+    ) -> None:
         if actor_id:
             self.actor_id = actor_id
         elif name:
             # Deterministic UUID from name — same name always gets same ID across restarts
             self.actor_id = derive_actor_id(name)
         else:
-            self.actor_id = str(uuid.uuid4())
-        self.name = name or f"actor-{self.actor_id[:8]}"
+            self.actor_id: str = str(uuid.uuid4())
+        #: Whether the id outlives this incarnation: given, or derived from the
+        #: name. See `has_stable_id`.
+        self.stable_id: bool = bool(actor_id or name)
+        self.name: str = name or f"actor-{self.actor_id[:8]}"
         self.state = ActorState.IDLE
-        self.metrics = ActorMetrics()
+        self.metrics: ActorMetrics = ActorMetrics()
 
         # Async mailbox (inbox)
-        self._mailbox: asyncio.Queue = asyncio.Queue(maxsize=mailbox_size)
+        self._mailbox: asyncio.Queue[Any] = asyncio.Queue(maxsize=mailbox_size)
         #: When the message being handled was taken up, on the monotonic clock;
         #: None between messages.
         self._handling_since: float | None = None
@@ -479,7 +548,7 @@ class Actor(ABC):
         #: metrics frame. See `wactorz.monitoring.actor_metrics`.
         self._queue_waits = RecentDurations()
         self._message_durations = RecentDurations()
-        self._outbox: dict[str, asyncio.Queue] = {}  # actor_id -> queue ref
+        self._outbox: dict[str, asyncio.Queue[Any]] = {}  # actor_id -> queue ref
 
         # Registry reference (set by ActorSystem)
         self._registry: ActorRegistry | None = None
@@ -517,7 +586,7 @@ class Actor(ABC):
         # `state_dir` is first asked for, so an actor can be built without
         # touching the disk.
         self._persistence_dir = agent_state_dir(persistence_dir or resolve_state_dir(), self.name)
-        self._persistent_state: dict = {}
+        self._persistent_state: dict[str, Any] = {}
         #: Without a persistence API: the pickled bytes of each value in the
         #: state file that would not unpickle, written back until set again.
         self._unreadable_state: dict[str, bytes] = {}
@@ -540,17 +609,17 @@ class Actor(ABC):
         self.supervisor_id: str | None = None
 
         # Handlers
-        self._handlers: dict[MessageType, Callable] = {}
+        self._handlers: dict[MessageType, Callable[..., Any]] = {}
         #: Correlation id → the future waiting on that request's RESULT.
         #: Populated by whoever sends a TASK carrying `_task_id`; settled by
         #: `_resolve_pending_result` as the RESULT is received, ahead of the
         #: mailbox, so a handler waiting on it is not in its own way.
-        self._result_futures: dict[str, asyncio.Future] = {}
+        self._result_futures: dict[str, asyncio.Future[Any]] = {}
         #: The manifest this actor last published, as it published it (see
         #: `_send_manifest`). Main reads its own agents' manifests from here
         #: rather than from the broker, where any node may publish one under
         #: their names.
-        self._published_manifest: dict[str, Any] | None = None
+        self._published_manifest: AgentManifest | None = None
         #: Who waits for the person's answer to a question, by question id:
         #: one future per question, and how many waiters share it.
         self._answer_waiters: dict[str, tuple[asyncio.Future[str], int]] = {}
@@ -559,7 +628,7 @@ class Actor(ABC):
         self._setup_default_handlers()
 
         # Background tasks
-        self._tasks: list[asyncio.Task] = []
+        self._tasks: list[asyncio.Task[Any]] = []
         #: Resolved once this run's stop has finished; see stop(). Created by the
         #: first stop, not here, and cleared by start().
         self._stopped: asyncio.Future[None] | None = None
@@ -569,12 +638,15 @@ class Actor(ABC):
         self._artifacts: dict[str, dict[str, Any]] = {}
         #: What `load_model` has loaded, by key, so a model is read once.
         self._loaded_models: dict[str, Any] = {}
+        #: Whether each loaded key was read with ``allow_code``, so a swap
+        #: reads the new version the way the program read the old one.
+        self._model_load_flags: dict[str, bool] = {}
 
         logger.info("[%s] Actor created with id=%s", self.name, self.actor_id)
 
     # ─── Lifecycle ────────────────────────────────────────────────────────────
 
-    async def start(self):
+    async def start(self) -> None:
         """Start the actor's event loop."""
         self._stopped = None
         self.state = ActorState.RUNNING
@@ -593,10 +665,17 @@ class Actor(ABC):
             if isinstance(saved_msgs, dict) and saved_msgs.get("count"):
                 self.metrics.messages_processed = int(saved_msgs["count"])
         await self.on_start()
+        if self._published_manifest is None:
+            await self._announce_declared()
         # A question asked before a restart is still open: listen for its
         # answer, which goes to `on_operator_answer` since nothing awaits it,
-        # and say again what the book holds, for a reader that missed it.
-        if self.open_questions():
+        # and say again what the book holds, for a reader that missed it. A
+        # permission is closed instead: what waited for it did not survive.
+        still_open = self.open_questions()
+        for question in still_open:
+            if question.permission:
+                await self.close_permission(question.id, CUT_SHORT)
+        if any(not question.permission for question in still_open):
             self._hear_answers()
         if self.questions():
             await self._publish_questions()
@@ -607,7 +686,7 @@ class Actor(ABC):
         await self._publish_status()
         logger.info("[%s] Actor started.", self.name)
 
-    async def stop(self):
+    async def stop(self) -> None:
         """Gracefully stop the actor, once per run however many ask.
 
         A second stop -- a replace or a migration that reaches an actor the
@@ -627,9 +706,9 @@ class Actor(ABC):
             if not self._stopped.done():
                 self._stopped.set_result(None)
 
-    async def _stop_once(self):
+    async def _stop_once(self) -> None:
         """What stopping does: wind down, clean up, save, and say so."""
-        self.state = ActorState.STOPPED
+        self.state: ActorState = ActorState.STOPPED
         await self._wind_down_tasks()
         # Each window holds a broker connection of its own, and a restart builds
         # a new actor with windows of its own.
@@ -691,7 +770,7 @@ class Actor(ABC):
             final_metrics = self._build_metrics()
             final_metrics["final"] = True  # signals UI this is the last message
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/metrics",
+                agent_topic(self.actor_id, "metrics"),
                 final_metrics,
             )
         except Exception:  # noqa: S110  # a last telemetry frame, sent on the way out
@@ -702,11 +781,9 @@ class Actor(ABC):
         # Remove this agent's TopicContract so the planner doesn't wire
         # against topics from stopped/deleted/replaced agents.
         try:
-            from .topic_bus import get_topic_bus
-
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus:
-                bus.unregister(self.name)
+                bus.unregister(self.name, self.actor_id, self._node)
         except Exception:  # noqa: S110  # TopicBus is optional; not being registered is not fatal
             pass  # TopicBus not initialised or unavailable — not fatal
         actor_metrics.forget(self.name)
@@ -810,7 +887,7 @@ class Actor(ABC):
 
     # ─── Message Loop ─────────────────────────────────────────────────────────
 
-    async def _message_loop(self):
+    async def _message_loop(self) -> None:
         """Main message processing loop."""
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
@@ -880,7 +957,7 @@ class Actor(ABC):
             future.set_result(msg.payload)
         return True
 
-    async def _dispatch(self, msg: Message):
+    async def _dispatch(self, msg: Message) -> None:
         """Dispatch message to the appropriate handler, inside the turn it belongs to."""
         with working_on(msg.turn_id, self.name):
             if self._resolve_pending_result(msg):
@@ -891,7 +968,7 @@ class Actor(ABC):
             else:
                 await self.handle_message(msg)
 
-    def _setup_default_handlers(self):
+    def _setup_default_handlers(self) -> None:
         self._handlers = {
             MessageType.START: self._handle_lifecycle,
             MessageType.STOP: self._handle_lifecycle,
@@ -899,7 +976,7 @@ class Actor(ABC):
             MessageType.HEARTBEAT: self._handle_heartbeat_msg,
         }
 
-    async def _handle_lifecycle(self, msg: Message):
+    async def _handle_lifecycle(self, msg: Message) -> None:
         """Apply a lifecycle message through the one implementation of it.
 
         Message-passing is another way to ask for the same thing, not another
@@ -910,33 +987,35 @@ class Actor(ABC):
         """
         await self.apply_command(msg.type.value)
 
-    async def _handle_status_request(self, msg: Message):
+    async def _handle_status_request(self, msg: Message) -> None:
         status = self.get_status()
         # Reply to sender_id (always), reply_to is optional override
         target = msg.reply_to or msg.sender_id
         if target:
             await self.send(target, MessageType.STATUS_RESPONSE, status)
 
-    async def _handle_heartbeat_msg(self, msg: Message):
+    async def _handle_heartbeat_msg(self, msg: Message) -> None:
         pass  # Monitor actor handles these
 
     # ─── Heartbeat ────────────────────────────────────────────────────────────
 
-    async def _heartbeat_loop(self, interval: float = 10.0):
+    async def _heartbeat_loop(self, interval: float = 10.0) -> None:
         """Periodically publish heartbeat via MQTT."""
         # Publish immediately on start so monitor sees agent right away
         await asyncio.sleep(0.5)
         self.metrics.heartbeats += 1
-        await self._mqtt_publish(f"agents/{self.actor_id}/heartbeat", self._build_heartbeat())
-        await self._mqtt_publish(f"agents/{self.actor_id}/metrics", self._build_metrics())
+        await self._mqtt_publish(agent_topic(self.actor_id, "heartbeat"), self._build_heartbeat())
+        await self._mqtt_publish(agent_topic(self.actor_id, "metrics"), self._build_metrics())
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
                 await asyncio.sleep(interval)
                 hb = self._build_heartbeat()
                 self.metrics.heartbeats += 1
                 self.metrics.last_heartbeat = time.time()
-                await self._mqtt_publish(f"agents/{self.actor_id}/heartbeat", hb)
-                await self._mqtt_publish(f"agents/{self.actor_id}/metrics", self._build_metrics())
+                await self._mqtt_publish(agent_topic(self.actor_id, "heartbeat"), hb)
+                await self._mqtt_publish(
+                    agent_topic(self.actor_id, "metrics"), self._build_metrics()
+                )
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -976,7 +1055,7 @@ class Actor(ABC):
         total += self._mailbox.qsize() * 512
         return total / (1024 * 1024)
 
-    def _build_heartbeat(self) -> dict:
+    def _build_heartbeat(self) -> AgentHeartbeat:
         """What this actor reports every heartbeat.
 
         No CPU figure: actors share one process, and so one CPU reading, which
@@ -995,7 +1074,7 @@ class Actor(ABC):
             "node": self._node,
         }
 
-    def _build_metrics(self) -> dict:
+    def _build_metrics(self) -> dict[str, Any]:
         metrics = {
             "actor_id": self.actor_id,
             "messages_processed": self.metrics.messages_processed,
@@ -1058,6 +1137,20 @@ class Actor(ABC):
             if sup is not None:
                 sup.resupervise(self.name, self)
 
+    def _remember_stop(self, stopped: bool) -> None:
+        """Have main remember that this actor was stopped on purpose, or started again.
+
+        What makes a stop outlast a restart of the process: main puts back the
+        agents it spawned when it starts, and one it remembers as stopped is put
+        back stopped. Said once the stop or the start has happened, so one that
+        fails leaves what main remembers as it was. Main keeps it for the agents
+        it spawned, by id; for any other actor this does nothing.
+        """
+        main = self._registry.find_by_name("main") if self._registry else None
+        remember = getattr(main, "keep_local_stop", None)
+        if remember is not None:
+            remember(self.actor_id, stopped)
+
     async def apply_command(self, command: str) -> bool:
         """Run a lifecycle command on this actor. Returns whether it took effect.
 
@@ -1082,18 +1175,31 @@ class Actor(ABC):
             if self.state != ActorState.STOPPED:
                 logger.warning("[%s] Ignoring 'start' — actor is %s.", self.name, self.state.value)
                 return False
-            await self.start()
+            try:
+                await self.start()
+            except BaseException:
+                # `start` marks the actor running before `on_start`, and starts
+                # its loops last: one that fails part-way would be reported
+                # running with nothing running. It is wound back down, as the
+                # supervisor does with a spawn that fails to start, so it shows
+                # as stopped and a later start can try again; the caller still
+                # hears why.
+                with contextlib.suppress(Exception):
+                    await self.stop()
+                raise
             self._resume_supervision()
+            self._remember_stop(False)
         elif command == "stop":
             self._release_from_supervision()
             await self.stop()
+            self._remember_stop(True)
         elif command == "delete":
             self._leave_supervision()
             await self.delete_own_traces()
             if self._registry:
                 main = self._registry.find_by_name("main")
                 if main and hasattr(main, "_remove_from_spawn_registry"):
-                    main._remove_from_spawn_registry(self.name)  # pyright: ignore[reportAttributeAccessIssue]
+                    main._remove_from_spawn_registry(self.name, actor_id=self.actor_id)  # pyright: ignore[reportAttributeAccessIssue]
                 await self._registry.unregister(self.actor_id)
             await self.stop()
         else:
@@ -1108,7 +1214,7 @@ class Actor(ABC):
         except Exception:
             logger.exception("[%s] on_delete failed; deleting anyway", self.name)
 
-    async def _command_listener(self):
+    async def _command_listener(self) -> None:
         """Carry commands from agents/{id}/commands to :meth:`apply_command`.
 
         Transport only. Needed for actors a caller cannot reach in process —
@@ -1123,11 +1229,11 @@ class Actor(ABC):
             session_kwargs,
         )
 
-        topic = f"agents/{self.actor_id}/commands"
+        topic = agent_topic(self.actor_id, "commands")
         # Same rule the subscription hub follows: only an identity that
         # survives a restart can resume a session, so an anonymous actor
         # connects clean rather than leaving one behind per incarnation.
-        durable = has_derived_id(self.name, self.actor_id)
+        durable = has_stable_id(self)
         session = session_kwargs(AGENT_SESSION_EXPIRY_SECONDS) if durable else {}
         # A `commands` purpose: SubscriptionHub already holds this agent's
         # unqualified id, and two connections sharing an id kick each other off
@@ -1211,7 +1317,7 @@ class Actor(ABC):
         """
         return await ask_through(self, target, payload, timeout=timeout)
 
-    async def broadcast(self, msg_type: MessageType, payload: Any = None):
+    async def broadcast(self, msg_type: MessageType, payload: Any = None) -> None:
         """Broadcast to all registered actors."""
         if self._registry:
             await self._registry.broadcast(self.actor_id, msg_type, payload)
@@ -1283,8 +1389,10 @@ class Actor(ABC):
 
     # ─── Actor Spawning ───────────────────────────────────────────────────────
 
-    async def spawn(self, actor_class: type[Actor], **kwargs: Any) -> Actor:
-        """Spawn a child actor. The child inherits:
+    async def spawn(
+        self, actor_class: type[Actor], *, actor_id: str | None = None, **kwargs: Any
+    ) -> Actor:
+        """Spawn a child actor, under ``actor_id`` when one is given. The child inherits:
         - MQTT client (so it can publish heartbeats/status)
         - Registry (so it can send/receive messages)
         - Persistence dir defaults to same root
@@ -1297,7 +1405,7 @@ class Actor(ABC):
         # Default persistence to same root as parent
         kwargs.setdefault("persistence_dir", str(self._persistence_dir.parent))
 
-        child = actor_class(**kwargs)
+        child = build_actor(actor_class, actor_id, kwargs)
 
         # Inherit everything from parent
         child._mqtt_client = self._mqtt_client  # MQTT publish connection
@@ -1321,19 +1429,13 @@ class Actor(ABC):
         if self._registry:
             await self._registry.register(child)
 
-        # Start the child. Registered already, so a start that fails or is
-        # cancelled must take it back out: nothing else holds it to stop, and
-        # supervision has not adopted it yet.
-        try:
-            await child.start()
-        except BaseException:
-            # Shielded, so a second cancellation cannot cut the cleanup short;
-            # it is still passed on once the cleanup is done.
-            try:
-                await asyncio.shield(self._discard_child(child))
-            except asyncio.CancelledError:
-                raise asyncio.CancelledError from None
-            raise
+        stopped = _BORN_STOPPED.get()
+        if stopped:
+            # Put back as it was left: registered, so it has a card and can be
+            # started, with nothing of it running and neither hook called.
+            child.state = ActorState.STOPPED
+        else:
+            await self._start_child(child)
 
         # ── Erlang/OTP: register child under Supervisor so it's never an orphan ──
         # We reach into the registry to find the ActorSystem's supervisor.
@@ -1348,13 +1450,15 @@ class Actor(ABC):
                     # actor's settings have become since.
                     cls = actor_class
                     kw = dict(kwargs)
+                    # The id it runs under, not the one a rebuild would derive.
+                    kept_id = child.actor_id if child.stable_id else None
                     mc = self._mqtt_client
                     mb = self._mqtt_broker
                     mp = self._mqtt_port
                     papi = self._persistence_api
 
                     async def _child_factory() -> Actor:
-                        c = cls(**kw)
+                        c = build_actor(cls, kept_id, kw)
                         c._mqtt_client = mc
                         c._mqtt_broker = mb
                         c._mqtt_port = mp
@@ -1386,6 +1490,10 @@ class Actor(ABC):
                         restart_window=60.0,
                         restart_delay=2.0,
                     )
+                    if stopped:
+                        # Known to the supervisor and not watched, as after a
+                        # deliberate stop: a start is what supervises it again.
+                        supervisor.release(child.name)
                     logger.info(
                         "[%s] Child '%s' auto-registered under Supervisor.", self.name, child.name
                     )
@@ -1398,25 +1506,42 @@ class Actor(ABC):
         # Immediately announce to monitor - don't wait for heartbeat loop
         await child._publish_status()
         await child._mqtt_publish(
-            f"agents/{child.actor_id}/heartbeat",
+            agent_topic(child.actor_id, "heartbeat"),
             child._build_heartbeat(),
         )
         await child._mqtt_publish(
-            f"agents/{child.actor_id}/metrics",
+            agent_topic(child.actor_id, "metrics"),
             child._build_metrics(),
         )
 
         # Notify parent's topic that it spawned a child
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/spawned",
+            agent_topic(self.actor_id, "spawned"),
             {"child_id": child.actor_id, "child_name": child.name, "timestamp": time.time()},
         )
         logger.info("[%s] Spawned: %s (%s)", self.name, child.name, child.actor_id[:8])
         return child
 
+    async def _start_child(self, child: Actor) -> None:
+        """Start ``child``, which is registered already, or take it back out.
+
+        A start that fails or is cancelled leaves nothing else holding the child
+        to stop it, and supervision has not adopted it yet.
+        """
+        try:
+            await child.start()
+        except BaseException:
+            # Shielded, so a second cancellation cannot cut the cleanup short;
+            # it is still passed on once the cleanup is done.
+            try:
+                await asyncio.shield(self._discard_child(child))
+            except asyncio.CancelledError:
+                raise asyncio.CancelledError from None
+            raise
+
     # ─── Persistence ──────────────────────────────────────────────────────────
 
-    async def _save_persistent_state(self):
+    async def _save_persistent_state(self) -> None:
         """Save state to disk. Called on stop() after on_stop()."""
         if self._persistence_api is not None:
             # State is kept per key as persist() is called, and its file is
@@ -1426,7 +1551,7 @@ class Actor(ABC):
             return
         self._write_state_file()
 
-    async def _load_persistent_state(self):
+    async def _load_persistent_state(self) -> None:
         """Load state from disk. Called on start() before on_start().
 
         With a persistence API there is nothing to load here: the store reads
@@ -1527,7 +1652,46 @@ class Actor(ABC):
             self._loaded_models[key] = await asyncio.to_thread(
                 models.load, entry, allow_code=allow_code
             )
+            self._model_load_flags[key] = allow_code
         return self._loaded_models[key]
+
+    async def swap_model(self, key: str, entry: Mapping[str, Any]) -> Any:
+        """Serve the version ``entry`` names under ``key`` from now on, without a restart.
+
+        ``entry`` is a pinned artifact with the ``path`` it is read at on this
+        host, as `artifacts` holds them. A model the program loaded through
+        `load_model` is read again first, off the event loop and with the same
+        ``allow_code`` as before, so the old one is served until the new one is
+        in memory; then the path and the loaded object change together, in one
+        assignment, and `on_model_swapped` tells the program. One the program
+        opens itself through `artifact_path` changes path only, and the hook
+        says so with ``None``.
+
+        Returns what is now loaded, or None. Raises what the loader raises when
+        the new version cannot be read, and then nothing has changed: the agent
+        keeps serving what it served. Raises `UnnamedModelError` for a key this
+        agent does not name.
+        """
+        self._artifact(key)
+        loaded: Any = None
+        if key in self._loaded_models:
+            loaded = await asyncio.to_thread(
+                models.load, entry, allow_code=self._model_load_flags.get(key, False)
+            )
+        self._artifacts[key] = dict(entry)
+        if key in self._loaded_models:
+            self._loaded_models[key] = loaded
+        await self.on_model_swapped(key, loaded)
+        return loaded
+
+    async def on_model_swapped(self, key: str, model: Any) -> None:
+        """The version under ``key`` changed; ``model`` is the new one, or None. Override to react.
+
+        Called after `swap_model` has put the new version in place, so a
+        program that kept the old object somewhere replaces it here. The
+        default does nothing: a program that reads through `load_model` or
+        `artifact_path` on each call already sees the new version.
+        """
 
     def _artifact(self, key: str) -> dict[str, Any]:
         entry = self._artifacts.get(key)
@@ -1660,7 +1824,7 @@ class Actor(ABC):
             cost,
         )
 
-    def persist(self, key: str, value: Any):
+    def persist(self, key: str, value: Any) -> None:
         """Persist a key-value pair. Routes to the correct backend:
           - Known structured keys → SQLite
           - Known ephemeral keys → process memory
@@ -1739,32 +1903,41 @@ class Actor(ABC):
         order is then not kept, and the callback runs against itself.
 
         A callback that keeps raising marks the actor FAILED after a few
-        failures in a row, which is the supervisor's cue to restart it.
+        failures in a row, which is the supervisor's cue to restart it. A topic
+        of Wactorz's own may be written bare, as for `publish`.
         """
         if not callable(callback):
             raise NotCallableError(topic, callback)
+        topic = wire_topic(topic)
         if self._sub_hub is None:
             self._sub_hub = self._make_hub()
         task = self._sub_hub.bind(topic, _as_coroutine_callback(callback), concurrency=concurrency)
         if task is not None:
             self._tasks.append(task)
 
-    def window(self, topic: str, seconds: float = 300, max_size: int = 1000) -> StreamWindow:
+    def window(
+        self, topic: str, seconds: float = 300, max_size: int = 1000, *, event_time: bool = False
+    ) -> StreamWindow:
         """A rolling window over the last ``seconds`` of messages on ``topic``.
 
         Returns a :class:`~wactorz.core.topic_bus.StreamWindow`, with ``mean``,
         ``min``, ``max``, ``rising``, ``falling``, ``absent_for`` and the rest,
         fed from the broker from the moment it is made. One window per topic:
         asking again for the same topic returns the one that has been filling.
+        ``event_time`` times entries by what each payload says happened and
+        ends the window at the newest entry, for a replay or a source on its
+        own clock; off, the wall clock. A topic of Wactorz's own may be written
+        bare, as for `publish`.
         """
+        topic = wire_topic(topic)
         existing = self._windows.get(topic)
         if existing is not None:
             return existing
-        bus = get_topic_bus()
+        bus = topic_bus.get_topic_bus()
         if bus is not None:
-            made = bus.make_window(topic, seconds=seconds, max_size=max_size)
+            made = bus.make_window(topic, seconds=seconds, max_size=max_size, event_time=event_time)
         else:
-            made = StreamWindow(topic, seconds=seconds, max_size=max_size)
+            made = StreamWindow(topic, seconds=seconds, max_size=max_size, event_time=event_time)
             made.start(self._mqtt_broker, self._mqtt_port)
         self._windows[topic] = made
         return made
@@ -1789,10 +1962,35 @@ class Actor(ABC):
         text. ``retain`` keeps the last message on the broker for whoever
         subscribes later; ``qos=1`` asks for at-least-once delivery, for a
         message that must not be lost while the broker is away.
-        """
-        await self._mqtt_publish(topic, payload, retain=retain, qos=qos)
 
-    async def _mqtt_publish(self, topic: str, payload: Any, retain: bool = False, qos: int = 0):
+        A dict sent is also kept on this agent's contract in main's topic
+        registry, when main runs in this process, as what the agent was seen
+        publishing on ``topic``: an agent often publishes topics it never
+        declared, and the wiring shows what it really sends.
+
+        A topic of Wactorz's own may be written bare; it goes under the
+        install's namespace (`wactorz.core.topics.wire_topic`).
+        """
+        topic = wire_topic(topic)
+        await self._mqtt_publish(topic, payload, retain=retain, qos=qos)
+        if isinstance(payload, dict):
+            self._note_published(topic, payload)
+
+    def _note_published(self, topic: str, payload: dict[str, Any]) -> None:
+        """Keep ``payload`` on this agent's contract as what it publishes on ``topic``; best-effort."""
+        bus = topic_bus.get_topic_bus()
+        if bus is None or topic_bus.is_machinery(topic):
+            return
+        try:
+            contract = bus.registry.get(self.name, self.actor_id, self._node or None)
+            if contract is not None:
+                contract.update_observed(topic, payload)
+        except Exception as exc:
+            logger.debug("[%s] Recording what it published on %r failed: %s", self.name, topic, exc)
+
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = False, qos: int = 0
+    ) -> None:
         if self._mqtt_client:
             try:
                 # Stamp telemetry frames with the agent's own name. logs/spawned
@@ -1832,8 +2030,8 @@ class Actor(ABC):
         """MQTT v5 user properties to send with ``encoded`` on ``topic``. None for most actors."""
         return None
 
-    async def _publish_status(self):
-        await self._mqtt_publish(f"agents/{self.actor_id}/status", self.get_status())
+    async def _publish_status(self) -> None:
+        await self._mqtt_publish(agent_topic(self.actor_id, "status"), self.get_status())
 
     async def notify_user(
         self,
@@ -1883,7 +2081,7 @@ class Actor(ABC):
         # publisher would leave this at 0 -- and a frame emitted while the
         # monitor is reconnecting would simply be gone. The agent said
         # something; the user never sees it.
-        await self._mqtt_publish(f"agents/{self.actor_id}/chat", payload, qos=1)
+        await self._mqtt_publish(agent_topic(self.actor_id, "chat"), payload, qos=1)
         return payload["id"]
 
     # ─── Questions to a person ────────────────────────────────────────────────
@@ -1896,6 +2094,8 @@ class Actor(ABC):
         channel: str = DASHBOARD,
         user: str = "",
         timeout: float | None = None,
+        label: Mapping[str, Any] | None = None,
+        context: str = "",
     ) -> str:
         """Ask the person ``text``, offer ``options``, and return the one they pick.
 
@@ -1915,20 +2115,36 @@ class Actor(ABC):
         ``asyncio.TimeoutError`` is raised. The question stays open, and a
         later pick still reaches :meth:`on_operator_answer`.
 
-        Raises ``ValueError`` for no options, or options or a channel the
-        channels cannot show.
+        ``label`` makes the answer a label of the provenance graph: the
+        ``source`` it is about, the window from ``start`` (and to ``end``, open
+        when unsaid) in event time, and ``values``, which option stands for
+        which label value; an option left out, such as "Not sure", makes none.
+        Main records the label once the answer is in the question book, for an
+        agent here or on a node. See docs/design/labels-and-provenance.md.
+
+        ``context`` says why this is being asked: what the agent saw, what the
+        answer will change. It is shown with the question in the dashboard's
+        Inbox, and is not sent to chat channels.
+
+        Raises ``ValueError`` for no options, options or a channel the channels
+        cannot show, or a ``label`` that cannot be used -- before anything is
+        sent.
         """
         if not options:
             raise OptionsError.none()
+        checked = check_options(options)
+        spec = None if label is None else LabelSpec.parse(label, checked)
         self._hear_answers()
         question_id = await self.notify_user(text, options=options, channel=channel, user=user)
         question = Question(
             id=question_id,
             text=str(text),
-            options=check_options(options),
+            options=checked,
             channel=check_channel(channel),
             user=str(user).strip(),
             asked_at=time.time(),
+            label=None if spec is None else spec.to_dict(),
+            context=context_text(context),
         )
         await self._write_question(question)
         try:
@@ -1947,6 +2163,41 @@ class Actor(ABC):
             Question(**{**question.to_dict(), "options": question.options, "fallen_back": True})
         )
         return await self.wait_for_answer(question_id, timeout=timeout)
+
+    async def label(
+        self,
+        source: str,
+        value: str,
+        *,
+        start: Any,
+        end: Any = None,
+        note: str = "",
+        model: str = "",
+    ) -> Label:
+        """Record that ``source`` was ``value`` from ``start`` (to ``end``, open when unsaid).
+
+        Times are event times: Unix seconds, or ISO 8601 with an offset. The
+        label is recorded as this agent's, superseding the earlier labels it
+        overlaps on ``source`` (see :class:`wactorz.core.labels.Labels`).
+
+        Main keeps the labels, so an agent on a node cannot write one this way
+        yet; its questions' answers still become labels through
+        :meth:`ask_operator`. Raises :class:`~wactorz.core.labels.LabelError`
+        for a label that cannot be taken as written, or there.
+        """
+        db = get_db()
+        if getattr(self, "reads_history_from_main", False) or db is None:
+            raise LabelError.not_here()
+        return await asyncio.to_thread(
+            Labels(db).write,
+            source=source,
+            start=start,
+            end=end,
+            value=value,
+            actor=f"agent:{self.name}",
+            note=note,
+            model=model,
+        )
 
     async def wait_for_answer(self, question_id: str, *, timeout: float | None = None) -> str:
         """The option picked for the question ``question_id``, waiting up to ``timeout`` seconds.
@@ -1990,6 +2241,52 @@ class Actor(ABC):
     def open_questions(self) -> list[Question]:
         """The questions still waiting for an answer, oldest first."""
         return sorted((q for q in self.questions().values() if q.open), key=lambda q: q.asked_at)
+
+    async def ask_permission(self, text: str, options: Sequence[str]) -> str:
+        """Ask the person on the dashboard for leave to do something, and return the question's id.
+
+        The question is in the book, so it stays in the Inbox and survives a
+        reload, but unlike :meth:`ask_operator` nothing here listens for the
+        answer: the topic it would arrive on is open to anything on the broker,
+        which could then grant itself the permission. The caller waits for its
+        own ``dashboard_answer`` (see
+        :class:`~wactorz.core.outbound.TakesDashboardAnswers`), records the
+        pick with :meth:`permission_answered`, and ends a wait with no pick by
+        :meth:`close_permission`.
+        """
+        question_id = await self.notify_user(text, options=options)
+        await self._write_question(
+            Question(
+                id=question_id,
+                text=str(text),
+                options=check_options(options),
+                channel=DASHBOARD,
+                asked_at=time.time(),
+                permission=True,
+            )
+        )
+        return question_id
+
+    async def permission_answered(self, answer: Answer) -> None:
+        """Record ``answer`` in the book, for a question still open."""
+        question = self.questions().get(answer.id)
+        if question is not None and question.open:
+            await self._write_question(
+                answered(question, answer.option, answer.index, answer.channel, answer.note)
+            )
+
+    async def close_permission(self, question_id: str, option: str) -> None:
+        """End the question ``question_id`` with ``option``, in the book and on every dashboard."""
+        closing = Answer(
+            id=question_id,
+            agent_id=self.actor_id,
+            option=option,
+            index=-1,
+            channel=self.name,
+            timestamp=time.time(),
+        )
+        await self.permission_answered(closing)
+        await self._mqtt_publish(closing.topic, closing.to_payload(), qos=1)
 
     async def on_operator_answer(self, question: Question, option: str) -> None:
         """Called with the person's pick when nothing awaits it.
@@ -2042,6 +2339,9 @@ class Actor(ABC):
         if question is None:
             logger.debug("[%s] an answer to a question not asked here: %s", self.name, answer.id)
             return
+        if question.permission:
+            logger.debug("[%s] a broker answer to a permission, ignored: %s", self.name, answer.id)
+            return
         if question.answer is not None:
             logger.debug(
                 "[%s] %r was already answered; ignoring %r", self.name, question.id, answer.option
@@ -2057,7 +2357,7 @@ class Actor(ABC):
 
     # ─── Status ───────────────────────────────────────────────────────────────
 
-    def get_status(self) -> dict:
+    def get_status(self) -> dict[str, Any]:
         """This actor's identity, state and counters, as the dashboard shows them."""
         return {
             "actor_id": self.actor_id,
@@ -2071,7 +2371,7 @@ class Actor(ABC):
 
     # ─── Abstract / Override ──────────────────────────────────────────────────
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         """Called when actor starts. Override for init logic."""
 
     async def publish_manifest(
@@ -2091,12 +2391,13 @@ class Actor(ABC):
             input_schema  = {"city": "str — city name to fetch weather for"}
             output_schema = {"temp_c": "float", "condition": "str", "humidity": "int"}
         """
-        manifest = {
+        manifest: AgentManifest = {
             "name": self.name,
             "actor_id": self.actor_id,
             "description": description,
-            "publishes": publishes or [],
-            "subscribes": subscribes or [],
+            # Held as they travel, as the agent publishes and subscribes to them.
+            "publishes": [wire_topic(t) for t in publishes or []],
+            "subscribes": [wire_topic(t) for t in subscribes or []],
             "capabilities": capabilities or [],
             "input_schema": input_schema or {},
             "output_schema": output_schema or {},
@@ -2104,14 +2405,39 @@ class Actor(ABC):
         }
         await self._send_manifest(manifest)
 
-    async def _send_manifest(self, manifest: dict[str, Any]) -> None:
+    async def _announce_declared(self) -> None:
+        """Publish a manifest from what the class declares, for an actor that announced nothing itself.
+
+        An `Actor` subclass registered with the system says what it reads and
+        writes in ``SUBSCRIBES`` and ``PUBLISHES``; without a manifest main
+        would know none of it, and the agent would be missing from the topic
+        registry and the wiring. One that declares no topics is left as it is.
+        """
+        cls = type(self)
+        subscribes = declared_topics(getattr(cls, "SUBSCRIBES", ()))
+        publishes = declared_topics(getattr(cls, "PUBLISHES", ()))
+        if not subscribes and not publishes:
+            return
+        await self.publish_manifest(
+            description=str(getattr(cls, "DESCRIPTION", "") or ""),
+            publishes=list(publishes),
+            capabilities=[str(c) for c in getattr(cls, "CAPABILITIES", ()) or ()],
+            input_schema=dict(getattr(cls, "INPUT_SCHEMA", {}) or {}),
+            output_schema=dict(getattr(cls, "OUTPUT_SCHEMA", {}) or {}),
+            subscribes=list(subscribes),
+        )
+
+    async def _send_manifest(self, manifest: AgentManifest) -> None:
         """Publish ``manifest`` as this actor's, retained, and keep it as the one main reads.
 
         Every manifest goes out through here, so the copy main trusts for its
         own agents is always the one last sent.
         """
+        if self._artifacts and "models" not in manifest:
+            # The models it serves, by name: which version stands where is the store's to say.
+            manifest = {**manifest, "models": models.served_models(self._artifacts)}
         self._published_manifest = manifest
-        await self._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
+        await self._mqtt_publish(agent_topic(self.actor_id, "manifest"), manifest, retain=True)
 
     async def withdraw_manifest(self) -> None:
         """Withdraw the retained manifest, announcing that this actor is gone.
@@ -2127,12 +2453,12 @@ class Actor(ABC):
         QoS 1 because a lost withdrawal leaves the broker replaying the manifest
         to every subscriber that connects later.
         """
-        await self._mqtt_publish(f"agents/{self.actor_id}/manifest", b"", retain=True, qos=1)
+        await self._mqtt_publish(agent_topic(self.actor_id, "manifest"), b"", retain=True, qos=1)
 
-    async def on_stop(self):
+    async def on_stop(self) -> None:
         """Called when actor stops. Override for cleanup."""
 
-    async def on_delete(self):
+    async def on_delete(self) -> None:
         """Called before the stop that ends a deletion. Override to remove what stop keeps.
 
         A stop is expected to be undone later, so it keeps state; a delete
@@ -2149,8 +2475,8 @@ class Actor(ABC):
         """
 
     @abstractmethod
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         """Handle messages not caught by default handlers."""
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<Actor name={self.name} id={self.actor_id[:8]} state={self.state.value}>"

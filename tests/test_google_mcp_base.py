@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The shared Google client: hosted MCP first, the REST API when that is refused.
 
 Google's hosted MCP servers answer tool calls with PERMISSION_DENIED for any

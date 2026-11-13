@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a chain, a graph or a job needs from an agent: its own directory, more
 than one message at a time, and a way to report spend made outside the system's
 providers."""
@@ -33,7 +34,7 @@ class TestStateDir:
 
     def test_a_decorated_function_sees_it_on_the_actor(self, tmp_path: Path) -> None:
         @agent
-        def keep(payload: dict, me: FunctionAgent) -> str:
+        def keep(payload: dict[str, Any], me: FunctionAgent) -> str:
             return str(me.state_dir)
 
         actor = spec_of(keep).build(persistence_dir=str(tmp_path))  # pyright: ignore[reportOptionalMemberAccess]
@@ -99,7 +100,7 @@ class TestCallsThroughTheSystemsModelAreCounted:
         from wactorz.agents.llm.providers.fake import FakeProvider
 
         @agent
-        async def ask(payload: dict, me: FunctionAgent) -> str:
+        async def ask(payload: dict[str, Any], me: FunctionAgent) -> str:
             text, _usage = await me.llm.complete([{"role": "user", "content": payload["q"]}])
             return text
 
@@ -130,7 +131,7 @@ class TestCallsThroughTheSystemsModelAreCounted:
                 )
 
         @agent
-        async def plan(payload: dict, me: FunctionAgent) -> int:
+        async def plan(payload: dict[str, Any], me: FunctionAgent) -> int:
             result = await me.llm.complete_with_tools([], [])
             return len(result.tool_calls)
 
@@ -140,7 +141,7 @@ class TestCallsThroughTheSystemsModelAreCounted:
 
     def test_without_a_provider_me_llm_is_still_none(self, tmp_path: Path) -> None:
         @agent
-        def plain(payload: dict, me: FunctionAgent) -> bool:
+        def plain(payload: dict[str, Any], me: FunctionAgent) -> bool:
             return me.llm is None
 
         actor = spec_of(plain).build(persistence_dir=str(tmp_path))  # pyright: ignore[reportOptionalMemberAccess]
@@ -190,7 +191,7 @@ class TestConcurrency:
         most = 0
         seen: list[int] = []
 
-        async def slow(payload: dict) -> None:
+        async def slow(payload: dict[str, Any]) -> None:
             nonlocal running, most
             running += 1
             most = max(most, running)
@@ -214,7 +215,7 @@ class TestConcurrency:
         most = 0
         done: list[int] = []
 
-        async def slow(payload: dict) -> None:
+        async def slow(payload: dict[str, Any]) -> None:
             nonlocal running, most
             running += 1
             most = max(most, running)
@@ -238,7 +239,7 @@ class TestConcurrency:
     async def test_stopping_the_hub_stops_every_worker(self, tmp_path: Path) -> None:
         actor = Probe(name="parallel", persistence_dir=str(tmp_path))
 
-        async def nothing(payload: dict) -> None:
+        async def nothing(payload: dict[str, Any]) -> None:
             return None
 
         actor.subscribe("jobs/#", nothing, concurrency=2)
@@ -258,7 +259,7 @@ class TestConcurrency:
         with pytest.raises(ValueError, match="at least 1"):
 
             @agent(concurrency=0)
-            def bad(payload: dict) -> None:
+            def bad(payload: dict[str, Any]) -> None:
                 return None
 
     async def test_a_decorated_function_runs_tasks_beside_its_mailbox(self, tmp_path: Path) -> None:
@@ -266,7 +267,7 @@ class TestConcurrency:
         started: list[str] = []
 
         @agent(concurrency=2)
-        async def slow(payload: dict) -> dict:
+        async def slow(payload: dict[str, Any]) -> dict[str, Any]:
             started.append(payload["id"])
             await asyncio.sleep(0.05)
             return {"done": payload["id"]}
@@ -274,7 +275,7 @@ class TestConcurrency:
         spec = spec_of(slow)
         assert spec is not None and spec.concurrency == 2
         actor = spec.build(persistence_dir=str(tmp_path))
-        replies: list[dict] = []
+        replies: list[dict[str, Any]] = []
 
         async def send(target: Any, kind: Any, payload: Any, **_: Any) -> None:
             replies.append(payload)
@@ -304,7 +305,7 @@ class TestConcurrency:
         order: list[str] = []
 
         @agent
-        async def slow(payload: dict) -> dict:
+        async def slow(payload: dict[str, Any]) -> dict[str, Any]:
             order.append("start " + payload["id"])
             await asyncio.sleep(0.01)
             order.append("end " + payload["id"])
@@ -346,7 +347,7 @@ class TestATopicFailureIsSaidOnTheFeed:
         self, tmp_path: Path
     ) -> None:
         @agent(subscribes="jobs/#")
-        def explode(payload: dict) -> None:
+        def explode(payload: dict[str, Any]) -> None:
             raise RuntimeError("AG2's openai client is not usable")
 
         actor = spec_of(explode).build(persistence_dir=str(tmp_path))  # pyright: ignore[reportOptionalMemberAccess]
@@ -502,7 +503,7 @@ class TestAG2Bridge:
 
     def _actor(self, tmp_path: Path, provider: Any) -> Any:
         @agent
-        def probe(payload: dict) -> None:
+        def probe(payload: dict[str, Any]) -> None:
             return None
 
         spec = spec_of(probe)
@@ -595,7 +596,7 @@ class TestAG2Bridge:
         assert bridge.model_config(self._actor(tmp_path, FakeProvider())) is None
 
         @agent
-        def probe(payload: dict) -> None:
+        def probe(payload: dict[str, Any]) -> None:
             return None
 
         spec = spec_of(probe)

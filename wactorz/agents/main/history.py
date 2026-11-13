@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Main answering reads of its stored history for agents running on nodes.
 
 The time series, detections and Home Assistant state changes live in main's
@@ -31,11 +32,12 @@ import time
 from typing import Any
 
 from ...core.persistence import get_db
+from ...core.topics import main_topic
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The topic agents on nodes publish their history reads to.
-HISTORY_TOPIC = "main/history_request"
+HISTORY_TOPIC = main_topic("history_request")
 
 #: What one reply's rows may take, encoded. Under the broker's packet limit with
 #: room for the reply's own fields and the topic.
@@ -72,18 +74,22 @@ class BadRequest(ValueError):
 
     @classmethod
     def unknown_query(cls, query: Any) -> BadRequest:
+        """The error for a ``query`` that is none of the history queries."""
         return cls(f"unknown query {query!r}; one of {sorted([*QUERIES, STATS])}")
 
     @classmethod
     def unknown_filter(cls, query: str, name: str) -> BadRequest:
+        """The error for a filter ``name`` that ``query`` does not take."""
         return cls(f"{query} takes no filter {name!r}")
 
     @classmethod
     def wrong_type(cls, name: str, wanted: type) -> BadRequest:
+        """The error for a filter ``name`` given a value that is not a ``wanted``."""
         return cls(f"{name} must be a {wanted.__name__}")
 
     @classmethod
     def out_of_range(cls, name: str) -> BadRequest:
+        """The error for a filter ``name`` given a value out of range."""
         return cls(f"{name} is out of range")
 
 

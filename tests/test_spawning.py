@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for ``wactorz.agents.mixins.spawning.SpawnMixin``.
 
 These exercise the real mixin against a lightweight fake Actor host. Routing is
@@ -12,14 +13,15 @@ Run with ``pytest`` (or ``make test-py``). Async mixin methods are driven throug
 import asyncio
 import json
 import logging
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, NoReturn, cast
 
 import pytest
 
+from tests.waiting import until
 from wactorz.agents.catalog_agent import _build_native_catalog, get_native_factory
+from wactorz.agents.dependency_install import outcome_from_result
 from wactorz.agents.llm_agent import LLMProvider
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.spawns import SpawnService
@@ -27,25 +29,35 @@ from wactorz.agents.mixins import spawning
 from wactorz.agents.mixins.spawning import SpawnMixin, SpawnPlaceholder
 from wactorz.core.actor import ActorState, ReplyError
 from wactorz.core.packages import APPROVAL_TIMEOUT_S
+from wactorz.core.paths import resolve_state_dir
 from wactorz.core.persistence import PickleStore, WactorzDB
 from wactorz.core.pip import PIP_TIMEOUT_S
 
 
-def run(coro):
+def run(coro) -> Any:
     """Drive a coroutine to completion without pytest-asyncio."""
     return asyncio.run(coro)
+
+
+def _available_off_loop(requirements: list[str]) -> list[str]:
+    with pytest.raises(RuntimeError, match="no running event loop"):
+        asyncio.get_running_loop()
+    assert requirements == ["numpy"]
+    return []
 
 
 # ── Fakes ────────────────────────────────────────────────────────────────────
 
 
 class FakeActor:
-    def __init__(self, name):
+    def __init__(self, name) -> None:
         self.name = name
         self.actor_id = f"id-{name}"
         self.stopped = False
+        # What a spawn hands back runs, unless it was put back stopped.
+        self.state = ActorState.RUNNING
 
-    async def stop(self):
+    async def stop(self) -> None:
         self.stopped = True
 
 
@@ -53,7 +65,7 @@ class FakeSupervisor:
     """Records the entries it is told to forget, and when, against the actors' stops."""
 
     def __init__(self, log: list[str]) -> None:
-        self._specs: dict = {}
+        self._specs: dict[str, Any] = {}
         self._log = log
 
     def drop_supervised(self, name: str) -> None:
@@ -61,17 +73,17 @@ class FakeSupervisor:
 
 
 class FakeRegistry:
-    def __init__(self):
+    def __init__(self) -> None:
         self._by_name = {}
         self._supervisor_ref: FakeSupervisor | None = None
 
-    def add(self, actor):
+    def add(self, actor) -> None:
         self._by_name[actor.name] = actor
 
-    def find_by_name(self, name):
+    def find_by_name(self, name) -> Any | None:
         return self._by_name.get(name)
 
-    async def unregister(self, actor_id):
+    async def unregister(self, actor_id) -> None:
         for n, a in list(self._by_name.items()):
             if a.actor_id == actor_id:
                 del self._by_name[n]
@@ -80,7 +92,7 @@ class FakeRegistry:
 class _BaseHost(SpawnMixin):
     """Supplies the Actor-base surface the mixin relies on."""
 
-    def __init__(self, registry, name):
+    def __init__(self, registry, name) -> None:
         self.name = name
         self.actor_id = f"id-{name}"
         # What the mixin hands the agents it creates; never called here.
@@ -88,36 +100,43 @@ class _BaseHost(SpawnMixin):
         self._registry = registry
         self.registry: FakeRegistry = registry
         self._result_futures = {}
-        self._persistence_dir = Path(tempfile.mkdtemp()) / name  # .parent is the base
+        self._persistence_dir = Path(resolve_state_dir()) / name  # .parent is the base
         self.spawn_calls = []  # (cls, kwargs)
         self.sent = []  # installer payloads
         self.published = []  # mqtt dashboard echoes
         self.state = ActorState.RUNNING
-        self.detached: list[asyncio.Task] = []  # background work the host was handed
+        self.detached: list[asyncio.Task[Any]] = []  # background work the host was handed
+        self.install_result: dict[str, Any] = {
+            "message": "installed ok"
+        }  # what the installer answers
+        self.told: list[str] = []  # chat notices
 
-    async def spawn(self, actor_class, **kwargs):
+    async def spawn(self, actor_class, **kwargs) -> "FakeActor":
         self.spawn_calls.append((actor_class, kwargs))
         actor = FakeActor(kwargs.get("name", "anon"))
         self.registry.add(actor)
         return actor
 
-    async def send(self, target_id, msg_type, payload):
+    async def send(self, target_id, msg_type, payload) -> None:
         self.sent.append(payload)
         # Resolve the install future immediately, standing in for the installer.
         fut = self._result_futures.get(payload.get("_task_id"))
         if fut is not None and not fut.done():
-            fut.set_result({"message": "installed ok"})
+            fut.set_result(self.install_result)
 
-    async def _mqtt_publish(self, topic, payload, **_kw):
+    async def notify_user(self, text, **_extra) -> None:
+        self.told.append(text)
+
+    async def _mqtt_publish(self, topic, payload, **_kw) -> None:
         self.published.append((topic, payload))
 
-    def persist(self, key, value):
+    def persist(self, key, value) -> None:
         pass
 
-    def recall(self, key, default=None):
+    def recall(self, key, default=None) -> Any:
         return default
 
-    def run_detached(self, coro, *, name=None):
+    def run_detached(self, coro, *, name=None) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro, name=name)
         self.detached.append(task)
         return task
@@ -126,25 +145,25 @@ class _BaseHost(SpawnMixin):
 class MainHost(_BaseHost):
     """Owns the spawn registry and user facts, like MainActor."""
 
-    def __init__(self, registry):
+    def __init__(self, registry) -> None:
         super().__init__(registry, "main")
         self.registered = []
         self._agent_manifests = {}
 
-    def _save_to_spawn_registry(self, config):
+    def _save_to_spawn_registry(self, config) -> None:
         self.registered.append(config)
 
-    def _remove_from_spawn_registry(self, name):
+    def _remove_from_spawn_registry(self, name, node=None, *, actor_id=None) -> None:
         self.registered = [c for c in self.registered if c.get("name") != name]
 
-    def get_user_facts(self):
+    def get_user_facts(self) -> dict[str, str]:
         return {"pref_timezone": "Europe/Athens"}
 
 
 class PeerHost(_BaseHost):
     """No registry/facts ownership, like PlannerAgent."""
 
-    def __init__(self, registry):
+    def __init__(self, registry) -> None:
         super().__init__(registry, "planner-x")
 
 
@@ -159,26 +178,26 @@ class FakeMain(MainActor):
 
     def __init__(self, persistence_dir: str) -> None:
         super().__init__(llm_provider=None, name="main", persistence_dir=persistence_dir)
-        self.registered: list[dict] = []
+        self.registered: list[dict[str, Any]] = []
         self.stopped = False
 
     async def stop(self) -> None:
         self.stopped = True
 
-    def _save_to_spawn_registry(self, config: dict) -> None:
+    def _save_to_spawn_registry(self, config: dict[str, Any]) -> None:
         self.registered.append(config)
 
-    def get_user_facts(self) -> dict:
+    def get_user_facts(self) -> dict[str, Any]:
         return {"pref_timezone": "Europe/Athens"}
 
 
 @pytest.fixture
-def main_host():
+def main_host() -> "MainHost":
     return MainHost(FakeRegistry())
 
 
 @pytest.fixture
-def peer_setup(tmp_path: Path):
+def peer_setup(tmp_path: Path) -> "tuple[PeerHost, FakeRegistry, FakeMain]":
     reg = FakeRegistry()
     # tmp_path: Actor.__init__ creates its persistence directory, so a default
     # one would write ./actor_state/main into the working copy.
@@ -190,7 +209,7 @@ def peer_setup(tmp_path: Path):
 # ── Routing (checked by spawned class name) ──────────────────────────────────
 
 
-def test_route_dynamic(main_host):
+def test_route_dynamic(main_host) -> None:
     actor = run(
         main_host._spawn_local_from_config(
             {"name": "cpu", "type": "dynamic", "code": "async def setup(a): pass"}
@@ -202,18 +221,18 @@ def test_route_dynamic(main_host):
     assert kw["name"] == "cpu"
 
 
-def test_route_llm_explicit(main_host):
+def test_route_llm_explicit(main_host) -> None:
     run(main_host._spawn_local_from_config({"name": "q", "type": "llm", "system_prompt": "hi"}))
     assert main_host.spawn_calls[-1][0].__name__ == "LLMAgent"
 
 
-def test_route_llm_implicit(main_host):
+def test_route_llm_implicit(main_host) -> None:
     # No type (defaults to 'dynamic'), no code, but has a system prompt.
     run(main_host._spawn_local_from_config({"name": "q2", "system_prompt": "you are helpful"}))
     assert main_host.spawn_calls[-1][0].__name__ == "LLMAgent"
 
 
-def test_route_scheduled_injects_timezone(main_host):
+def test_route_scheduled_injects_timezone(main_host) -> None:
     run(
         main_host._spawn_local_from_config(
             {"name": "morning", "type": "scheduled", "schedule": {"type": "daily", "at": "07:00"}}
@@ -224,13 +243,13 @@ def test_route_scheduled_injects_timezone(main_host):
     assert kw["timezone"] == "Europe/Athens"
 
 
-def test_route_scheduled_invalid_returns_none(main_host):
+def test_route_scheduled_invalid_returns_none(main_host) -> None:
     actor = run(main_host._spawn_local_from_config({"name": "bad", "type": "scheduled"}))
     assert actor is None
     assert not main_host.spawn_calls
 
 
-def test_route_ha_actuator(main_host):
+def test_route_ha_actuator(main_host) -> None:
     run(
         main_host._spawn_local_from_config(
             {"name": "lights-on", "type": "ha_actuator", "automation_id": "lights-on"}
@@ -241,7 +260,7 @@ def test_route_ha_actuator(main_host):
     assert kw["name"] == "lights-on"
 
 
-def test_ha_actuator_internal_rename(main_host):
+def test_ha_actuator_internal_rename(main_host) -> None:
     # The handler's defensive rename, exercised directly (the dispatcher is the
     # primary collision guard, so we bypass it here).
     main_host._registry.add(FakeActor("lights-on"))
@@ -254,7 +273,7 @@ def test_ha_actuator_internal_rename(main_host):
     assert name != "lights-on" and name.startswith("lights-on-")
 
 
-def test_route_native(main_host):
+def test_route_native(main_host) -> None:
     # Native agents carry no code/prompt — the factory is re-resolved by name
     # from the catalog. weather-agent has no optional deps, so it always resolves.
     actor = run(main_host._spawn_local_from_config({"name": "weather-agent", "type": "native"}))
@@ -264,31 +283,46 @@ def test_route_native(main_host):
     assert kw["name"] == "weather-agent"
 
 
-def test_native_persisted_for_restore(main_host):
+def test_route_native_with_the_options_it_was_spawned_with(main_host) -> None:
+    # A library agent restored from the registry is built as it was asked for.
+    options = {"topics": ["sensors/#"], "source_field": "device"}
+    actor = run(
+        main_host._spawn_local_from_config(
+            {"name": "recorder", "type": "native", "options": options}
+        )
+    )
+    assert actor is not None
+    _factory, kw = main_host.spawn_calls[-1]
+    assert kw["options"] == options
+    run(main_host._spawn_local_from_config({"name": "weather-agent", "type": "native"}))
+    assert "options" not in main_host.spawn_calls[-1][1]
+
+
+def test_native_persisted_for_restore(main_host) -> None:
     # The regression under fix: a native agent must land in the spawn registry
     # so it is restored after a process restart (previously it never was).
     run(main_host._spawn_local_from_config({"name": "weather-agent", "type": "native"}))
     assert [c["name"] for c in main_host.registered] == ["weather-agent"]
 
 
-def test_native_unknown_returns_none(main_host):
+def test_native_unknown_returns_none(main_host) -> None:
     actor = run(main_host._spawn_local_from_config({"name": "no-such-native", "type": "native"}))
     assert actor is None
     assert not main_host.spawn_calls
 
 
-def test_unknown_type_returns_none(main_host):
+def test_unknown_type_returns_none(main_host) -> None:
     assert run(main_host._spawn_local_from_config({"name": "x", "type": "wat"})) is None
 
 
-def test_no_code_no_prompt_returns_none(main_host):
+def test_no_code_no_prompt_returns_none(main_host) -> None:
     assert run(main_host._spawn_local_from_config({"name": "empty", "type": "dynamic"})) is None
 
 
 # ── Idempotency / replace ────────────────────────────────────────────────────
 
 
-def test_existing_no_replace_returns_existing(main_host):
+def test_existing_no_replace_returns_existing(main_host) -> None:
     pre = FakeActor("dup")
     main_host._registry.add(pre)
     actor = run(main_host._spawn_local_from_config({"name": "dup", "type": "dynamic", "code": "x"}))
@@ -296,7 +330,7 @@ def test_existing_no_replace_returns_existing(main_host):
     assert not main_host.spawn_calls
 
 
-def test_existing_with_replace(main_host):
+def test_existing_with_replace(main_host) -> None:
     pre = FakeActor("dup")
     main_host._registry.add(pre)
     actor = run(
@@ -308,7 +342,7 @@ def test_existing_with_replace(main_host):
     assert main_host.spawn_calls and actor is not pre
 
 
-def test_a_replaced_agent_leaves_supervision_before_it_stops(main_host):
+def test_a_replaced_agent_leaves_supervision_before_it_stops(main_host) -> None:
     # The replacement takes a fresh entry when it is spawned. If that spawn
     # fails, an entry left holding the stopped agent would be stopped again at
     # shutdown; and forgetting it first keeps the watch loop off the agent while
@@ -335,7 +369,7 @@ def test_a_replaced_agent_leaves_supervision_before_it_stops(main_host):
 # ── Install models ───────────────────────────────────────────────────────────
 
 
-def test_present_packages_spawn_directly(main_host):
+def test_present_packages_spawn_directly(main_host) -> None:
     actor = run(
         main_host._spawn_local_from_config(
             {"name": "d", "type": "dynamic", "code": "x", "install": ["os", "json"]}
@@ -345,7 +379,25 @@ def test_present_packages_spawn_directly(main_host):
     assert not main_host.sent  # installer never contacted
 
 
-def test_blocking_install(main_host):
+@pytest.mark.parametrize("action", ["spawn", "install"])
+def test_requirement_scans_run_off_the_event_loop(
+    main_host: MainHost, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    monkeypatch.setattr(spawning, "missing_requirements", _available_off_loop)
+    if action == "spawn":
+        actor = run(
+            main_host._spawn_local_from_config(
+                {"name": "d", "type": "dynamic", "code": "x", "install": ["numpy"]}
+            )
+        )
+        assert actor is not None
+        assert not isinstance(actor, SpawnPlaceholder)
+    else:
+        assert run(main_host._install_packages(["numpy"])).ok
+    assert not main_host.sent
+
+
+def test_blocking_install(main_host) -> None:
     main_host._registry.add(FakeActor("installer"))
     actor = run(
         main_host._spawn_local_from_config(
@@ -358,16 +410,96 @@ def test_blocking_install(main_host):
     assert main_host.spawn_calls
 
 
-def test_background_install_returns_placeholder(main_host):
+def test_a_failed_install_is_reported_and_not_spawned(main_host) -> None:
+    main_host._registry.add(FakeActor("installer"))
+    main_host.install_result = {
+        "failed": ["totally_missing_pkg_zzz"],
+        "results": {"totally_missing_pkg_zzz": "failed: ERROR: no matching distribution"},
+    }
+    actor = run(
+        main_host._spawn_local_from_config(
+            {
+                "name": "d6",
+                "type": "dynamic",
+                "code": "x",
+                "require_install_success": True,
+                "install": ["totally_missing_pkg_zzz"],
+            },
+            blocking_install=True,
+        )
+    )
+    assert actor is None
+    assert main_host.spawn_calls == []
+    assert main_host.registered == []
+    (told,) = main_host.told
+    assert "totally_missing_pkg_zzz: ERROR: no matching distribution" in told
+
+
+def test_an_install_needing_a_restart_keeps_the_agent_for_after_it(main_host) -> None:
+    main_host._registry.add(FakeActor("installer"))
+    main_host.install_result = {"failed": [], "restart_required": ["websockets 17.1 -> 15.0.1"]}
+
+    async def scenario() -> None:
+        await main_host._spawn_local_from_config(
+            {
+                "name": "d7",
+                "type": "dynamic",
+                "code": "x",
+                "require_install_success": True,
+                "install": ["totally_missing_pkg_zzz"],
+            },
+            blocking_install=False,
+        )
+        await asyncio.gather(*main_host.detached)
+
+    run(scenario())
+    assert main_host.spawn_calls == []
+    # Kept (the real registry is keyed by name), so the restart brings it up.
+    assert {cfg["name"] for cfg in main_host.registered} == {"d7"}
+    (told,) = main_host.told
+    assert "restart Wactorz" in told
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_installed_packages_cannot_bypass_a_strict_restart(main_host, monkeypatch, strict) -> None:
+    outcome_from_result({"restart_required": ["websockets 16.1.1 -> 15.0.1"]})
+    monkeypatch.setattr(spawning, "missing_requirements", lambda _packages: [])
+    config = {
+        "name": "retry",
+        "type": "dynamic",
+        "code": "x",
+        "install": ["numpy"],
+        "require_install_success": strict,
+    }
+
+    result = run(main_host._spawn_local_from_config(config, blocking_install=True))
+
+    assert (result is None) is strict
+    assert bool(main_host.spawn_calls) is not strict
+    if strict:
+        assert "restart Wactorz" in main_host.told[0]
+
+
+def test_the_install_request_asks_for_chat_progress(main_host) -> None:
+    main_host._registry.add(FakeActor("installer"))
+    run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d8"))
+    (request,) = main_host.sent
+    assert request["notify"] is False
+    assert request["for_agent"] == "d8"
+
+
+def test_background_install_returns_placeholder(main_host) -> None:
     main_host._registry.add(FakeActor("installer"))
 
-    async def scenario():
+    async def scenario() -> None:
         actor = await main_host._spawn_local_from_config(
             {"name": "d3", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
             blocking_install=False,
         )
         assert isinstance(actor, SpawnPlaceholder)
-        await asyncio.sleep(0.1)  # let the background task finish
+        # The install runs in the background; wait for it rather than for a
+        # fixed time, which a busy runner outlasts.
+        await until(lambda: main_host.spawn_calls, "the background install spawning the agent")
 
     run(scenario())
     assert main_host.spawn_calls
@@ -376,17 +508,17 @@ def test_background_install_returns_placeholder(main_host):
     assert "log" in echoed and "spawned" in echoed
 
 
-def test_install_fast_path_no_send(main_host):
+def test_install_fast_path_no_send(main_host) -> None:
     main_host._registry.add(FakeActor("installer"))
     run(main_host._install_packages(["os", "json"], agent_name="x"))
     assert not main_host.sent
 
 
-def test_an_install_that_times_out_is_a_warning_not_a_stop(monkeypatch, main_host, caplog):
+def test_an_install_that_times_out_is_a_warning_not_a_stop(monkeypatch, main_host, caplog) -> None:
     # The agent is spawned regardless and says so itself if the import fails.
     main_host._registry.add(FakeActor("installer"))
 
-    async def _never(*_args, **_kwargs):
+    async def _never(*_args, **_kwargs) -> NoReturn:
         raise asyncio.TimeoutError("'installer' did not answer within 120s")
 
     monkeypatch.setattr(spawning, "ask_through", _never)
@@ -396,10 +528,10 @@ def test_an_install_that_times_out_is_a_warning_not_a_stop(monkeypatch, main_hos
     assert "Install timed out" in caplog.text
 
 
-def test_an_install_the_installer_refuses_is_a_warning(monkeypatch, main_host, caplog):
+def test_an_install_the_installer_refuses_is_a_warning(monkeypatch, main_host, caplog) -> None:
     main_host._registry.add(FakeActor("installer"))
 
-    async def _refused(*_args, **_kwargs):
+    async def _refused(*_args, **_kwargs) -> NoReturn:
         raise RuntimeError("'installer' answered with an error: pip exited with 1")
 
     monkeypatch.setattr(spawning, "ask_through", _refused)
@@ -409,10 +541,10 @@ def test_an_install_the_installer_refuses_is_a_warning(monkeypatch, main_host, c
     assert "Install failed: 'installer' answered with an error" in caplog.text
 
 
-def test_packages_the_installer_could_not_install_are_named(main_host, caplog):
+def test_packages_the_installer_could_not_install_are_named(main_host, caplog) -> None:
     main_host._registry.add(FakeActor("installer"))
 
-    async def _send(target_id, msg_type, payload):
+    async def _send(target_id, msg_type, payload) -> bool:
         fut = main_host._result_futures[payload["_task_id"]]
         fut.set_result({"message": "partly", "failed": ["totally_missing_pkg_zzz"]})
         return True
@@ -424,11 +556,11 @@ def test_packages_the_installer_could_not_install_are_named(main_host, caplog):
     assert "Failed to install: ['totally_missing_pkg_zzz']" in caplog.text
 
 
-def _refusing_installer(monkeypatch, main_host):
+def _refusing_installer(monkeypatch, main_host) -> None:
     """The installer answering that the operator did not allow the package."""
     main_host._registry.add(FakeActor("installer"))
 
-    async def _refused(*_args, **_kwargs):
+    async def _refused(*_args, **_kwargs) -> NoReturn:
         raise ReplyError(
             "installer",
             {
@@ -440,7 +572,9 @@ def _refusing_installer(monkeypatch, main_host):
     monkeypatch.setattr(spawning, "ask_through", _refused)
 
 
-def test_a_package_the_operator_did_not_allow_stops_a_blocking_spawn(monkeypatch, main_host):
+def test_a_package_the_operator_did_not_allow_stops_a_blocking_spawn(
+    monkeypatch, main_host
+) -> None:
     _refusing_installer(monkeypatch, main_host)
 
     actor = run(
@@ -454,10 +588,12 @@ def test_a_package_the_operator_did_not_allow_stops_a_blocking_spawn(monkeypatch
     assert main_host.spawn_calls == []
 
 
-def test_a_package_the_operator_did_not_allow_stops_a_background_spawn(monkeypatch, main_host):
+def test_a_package_the_operator_did_not_allow_stops_a_background_spawn(
+    monkeypatch, main_host
+) -> None:
     _refusing_installer(monkeypatch, main_host)
 
-    async def scenario():
+    async def scenario() -> None:
         await main_host._spawn_local_from_config(
             {"name": "d7", "type": "dynamic", "code": "x", "install": ["wactorz-unlisted-probe"]},
             blocking_install=False,
@@ -472,12 +608,12 @@ def test_a_package_the_operator_did_not_allow_stops_a_background_spawn(monkeypat
     assert errors and "wactorz-unlisted-probe is not allowed" in errors[0]
 
 
-def test_a_restore_installs_without_asking(monkeypatch, main_host):
+def test_a_restore_installs_without_asking(monkeypatch, main_host) -> None:
     # Its packages were cleared when it was first placed; nobody may be there to answer.
     main_host._registry.add(FakeActor("installer"))
     asked: list[str] = []
 
-    async def _ask(_host, _target, request, **_kwargs):
+    async def _ask(_host, _target, request, **_kwargs) -> dict[str, bool]:
         asked.append(request["action"])
         return {"success": True}
 
@@ -495,12 +631,12 @@ def test_a_restore_installs_without_asking(monkeypatch, main_host):
     assert asked == ["install_restored"]
 
 
-def test_a_restore_waits_for_pip_only(monkeypatch, main_host):
+def test_a_restore_waits_for_pip_only(monkeypatch, main_host) -> None:
     # Nothing is asked on that path, so there is no answer to wait for.
     main_host._registry.add(FakeActor("installer"))
     waited: list[float] = []
 
-    async def _ask(*_args, timeout, **_kwargs):
+    async def _ask(*_args, timeout, **_kwargs) -> dict[str, bool]:
         waited.append(timeout)
         return {"success": True}
 
@@ -511,12 +647,12 @@ def test_a_restore_waits_for_pip_only(monkeypatch, main_host):
     assert waited[0] < APPROVAL_TIMEOUT_S + 2 * PIP_TIMEOUT_S
 
 
-def test_a_refused_spawn_it_did_not_save_leaves_the_registry_alone(monkeypatch, main_host):
+def test_a_refused_spawn_it_did_not_save_leaves_the_registry_alone(monkeypatch, main_host) -> None:
     _refusing_installer(monkeypatch, main_host)
     saved = {"name": "d9", "type": "dynamic", "code": "x", "install": ["wactorz-unlisted-probe"]}
     main_host.registered.append(saved)
 
-    async def scenario():
+    async def scenario() -> None:
         await main_host._spawn_local_from_config(
             dict(saved), register=False, blocking_install=False
         )
@@ -527,13 +663,13 @@ def test_a_refused_spawn_it_did_not_save_leaves_the_registry_alone(monkeypatch, 
     assert main_host.registered == [saved]
 
 
-def test_the_wait_outlasts_every_pip_run_the_installer_may_make(monkeypatch, main_host):
+def test_the_wait_outlasts_every_pip_run_the_installer_may_make(monkeypatch, main_host) -> None:
     # A shorter wait would give up on a large download still being made, and
     # spawn the agent without it.
     main_host._registry.add(FakeActor("installer"))
     waited: list[float] = []
 
-    async def _ask(*_args, timeout, **_kwargs):
+    async def _ask(*_args, timeout, **_kwargs) -> dict[str, bool]:
         waited.append(timeout)
         return {"success": True}
 
@@ -547,14 +683,9 @@ def test_the_wait_outlasts_every_pip_run_the_installer_may_make(monkeypatch, mai
 # ── Flags / wiring ───────────────────────────────────────────────────────────
 
 
-def test_topiccontract_registered(monkeypatch, main_host):
-    recorded = []
-
-    class _RecorderBus:
-        def register_contract(self, contract):
-            recorded.append(contract)
-
-    monkeypatch.setattr("wactorz.core.topic_bus.get_topic_bus", lambda: _RecorderBus())
+def test_a_config_that_names_topics_hands_the_agent_its_contract(main_host) -> None:
+    # The agent puts it on the bus each time it starts, and is built again from
+    # the same arguments when the supervisor restarts it.
     run(
         main_host._spawn_local_from_config(
             {
@@ -566,35 +697,35 @@ def test_topiccontract_registered(monkeypatch, main_host):
             }
         )
     )
-    assert len(recorded) == 1
+
+    _cls, kwargs = main_host.spawn_calls[0]
+    assert kwargs["spawn_contract"].name == "pub"
+    assert kwargs["spawn_contract"].publishes == ["sensors/cpu"]
 
 
-def test_topiccontract_skipped_without_pubsub(monkeypatch, main_host):
-    recorded = []
-    monkeypatch.setattr(
-        "wactorz.core.topic_bus.get_topic_bus",
-        lambda: type("B", (), {"register_contract": lambda self, c: recorded.append(c)})(),
-    )
+def test_a_config_that_names_no_topics_hands_it_none(main_host) -> None:
     run(main_host._spawn_local_from_config({"name": "nopub", "type": "dynamic", "code": "x"}))
-    assert recorded == []
+
+    _cls, kwargs = main_host.spawn_calls[0]
+    assert kwargs["spawn_contract"] is None
 
 
 # ── Registry & timezone hooks (main vs peer) ─────────────────────────────────
 
 
-def test_register_main_direct(main_host):
+def test_register_main_direct(main_host) -> None:
     run(main_host._spawn_local_from_config({"name": "r", "type": "dynamic", "code": "x"}))
     assert [c["name"] for c in main_host.registered] == ["r"]
 
 
-def test_register_peer_routes_to_main(peer_setup):
+def test_register_peer_routes_to_main(peer_setup) -> None:
     host, reg, main = peer_setup
     reg.add(FakeActor("installer"))
     run(host._spawn_local_from_config({"name": "p", "type": "dynamic", "code": "x"}))
     assert [c["name"] for c in main.registered] == ["p"]
 
 
-def test_register_skipped_when_disabled(main_host):
+def test_register_skipped_when_disabled(main_host) -> None:
     run(
         main_host._spawn_local_from_config(
             {"name": "noreg", "type": "dynamic", "code": "x"}, register=False
@@ -603,7 +734,7 @@ def test_register_skipped_when_disabled(main_host):
     assert not main_host.registered
 
 
-def test_peer_resolves_timezone_from_main(peer_setup):
+def test_peer_resolves_timezone_from_main(peer_setup) -> None:
     host, _reg, _main = peer_setup
     run(
         host._spawn_local_from_config(
@@ -616,14 +747,14 @@ def test_peer_resolves_timezone_from_main(peer_setup):
 # ── Native catalog resolver & registry safety ────────────────────────────────
 
 
-def test_get_native_factory_resolves_and_misses():
+def test_get_native_factory_resolves_and_misses() -> None:
     factory = get_native_factory("weather-agent")
     assert factory is not None
     assert factory.__name__ == "WeatherAgent"
     assert get_native_factory("not-a-catalog-name") is None
 
 
-def test_native_recipes_are_json_safe_without_factory():
+def test_native_recipes_are_json_safe_without_factory() -> None:
     # CatalogAgent persists each native recipe minus its 'factory' class object;
     # that descriptor must be JSON-serializable for every native recipe so the
     # spawn registry (SQLite/JSON) can store and later restore it.
@@ -637,7 +768,7 @@ def test_native_recipes_are_json_safe_without_factory():
 # ── The `trusted` flag is earned, not declared ───────────────────────────────
 
 
-def _dynamic(**extra: object) -> dict:
+def _dynamic(**extra: object) -> dict[str, Any]:
     """A minimal dynamic-agent spawn config, plus whatever the test is about."""
     return {"name": "probe", "type": "dynamic", "code": "async def setup(a): pass", **extra}
 
@@ -705,7 +836,7 @@ def test_a_migrating_catalog_agent_gets_its_trust_back(tmp_path: Path) -> None:
     # that used to migrate fine stops migrating.
     main = MainActor(llm_provider=None, name="main", persistence_dir=str(tmp_path))
     main._save_to_spawn_registry({"name": "doc-to-pptx", "trusted": True})
-    local_cfg: dict = {"name": "doc-to-pptx"}
+    local_cfg: dict[str, Any] = {"name": "doc-to-pptx"}
 
     earned = main._restore_earned_trust("doc-to-pptx", local_cfg)
 
@@ -718,7 +849,7 @@ def test_a_node_cannot_claim_trust_the_registry_never_granted(tmp_path: Path) ->
     # record is the evidence; the wire is not.
     main = MainActor(llm_provider=None, name="main", persistence_dir=str(tmp_path))
     main._save_to_spawn_registry({"name": "scraper"})
-    local_cfg: dict = {"name": "scraper", "trusted": True}
+    local_cfg: dict[str, Any] = {"name": "scraper", "trusted": True}
 
     earned = main._restore_earned_trust("scraper", local_cfg)
 
@@ -736,17 +867,17 @@ def test_an_agent_main_never_registered_earns_nothing(tmp_path: Path) -> None:
 # ── A name every topic of the agent would carry ──────────────────────────────
 
 
-def test_a_name_that_cannot_be_a_topic_level_is_refused_locally(main_host):
+def test_a_name_that_cannot_be_a_topic_level_is_refused_locally(main_host) -> None:
     # "c++ monitor" is an ordinary thing to ask for; its topics would all carry
     # a wildcard, and a message to it once stalled every message behind it.
     assert run(main_host._spawn_local_from_config({"name": "c++ monitor"})) is None
     assert main_host.spawn_calls == []
 
 
-def test_a_name_that_cannot_be_a_topic_level_is_not_sent_to_a_node():
+def test_a_name_that_cannot_be_a_topic_level_is_not_sent_to_a_node() -> None:
     published: list[str] = []
 
-    async def _publish(topic, payload, **_kw):
+    async def _publish(topic, payload, **_kw) -> None:
         published.append(topic)
 
     host = SimpleNamespace(name="main", _mqtt_publish=_publish)
@@ -755,12 +886,42 @@ def test_a_name_that_cannot_be_a_topic_level_is_not_sent_to_a_node():
     assert published == []
 
 
-def test_a_background_install_is_owned_by_the_host(main_host):
+def test_a_new_name_holding_the_address_separator_is_refused_locally(main_host) -> None:
+    # `counter@pi` must split one way only: counter, on pi.
+    assert run(main_host._spawn_local_from_config({"name": "counter@pi"})) is None
+    assert main_host.spawn_calls == []
+
+
+def test_an_agent_already_kept_under_such_a_name_still_starts(main_host) -> None:
+    # Named before the separator was refused in a name, and read back from the
+    # spawn registry: it keeps running under the name it has.
+    run(
+        main_host._spawn_local_from_config(
+            {"name": "counter@old", "type": "dynamic", "code": "x"}, from_registry=True
+        )
+    )
+
+    assert [kwargs["name"] for _cls, kwargs in main_host.spawn_calls] == ["counter@old"]
+
+
+def test_a_new_name_holding_the_address_separator_is_not_sent_to_a_node() -> None:
+    published: list[str] = []
+
+    async def _publish(topic, payload, **_kw) -> None:
+        published.append(topic)
+
+    host = SimpleNamespace(name="main", _mqtt_publish=_publish)
+    run(SpawnService(host)._spawn_remote({"name": "counter@pi"}, "rpi", save=True))  # pyright: ignore[reportArgumentType]
+
+    assert published == []
+
+
+def test_a_background_install_is_owned_by_the_host(main_host) -> None:
     # Kept by the host, so its stop cancels the install rather than leaving it
     # running against a system that has shut down.
     main_host._registry.add(FakeActor("installer"))
 
-    async def scenario():
+    async def scenario() -> None:
         await main_host._spawn_local_from_config(
             {"name": "d4", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
             blocking_install=False,
@@ -771,17 +932,18 @@ def test_a_background_install_is_owned_by_the_host(main_host):
     run(scenario())
 
 
-def test_an_install_that_outlasts_a_stop_spawns_nothing(main_host):
+def test_an_install_that_outlasts_a_stop_spawns_nothing(main_host) -> None:
     main_host._registry.add(FakeActor("installer"))
     real_install = main_host._install_packages
 
-    async def install_then_stop(packages, agent_name, restoring=False):
-        await real_install(packages, agent_name=agent_name, restoring=restoring)
+    async def install_then_stop(packages, agent_name, restoring=False, **kwargs) -> Any:
+        outcome = await real_install(packages, agent_name=agent_name, restoring=restoring, **kwargs)
         main_host.state = ActorState.STOPPED
+        return outcome
 
     main_host._install_packages = install_then_stop
 
-    async def scenario():
+    async def scenario() -> None:
         await main_host._spawn_local_from_config(
             {"name": "d5", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
             blocking_install=False,
@@ -792,17 +954,62 @@ def test_an_install_that_outlasts_a_stop_spawns_nothing(main_host):
     assert main_host.spawn_calls == []
 
 
+def test_no_packages_means_nothing_to_install(main_host) -> None:
+    outcome = run(main_host._install_packages([], agent_name="d9"))
+    assert outcome.ok
+    assert main_host.sent == []
+
+
+def test_without_an_installer_the_install_is_reported_unavailable(main_host) -> None:
+    outcome = run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d10"))
+    assert outcome.unavailable
+
+
+def test_an_installer_that_never_answers_times_out(main_host, monkeypatch) -> None:
+    main_host._registry.add(FakeActor("installer"))
+    monkeypatch.setattr(spawning, "install_wait_s", lambda _count: 0.05)
+    monkeypatch.setattr(spawning, "APPROVAL_TIMEOUT_S", 0)
+
+    async def silent_send(target_id, msg_type, payload) -> None:
+        main_host.sent.append(payload)  # taken in, never answered
+
+    main_host.send = silent_send
+    outcome = run(
+        main_host._install_packages(
+            ["totally_missing_pkg_zzz"], agent_name="d11", require_install_success=True
+        )
+    )
+    assert outcome.timed_out
+    assert main_host._result_futures == {}
+
+
+def test_an_installer_with_no_room_is_not_waited_for(main_host, monkeypatch) -> None:
+    main_host._registry.add(FakeActor("installer"))
+    monkeypatch.setattr(spawning, "install_wait_s", lambda _count: 600.0)
+
+    async def refused_send(target_id, msg_type, payload) -> bool:
+        return False  # its mailbox was full
+
+    main_host.send = refused_send
+    outcome = run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d12"))
+    assert outcome.busy
+    assert not outcome.ok
+    assert main_host._result_futures == {}
+
+
 # ── A name the state directory refuses ───────────────────────────────────────
 
 
 @pytest.mark.parametrize("name", ["..", ".", "../outside", "..hidden"])
-def test_a_name_that_would_climb_out_of_the_state_directory_is_not_spawned(main_host, name, caplog):
+def test_a_name_that_would_climb_out_of_the_state_directory_is_not_spawned(
+    main_host, name, caplog
+) -> None:
     # An agent's name is also the directory its state is kept in. Such a name
     # was refused only when the agent was built, after a state shipped with a
     # migration had been written under it -- and then quietly gone.
     applied = []
 
-    async def _apply(agent_name, config):
+    async def _apply(agent_name, config) -> None:
         applied.append(agent_name)
 
     main_host._apply_initial_state = _apply
@@ -816,7 +1023,7 @@ def test_a_name_that_would_climb_out_of_the_state_directory_is_not_spawned(main_
     assert "unsafe agent name" in caplog.text
 
 
-def test_a_migrated_state_is_applied_through_the_stores(main_host, tmp_path, monkeypatch):
+def test_a_migrated_state_is_applied_through_the_stores(main_host, tmp_path, monkeypatch) -> None:
     db, store = WactorzDB(tmp_path / "wactorz.db"), PickleStore(str(tmp_path))
     monkeypatch.setattr(spawning, "get_db", lambda: db)
     monkeypatch.setattr(spawning, "get_pickle_store", lambda: store)

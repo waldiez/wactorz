@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every provider translates attachment blocks into its own wire shape.
 
 `supports_blocks()` tells the agent a list-of-blocks content is safe to send,
@@ -5,6 +6,8 @@ so the translation each provider applies is the contract that makes it true.
 These pin the shapes, so a provider edit that drops or mangles an image fails
 loudly rather than as a model that quietly cannot see.
 """
+
+from typing import Any
 
 from wactorz.agents.llm.attachments import NO_DOCUMENTS, UNREADABLE
 from wactorz.agents.llm.openai_shape import openai_messages
@@ -64,7 +67,7 @@ class TestOpenAIShape:
         assert openai_messages(msgs) == msgs
 
 
-def parts_text(parts: list[dict]) -> list[str]:
+def parts_text(parts: list[dict[str, Any]]) -> list[str]:
     return [p["text"] for p in parts if p.get("type") == "text"]
 
 

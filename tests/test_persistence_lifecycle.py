@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Connection lifecycle, write durability, and state-directory containment.
 
 Three defects are pinned here:

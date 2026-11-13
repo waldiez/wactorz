@@ -1,17 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for prometheus monitoring."""
 
 import time
 import types
 import unittest
+from typing import Any
 
 from wactorz.monitoring.prometheus import PrometheusMonitor
 
-# pylint: disable=too-few-public-methods,too-many-instance-attributes
-# pylint: disable=missing-function-docstring,missing-class-docstring
-
 
 class _FakeMetrics:
-    def __init__(self):
+    def __init__(self) -> None:
         self.messages_processed = 7
         self.errors = 2
         self.tasks_completed = 5
@@ -27,7 +26,7 @@ class _FakeMetrics:
 
 
 class _FakeActor:
-    def __init__(self):
+    def __init__(self) -> None:
         self.actor_id = "actor-123"
         self.name = "main"
         self.protected = True
@@ -41,15 +40,15 @@ class _FakeActor:
 
 
 class _FakeRegistry:
-    def __init__(self, actors):
+    def __init__(self, actors) -> None:
         self._actors = list(actors)
 
-    def all_actors(self):
+    def all_actors(self) -> list[Any]:
         return list(self._actors)
 
 
 class PrometheusMetricsTest(unittest.TestCase):
-    def test_render_contains_actor_and_http_metric_families(self):
+    def test_render_contains_actor_and_http_metric_families(self) -> None:
         registry = _FakeRegistry([_FakeActor()])
         monitor = PrometheusMonitor(lambda: registry)
 
@@ -65,7 +64,7 @@ class PrometheusMetricsTest(unittest.TestCase):
         self.assertIn('wactorz_actor_handling_seconds{actor_name="main"} 12.5', payload)
         self.assertIn("wactorz_http_requests_total", payload)
 
-    def test_render_handles_missing_registry(self):
+    def test_render_handles_missing_registry(self) -> None:
         monitor = PrometheusMonitor(lambda: None)
 
         payload = monitor.render().decode()

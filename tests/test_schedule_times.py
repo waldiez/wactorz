@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Working out when a scheduled agent should next fire.
 
 These are pure functions over a supplied "now", so every case pins a real clock
@@ -7,6 +8,7 @@ immediately and then again.
 """
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 
@@ -170,7 +172,7 @@ class TestDescribeSchedule:
             ({"type": "cron", "expr": "0 9 * * 1"}, "cron 0 9 * * 1"),
         ],
     )
-    def test_each_kind_renders(self, schedule: dict, expected: str) -> None:
+    def test_each_kind_renders(self, schedule: dict[str, Any], expected: str) -> None:
         assert describe_schedule(schedule) == expected
 
     def test_a_timezone_is_appended_where_it_is_meaningful(self) -> None:

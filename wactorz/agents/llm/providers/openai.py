@@ -1,6 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
 """OpenAIProvider — the OpenAI SDK, and the wire format others reuse."""
 
 import logging
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -19,14 +21,18 @@ from ..openai_shape import (
 from ..pricing import calc_cost
 from ..retry import attempt_timeout
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class OpenAIProvider(LLMProvider):
+    """OpenAI's Chat Completions API, through the ``openai`` package, or any server that speaks
+    it at ``base_url``.
+    """
+
     def __init__(
         self, model: str = "gpt-4o", api_key: str | None = None, base_url: str | None = None
-    ):
-        import openai
+    ) -> None:
+        import openai  # optional dependency: the `openai` extra
 
         # Two calls rather than a conditional `**{...}`: unpacking a dict of
         # unknown keys means a type checker cannot tell which parameter each
@@ -37,13 +43,13 @@ class OpenAIProvider(LLMProvider):
         # configured one for the same reason: left to the SDK's default, a
         # setting of "no limit" would still be cut off at the SDK's.
         timeout = attempt_timeout()
-        self.client = (
+        self.client: Any = (
             openai.AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0, timeout=timeout)
             if base_url
             else openai.AsyncOpenAI(api_key=api_key, max_retries=0, timeout=timeout)
         )
         self.model = model
-        self.base_url = base_url or None
+        self.base_url: str | None = base_url or None
 
     @classmethod
     def supports_blocks(cls) -> bool:
@@ -52,7 +58,9 @@ class OpenAIProvider(LLMProvider):
         """
         return True
 
-    async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+    async def _complete(
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         full_messages = (
             [{"role": "system", "content": system}] if system else []
         ) + openai_messages(messages)
@@ -91,7 +99,7 @@ class OpenAIProvider(LLMProvider):
 
     async def _complete_with_tools(
         self,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
@@ -144,7 +152,9 @@ class OpenAIProvider(LLMProvider):
             assistant_message=assistant_message,
         )
 
-    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
+    async def _stream(
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> AsyncIterator[str | dict[str, Any]]:
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         full_messages = (
             [{"role": "system", "content": system}] if system else []

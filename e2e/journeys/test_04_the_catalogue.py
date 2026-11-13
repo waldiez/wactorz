@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The catalogue lists the agents that come with Wactorz, and starts one when asked.
 
 The one started here collects readings from the broker. It installs nothing and

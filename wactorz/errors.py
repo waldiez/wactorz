@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Exceptions a program embedding Wactorz can catch.
 
 Stdlib-only, so it can be imported from anywhere in the package without

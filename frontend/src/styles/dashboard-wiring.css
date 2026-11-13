@@ -1,0 +1,620 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ */
+/* ── Wiring view (see ui/wiring/) ───────────────────────────────────── */
+.af-wiring {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow: hidden;
+}
+.af-wire-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+.af-wire-page-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+.af-wire-subtitle,
+.af-wire-status {
+  margin-top: 2px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-wire-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.af-wire-chip {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: transparent;
+  cursor: pointer;
+}
+.af-wire-chip.field_mismatch {
+  color: #f87171;
+}
+.af-wire-chip.unread {
+  color: #fbbf24;
+}
+.af-wire-chip.no_producer {
+  color: #fb923c;
+}
+.af-wire-chip[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.af-wire-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+}
+/* One set of choices about one thing, named first: how it is grouped, what is shown. */
+.af-wire-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.af-wire-segment + .af-wire-segment {
+  padding-left: 20px;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+.af-wire-segment .af-wire-toggle + .af-wire-toggle {
+  margin-left: 10px;
+}
+.af-wire-segment-label {
+  margin-right: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.65);
+}
+/* What can be done, apart from the choices, at the end of the row. */
+.af-wire-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.af-wire-segment-btn,
+.af-wire-btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+}
+.af-wire-segment-btn[aria-pressed="true"] {
+  border-color: #60a5fa;
+  background: rgba(96, 165, 250, 0.15);
+  color: #fff;
+}
+.af-wire-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.af-wire-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.af-wire-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+}
+.af-wire-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* The drawing's frame, with the zoom standing over its corner. */
+.af-wire-drawing {
+  position: relative;
+  flex: 1;
+  min-height: 240px;
+  display: flex;
+}
+/* The drawing is seen through its frame, which never scrolls: what lies outside is cut off, and brought in
+   by moving the drawing, by its background or the wheel (ui/wiring/wiringZoom.ts). A finger on it moves the
+   drawing, not the page. */
+.af-wire-frame {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: clip;
+  touch-action: none;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: grab;
+}
+.af-wire-frame.panning {
+  cursor: grabbing;
+  user-select: none;
+}
+/* The drawing keeps its own size, and is scaled and shifted from its corner into the frame. */
+.af-wire-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+/* Over the frame's lower left corner. */
+.af-wire-zoom {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: #161b25;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.af-wire-zoom-btn {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.af-wire-zoom-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+.af-wire-zoom-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.af-wire-zoom-btn.fit {
+  margin-left: 2px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0 6px 6px 0;
+}
+.af-wire-zoom-btn.fit[aria-pressed="true"] {
+  color: #93c5fd;
+}
+.af-wire-zoom-slider {
+  width: 110px;
+  margin: 0 2px;
+  accent-color: #60a5fa;
+  cursor: pointer;
+}
+.af-wire-zoom-level {
+  min-width: 4.5ch;
+  text-align: right;
+  padding-right: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.af-wire-lines {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+/* A line and the handles at its ends share one colour: what the line means. */
+.af-wire-line,
+.af-wire-handle {
+  color: rgba(148, 163, 184, 0.7);
+}
+.af-wire-line.selected,
+.af-wire-line.near,
+.af-wire-handle.selected,
+.af-wire-handle.near {
+  color: #cbd5e1;
+}
+.af-wire-line.feeds,
+.af-wire-handle.feeds {
+  color: #38bdf8;
+}
+.af-wire-line.asks,
+.af-wire-handle.asks {
+  color: #c4b5fd;
+}
+.af-wire-line.shadow,
+.af-wire-handle.shadow {
+  color: #fbbf24;
+}
+.af-wire-line.problem,
+.af-wire-handle.problem {
+  color: #f87171;
+}
+.af-wire-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+.af-wire-line.shadow {
+  stroke-dasharray: 5 4;
+}
+.af-wire-line.problem {
+  stroke-width: 2;
+}
+.af-wire-line.selected,
+.af-wire-line.near {
+  stroke-width: 2.5;
+}
+/* The handles lie over the boxes and take no press: a box under one is still what is pressed. */
+.af-wire-handles {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  z-index: 2;
+  pointer-events: none;
+}
+/* A filled dot where a line leaves a box, a ring where it arrives at one. */
+.af-wire-handle {
+  stroke-width: 1.5;
+}
+.af-wire-handle.out {
+  fill: currentColor;
+  stroke: #0b0e14;
+}
+.af-wire-handle.in {
+  fill: #0b0e14;
+  stroke: currentColor;
+}
+/* With a box chosen, the lines that are not its own step back. */
+.af-wire-canvas.choosing .af-wire-line:not(.selected, .near),
+.af-wire-canvas.choosing .af-wire-handle:not(.selected, .near) {
+  opacity: 0.25;
+}
+.af-wire-line-label {
+  font-size: 11px;
+  fill: rgba(255, 255, 255, 0.8);
+  /* A dark band behind the words, so a line or a box under them does not hide them. */
+  paint-order: stroke;
+  stroke: #0b0e14;
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+.af-wire-line-label.problem {
+  fill: #fca5a5;
+}
+.af-wire-lane {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.12);
+}
+.af-wire-lane-name {
+  position: absolute;
+  top: 6px;
+  left: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+/* Exactly as tall as the layout made it: every line one row, cut short, never wrapped
+   (layout.ts heightOf counts on FIRST_LINE, LINE and PADDING matching these, and its CORNER
+   on each kind's border-radius, so a handle sits on a rounded corner's curve). */
+.af-wire-node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 6px 10px;
+  overflow: hidden;
+  text-align: left;
+  font: inherit;
+  color: rgba(255, 255, 255, 0.92);
+  background: #161b25;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  cursor: grab;
+  /* A drag on a touch screen moves the box, not the page. */
+  touch-action: none;
+  user-select: none;
+}
+.af-wire-node.dragging {
+  cursor: grabbing;
+  z-index: 1;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+.af-wire-node:focus-visible {
+  outline: 2px solid var(--af-focus);
+  outline-offset: 2px;
+}
+.af-wire-node[aria-pressed="true"] {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 1px #60a5fa;
+}
+.af-wire-node-name,
+.af-wire-node-line {
+  display: block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.af-wire-node-name {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+}
+.af-wire-node-line {
+  font-size: 11px;
+  line-height: 16px;
+  color: rgba(255, 255, 255, 0.7);
+}
+.af-wire-node.topic {
+  border-radius: 18px;
+  padding: 6px 14px;
+}
+.af-wire-node.topic .af-wire-node-name {
+  font-family: "JetBrains Mono", monospace;
+  font-weight: 500;
+  font-size: 12px;
+}
+.af-wire-node.source {
+  border-style: dashed;
+  border-color: #38bdf8;
+}
+.af-wire-node.operator {
+  border-color: #c4b5fd;
+  background: #1d1830;
+}
+.af-wire-node.shadow {
+  border-style: dashed;
+  border-color: #fbbf24;
+}
+.af-wire-node.warned {
+  border-color: #f87171;
+}
+.af-wire-node.topic.warned .af-wire-node-line {
+  color: #fbbf24;
+}
+.af-wire-node-line.problem {
+  color: #fca5a5;
+}
+/* With a box chosen, one it is not joined to steps back: dimmer words that can still be read, a fainter edge. */
+.af-wire-node.apart {
+  background: #11151d;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.af-wire-node.apart .af-wire-node-name,
+.af-wire-node.apart .af-wire-node-line {
+  color: var(--af-text-dim);
+}
+.af-wire-node.apart.source {
+  border-color: rgba(56, 189, 248, 0.35);
+}
+.af-wire-node.apart.operator {
+  border-color: rgba(196, 181, 253, 0.35);
+}
+.af-wire-node.apart.shadow {
+  border-color: rgba(251, 191, 36, 0.35);
+}
+.af-wire-node.apart.warned {
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+.af-wire-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  list-style: none;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+}
+.af-wire-legend-hint {
+  margin-left: auto;
+}
+.af-wire-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.af-wire-legend-key {
+  width: 18px;
+  border-top: 2px solid rgba(148, 163, 184, 0.8);
+}
+.af-wire-legend-item.shadow .af-wire-legend-key {
+  border-top: 2px dashed #fbbf24;
+}
+.af-wire-legend-item.problem .af-wire-legend-key {
+  border-top-color: #f87171;
+}
+.af-wire-legend-item.asks .af-wire-legend-key {
+  border-top-color: #c4b5fd;
+}
+.af-wire-legend-item.feeds .af-wire-legend-key {
+  border-top-color: #38bdf8;
+}
+.af-wire-legend-item.leaves .af-wire-legend-key,
+.af-wire-legend-item.arrives .af-wire-legend-key {
+  box-sizing: border-box;
+  width: 9px;
+  height: 9px;
+  border: 2px solid rgba(148, 163, 184, 0.8);
+  border-radius: 50%;
+}
+.af-wire-legend-item.leaves .af-wire-legend-key {
+  background: rgba(148, 163, 184, 0.8);
+}
+
+.af-wire-detail {
+  min-height: 0;
+  overflow-y: auto;
+  align-self: start;
+  max-height: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 14px 16px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.af-wire-detail-kind {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-wire-detail-title {
+  margin: 2px 0 10px;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.af-wire-detail-title.topic {
+  font-family: "JetBrains Mono", monospace;
+}
+.af-wire-detail-facts {
+  display: grid;
+  gap: 6px;
+}
+.af-wire-detail-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 8px;
+}
+.af-wire-detail-row dt {
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-wire-detail-row dd {
+  overflow-wrap: anywhere;
+}
+.af-wire-detail-row a,
+.af-wire-detail a {
+  color: #93c5fd;
+}
+.af-wire-detail-label {
+  margin-top: 12px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-wire-payload {
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.af-wire-detail-warnings {
+  margin-top: 12px;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+.af-wire-warning.field_mismatch {
+  color: #fca5a5;
+}
+.af-wire-warning.unread,
+.af-wire-warning.no_producer {
+  color: #fcd34d;
+}
+
+.af-wire-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.af-wire-list-title {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-wire-list-items {
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+.af-wire-list-row {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.af-wire-list-row[aria-pressed="true"] {
+  border-color: #60a5fa;
+}
+.af-wire-list-row.warned,
+.af-wire-list-row.warning.field_mismatch {
+  border-color: rgba(248, 113, 113, 0.6);
+}
+.af-wire-list-row.warning.unread,
+.af-wire-list-row.warning.no_producer {
+  border-color: rgba(251, 191, 36, 0.6);
+}
+.af-wire-empty {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+/* A phone: the list, with the selection's details under it. */
+@media (max-width: 720px) {
+  .af-wiring {
+    overflow-y: auto;
+  }
+  /* Each part as tall as what it holds, one after another, the page scrolling. */
+  .af-wire-body,
+  .af-wire-main {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+  }
+  .af-wire-detail {
+    max-height: none;
+  }
+  /* The page scrolls, not the list inside it. */
+  .af-wire-list {
+    overflow: visible;
+  }
+}

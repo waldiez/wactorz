@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A machine for a node to be deployed to, and what a scenario may ask of it.
 
 The suite does not start a node. It starts a machine -- a container with Python
@@ -9,8 +10,6 @@ starts it. So the node under test is one the product installed.
 This module makes the key the application deploys with, starts and stops the
 machine, and reads the node's side of things from inside it.
 """
-
-from __future__ import annotations
 
 import subprocess
 

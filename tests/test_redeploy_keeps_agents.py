@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A redeploy keeps the node's agents.
 
 A deploy kills the node's old process and starts the new one. From main's side
@@ -14,6 +15,7 @@ is not treated as the node going away; when the flag lifts, the miss counters
 are reset so the new node's empty first heartbeats do not finish the job.
 """
 
+import inspect
 import time
 from typing import Any, cast
 
@@ -25,6 +27,7 @@ from wactorz.agents.main.nodes import (
     VANISH_MISS_THRESHOLD,
     NodeManager,
 )
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 
 
 class _Host:
@@ -39,10 +42,12 @@ class _Host:
         self.registry = dict(registry)
         self.events: list[tuple[Any, ...]] = []
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self.registry
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names(self.registry)
 
-    def _remove_from_spawn_registry(self, name: str) -> None:
+    def _remove_from_spawn_registry(
+        self, name: str, node: str | None = None, *, actor_id: str | None = None
+    ) -> None:
         self.registry.pop(name, None)
         self.events.append(("unregistered", name))
 
@@ -165,7 +170,6 @@ class TestWhenTheRedeployEnds:
 
 class TestTheDeployBracketsTheRestart:
     def test_it_marks_before_killing_and_unmarks_after_the_wait(self) -> None:
-        import inspect
 
         source = inspect.getsource(InstallerAgent._node_deploy)
         mark = source.index("_mark_redeploying")
@@ -175,7 +179,6 @@ class TestTheDeployBracketsTheRestart:
         assert mark < kill < wait < unmark
 
     def test_a_deploy_that_fails_part_way_unmarks_too(self) -> None:
-        import inspect
 
         source = inspect.getsource(InstallerAgent._node_deploy)
         handler = source.index("except Exception as e:")

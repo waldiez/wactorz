@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Chat turns must actually reach the ``chat_log`` table.
 
 ``_log_chat_turn`` called ``db.log_chat(...)`` — a method that has never existed

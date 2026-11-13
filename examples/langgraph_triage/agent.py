@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A LangGraph graph as a Wactorz agent.
 
 LangGraph decides how a ticket is handled: classify it, set a priority, draft

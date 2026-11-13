@@ -1,4 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
 """Prompts of the Home Assistant agents, and what Home Assistant adds to main's."""
+
+from typing import Any
 
 from .assemble import PromptFragment
 
@@ -57,7 +60,7 @@ If the available data cannot answer the request, say what is missing.
 When get_camera_snapshot succeeds, confirm which camera was captured. Do NOT say the image is shown, displayed, or attached — the caller handles rendering.
 """
 
-HA_OTHER_TOOL = {
+HA_OTHER_TOOL: dict[str, Any] = {
     "name": "get_simplified_ha_data",
     "description": "Fetch compact Home Assistant floors, areas, devices, entities, and current entity states.",
     "parameters": {
@@ -67,7 +70,7 @@ HA_OTHER_TOOL = {
     },
 }
 
-HA_CAMERA_LIST_TOOL = {
+HA_CAMERA_LIST_TOOL: dict[str, Any] = {
     "name": "list_camera_entities",
     "description": "List all camera entities exposed in Home Assistant with their current state.",
     "parameters": {"type": "object", "properties": {}, "additionalProperties": False},

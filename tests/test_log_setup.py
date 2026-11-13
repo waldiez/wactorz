@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Root logging configuration, now an explicit call rather than an import.
 
 The regression pinned here: handlers must be built with redaction already
@@ -14,7 +15,9 @@ import json
 import logging
 import logging.handlers
 import sys
+from collections.abc import Iterator
 from datetime import datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -24,7 +27,7 @@ from wactorz.node import cli as node_cli
 
 
 @pytest.fixture(autouse=True)
-def _restore_root():
+def _restore_root() -> "Iterator[None]":
     root = logging.getLogger()
     handlers = list(root.handlers)
     level = root.level
@@ -288,7 +291,7 @@ class TestTheFormat:
         # handlers of its own on the root logger, and `basicConfig` leaves a
         # root logger that has any alone.
         monkeypatch.setenv("WACTORZ_LOG_FORMAT", "json")
-        asked: dict = {}
+        asked: dict[str, Any] = {}
         monkeypatch.setattr(logging, "basicConfig", lambda **kwargs: asked.update(kwargs))
 
         node_cli.configure_logging(argparse.Namespace(loglevel="warning"))

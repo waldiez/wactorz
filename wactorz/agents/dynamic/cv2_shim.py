@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A cv2.VideoCapture that survives a flaky camera backend.
 
 Generated vision code opens the camera with `cv2.VideoCapture(0)` and assumes it
@@ -15,13 +16,13 @@ import time
 import types
 from typing import Any, ClassVar
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def resilient_cv2_module(agent_name: str) -> Any | None:
     """A stand-in `cv2` module whose VideoCapture retries, or None if cv2 is absent."""
     try:
-        import cv2 as real_cv2
+        import cv2 as real_cv2  # optional dependency: the `vision` extra
     except ImportError:
         return None
 

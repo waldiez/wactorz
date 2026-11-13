@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """PlannerAgent — On-demand task orchestrator with plan caching and auto-spawning.
 
 Spawned by MainActor when a task is too complex for a single agent.
@@ -21,7 +22,10 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
+from ...core import topic_bus
 from ...core.actor import Actor, Message, MessageType
+from ...core.addresses import MAIN_NODE, Address
+from ...core.topics import agent_topic, display_topic
 from ..llm_agent import LLMProvider, accumulate_global_cost
 from ..lookup import find_main_actor
 from ..mixins.spawning import SpawnMixin
@@ -37,7 +41,7 @@ from .parsing import extract_json_array, loads_lenient, task_hash
 from .pipeline import PipelineMixin
 from .validation import validate_pipeline_code
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 SKIP_AGENTS = {
     "main",
@@ -91,7 +95,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         # and logs it so the behaviour is never silent.
         self._plan_only = plan_only
         self._approved_plan = approved_plan
-        self._result_futures: dict[str, asyncio.Future] = {}
+        self._result_futures: dict[str, asyncio.Future[Any]] = {}
         self._spawned_by_planner: list[str] = []  # agents we created this run
         # Per-agent spawn outcome: name → {"ok": bool, "error": str|None}
         # Sent back to main in the RESULT payload so it knows what actually happened.
@@ -104,7 +108,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         # holds the watchdog so normal completion can cancel it.
         self._max_lifetime_s: float = max_lifetime_s
         self._terminated: bool = False
-        self._lifetime_task: asyncio.Task | None = None
+        self._lifetime_task: asyncio.Task[Any] | None = None
 
         # Cost tracking — accumulated across all llm.complete() calls this session
         self.total_input_tokens: int = 0
@@ -118,6 +122,9 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     async def on_start(self) -> None:
+        """Start the lifetime limit and, with a task given at spawn, plan it in the background;
+        with both an approved plan and plan-only set, the approved plan wins.
+        """
         await self._log(f"Planner ready. Task: {self._task[:80]}")
 
         # Enforce documented precedence: approved_plan wins over plan_only.
@@ -158,7 +165,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
             )
         try:
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/metrics",
+                agent_topic(self.actor_id, "metrics"),
                 self._build_metrics(),
             )
         except Exception as exc:
@@ -201,6 +208,9 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
     # ── Message handling ───────────────────────────────────────────────────
 
     async def handle_message(self, msg: Message) -> None:
+        """Plan a task and reply with the result to the one who asked. After any message the
+        planner ends, unless the plan asked it to stay.
+        """
         if msg.type == MessageType.TASK:
             payload = msg.payload if isinstance(msg.payload, dict) else {"text": str(msg.payload)}
             task_text = payload.get("text") or payload.get("task") or str(msg.payload)
@@ -272,17 +282,15 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         left behind by a dead agent would offer a topic nobody publishes.
         """
         try:
-            from ...core.topic_bus import get_topic_bus
-
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus and self._registry:
-                live = {a.name for a in self._registry.all_actors()}
+                live = {Address(a.name, MAIN_NODE) for a in self._registry.all_actors()}
                 # Add remotely-running agents from main's known_nodes
                 main = find_main_actor(self._registry)
                 if main:
-                    for nd in main._known_nodes.values():
+                    for node, nd in main._known_nodes.items():
                         if time.time() - nd.get("last_seen", 0) < 30:
-                            live.update(nd.get("agents", []))
+                            live.update(Address(name, node) for name in nd.get("agents", []))
                 pruned = bus.registry.prune_stale(live)
                 if pruned:
                     await self._log(f"Pruned {len(pruned)} stale TopicBus contract(s): {pruned}")
@@ -468,9 +476,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         """Live topic samples, so generated code uses real field names."""
         topic_schema_ctx = ""
         try:
-            from ...core.topic_bus import get_topic_bus
-
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus:
                 sample_lines = []
                 for contract in bus.registry.all_contracts():
@@ -479,7 +485,8 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
                         example = info.get("example", {})
                         fields = info.get("fields", {})
                         sample_lines.append(
-                            f"  {topic} (by {contract.name}): fields={fields}  example={example}"
+                            f"  {topic} (by {bus.registry.label(contract)}): "
+                            f"fields={fields}  example={example}"
                         )
                 if not sample_lines:
                     sample_lines = await self._sample_live_topics(bus)
@@ -647,13 +654,18 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
     async def _log(self, msg: str) -> None:
         logger.info("[%s] %s", self.name, msg)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": msg, "timestamp": time.time()},
         )
 
 
 def _fmt_worker(w: dict[str, Any]) -> str:
-    """One prompt line per worker, plus whatever schema it declares."""
+    """One prompt line per worker, plus whatever schema it declares.
+
+    Its topics are shown bare (`display_topic`), as a program is to write them:
+    one the model copies with the namespace in front would keep it after the
+    namespace changed.
+    """
     location = f" on {w['node']}" if w.get("remote") and w.get("node") else ""
     lines = [f"  - {w['name']} ({w['type']}{location}): {w['description']}"]
     if w.get("capabilities"):
@@ -663,10 +675,12 @@ def _fmt_worker(w: dict[str, Any]) -> str:
     if w.get("output_schema"):
         lines.append(f"    output_schema: {w['output_schema']}")
     if w.get("publishes"):
-        lines.append(f"    publishes: {w['publishes']}")
+        lines.append(f"    publishes: {[display_topic(t) for t in w['publishes']]}")
     if w.get("observed_samples"):
         for topic, info in w["observed_samples"].items():
             fields = info.get("fields", {})
             example = info.get("example", {})
-            lines.append(f"    topic '{topic}' payload fields: {fields}  example: {example}")
+            lines.append(
+                f"    topic '{display_topic(topic)}' payload fields: {fields}  example: {example}"
+            )
     return "\n".join(lines)

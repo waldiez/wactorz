@@ -228,12 +228,12 @@ persistence_location /mosquitto/data/
 log_dest stdout
 </code></pre></div>
 
-<p><strong><code>compose.yaml</code></strong></p>
+<p><strong><code>compose.yaml</code></strong> (the broker is named by its tag here; the repository's own <code>compose.yaml</code> pins the build by digest, and is the one to copy the digest from)</p>
 <div class="highlight"><pre><span></span><code><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz</span>
 
 <span class="nt">services</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">mosquitto</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">eclipse-mosquitto:2.1.2-alpine</span>
 <span class="w">    </span><span class="nt">container_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz-mosquitto</span>
 <span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span>
 <span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
@@ -387,7 +387,7 @@ in <code>MQTT_PASSWORD</code>, and make sure these Docker-specific values are se
   <span class="p">-</span><span class="n">-env</span><span class="o">-file</span> <span class="s2">"${PWD}\.env"</span> <span class="p">`</span>
   <span class="n">-v</span> <span class="s2">"${PWD}\mosquitto.conf:/mosquitto/config/mosquitto.conf:ro"</span> <span class="p">`</span>
   <span class="n">-v</span> <span class="s2">"wactorz-mosquitto-data:/mosquitto/data"</span> <span class="p">`</span>
-  <span class="n">eclipse-mosquitto</span><span class="p">:</span><span class="n">2</span><span class="p">.</span><span class="n">1</span><span class="p">.</span><span class="n">2-alpine</span><span class="nv">@sha256</span><span class="p">:</span><span class="n">38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408</span> <span class="p">`</span>
+  <span class="n">eclipse-mosquitto</span><span class="p">:</span><span class="n">2</span><span class="p">.</span><span class="n">1</span><span class="p">.</span><span class="n">2-alpine</span> <span class="p">`</span>
   <span class="p">/</span><span class="n">bin</span><span class="p">/</span><span class="n">sh</span> <span class="n">-c</span> <span class="s1">'umask 077; mosquitto_passwd -b -c /mosquitto/data/passwd "$MQTT_USERNAME" "$MQTT_PASSWORD" &amp;&amp; chown mosquitto:mosquitto /mosquitto/data/passwd &amp;&amp; exec mosquitto -c /mosquitto/config/mosquitto.conf'</span>
 </code></pre></div>
 

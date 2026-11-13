@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The dashboard's view of the broker: topics folded into state, and deletes sent out.
 
 Every retained or live frame is folded into one in-memory map the browsers are
@@ -14,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.web import events, lifecycle, mqtt, runtime, ws
 
 
@@ -226,16 +228,26 @@ class _Registry:
     def find_by_name(self, name: str) -> _Actor | None:
         return next((a for a in self._actors if a.name == name), None)
 
+    def all_actors(self) -> list[_Actor]:
+        return list(self._actors)
+
 
 class _Main:
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(self, fail: bool = False, kept: tuple[dict[str, Any], ...] = ()) -> None:
         self.deleted: list[str] = []
+        #: Which agent of its name each delete named: its node, "" for main.
+        self.nodes: list[str | None] = []
         self.fail = fail
+        self.kept = kept
 
-    async def delete_spawned_agent(self, name: str) -> None:
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry({entry["actor_id"]: entry for entry in self.kept})
+
+    async def delete_spawned_agent(self, name: str, node: str | None = None) -> None:
         if self.fail:
             raise RuntimeError("spawn registry locked")
         self.deleted.append(name)
+        self.nodes.append(node)
 
 
 async def _settle() -> None:
@@ -264,6 +276,49 @@ class TestDelete:
         assert routed == "via main.delete_spawned_agent('weather')"
         assert main.deleted == ["weather"]
         assert runtime.is_deleted("a1") and runtime.state["agents"] == {}
+
+    async def test_an_agent_here_that_has_not_reported_yet_is_deleted_under_its_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Listed from the moment it is registered, with no record until its
+        # first heartbeat: main finds agents by name, so the id will not do.
+        main = _Main()
+        monkeypatch.setattr(runtime, "registry", _Registry(_Actor("a1", "comfort")))
+        monkeypatch.setattr(lifecycle, "find_main_actor", lambda _r: main)
+
+        routed = await lifecycle.delete_agent("a1")
+
+        assert routed == "via main.delete_spawned_agent('comfort')"
+        assert main.deleted == ["comfort"]
+
+    async def test_a_protected_actor_that_has_not_reported_yet_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = _Main()
+        monkeypatch.setattr(runtime, "registry", _Registry(_Actor("a1", "main", protected=True)))
+        monkeypatch.setattr(lifecycle, "find_main_actor", lambda _r: main)
+
+        assert await lifecycle.delete_agent("a1") == lifecycle.REFUSED_PROTECTED
+        assert main.deleted == [] and not runtime.is_deleted("a1")
+
+    async def test_the_agent_deleted_is_the_one_its_id_names(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Two agents called weather: the dashboard deletes by id, and main is
+        # told which one by where its registry keeps that id.
+        main = _Main(
+            kept=(
+                {"name": "weather", "node": "", "actor_id": "here"},
+                {"name": "weather", "node": "pi", "actor_id": "a1"},
+            )
+        )
+        monkeypatch.setattr(runtime, "registry", _Registry())
+        monkeypatch.setattr(lifecycle, "find_main_actor", lambda _r: main)
+        runtime.state["agents"]["a1"] = {"name": "weather"}
+
+        await lifecycle.delete_agent("a1")
+
+        assert (main.deleted, main.nodes) == (["weather"], ["pi"])
 
     async def test_a_failing_main_falls_back_to_the_local_registry(
         self, monkeypatch: pytest.MonkeyPatch
@@ -319,14 +374,14 @@ class TestDispatch:
     async def test_a_remote_command_needs_a_broker_that_accepts_it(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        assert await lifecycle.dispatch_command("r1", "stop", "rest") == ""
+        assert (await lifecycle.dispatch_command("r1", "stop", "rest")).route == ""
 
         monkeypatch.setattr(runtime, "mqtt_client_ref", _Broker(fail=True))
-        assert await lifecycle.dispatch_command("r1", "stop", "rest") == ""
+        assert (await lifecycle.dispatch_command("r1", "stop", "rest")).route == ""
 
         broker = _Broker()
         monkeypatch.setattr(runtime, "mqtt_client_ref", broker)
-        assert await lifecycle.dispatch_command("r1", "stop", "rest") == "broker"
+        assert (await lifecycle.dispatch_command("r1", "stop", "rest")).route == "broker"
         assert broker.published[0][0] == "agents/r1/commands"
 
 

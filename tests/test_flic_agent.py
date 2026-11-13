@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Flic buttons as triggers: what is published, and what is kept.
 
 The buttons themselves are not here — a paired button is a radio in another
@@ -2132,7 +2133,9 @@ class FakeScanner:
     #: How many starts fail before one succeeds.
     fail_to_start: ClassVar[int] = 0
 
-    def __init__(self, detection_callback: Callable[[Any, Any], None], service_uuids: list[str]):
+    def __init__(
+        self, detection_callback: Callable[[Any, Any], None], service_uuids: list[str]
+    ) -> None:
         self.callback = detection_callback
         self.service_uuids = service_uuids
         self.started = 0

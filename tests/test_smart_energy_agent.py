@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The smart-energy agent: the plug protection guard, energy accounting, and onboarding.
 
 It switches real plugs through Home Assistant, and its central promise is that a

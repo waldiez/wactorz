@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
  * Reading application-log records from `/api/logs`.
@@ -10,7 +9,7 @@
  * `undefined` somewhere in the middle of rendering a row.
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { fetchAppLogs } from "../ui/dashboard/appLogs";
+import { fetchAppLogs } from "../io/appLogs";
 
 const entry = (over: Record<string, unknown> = {}) => ({
     source: "app",
@@ -50,7 +49,7 @@ describe("fetchAppLogs", () => {
 
         await fetchAppLogs(50);
 
-        expect(fetch).toHaveBeenCalledWith(expect.stringContaining("limit=50"));
+        expect(fetch).toHaveBeenCalledWith(expect.stringContaining("limit=50"), expect.anything());
     });
 
     it("honours the ingress prefix", async () => {
@@ -59,7 +58,10 @@ describe("fetchAppLogs", () => {
 
         await fetchAppLogs();
 
-        expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/hassio/ingress/x/api/logs"));
+        expect(fetch).toHaveBeenCalledWith(
+            expect.stringContaining("/hassio/ingress/x/api/logs"),
+            expect.anything(),
+        );
     });
 
     it("drops an entry it cannot draw", async () => {

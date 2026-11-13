@@ -160,8 +160,8 @@ or config — there is no <code>if extension == "tts"</code> anywhere.</p>
 
 frontend/src/
 ├── ext/                    # Frontend extensions (TypeScript) — mirror backend
-│   └── tts/index.ts        #     register({ apiBase, available })
-├── ui/dashboard/
+│   └── tts/index.ts        #     register({ apiBase, configRead })
+├── ui/shell/
 │   └── icons.ts            #     Icon registry — registerIcon(name, svg)
 ├── ui/CardDashboard.ts     #     View registry — registerView(key, icon, label, builder)
 └── config/serverConfig.ts  #     Config-seeding registry — registerConfigEntry(key, extract)
@@ -169,8 +169,8 @@ frontend/src/
 
 <p>At startup the monitor calls <code>setup_all(app)</code>, which auto-discovers every module
 or package under <code>wactorz/ext/</code> that exposes a <code>setup(app)</code> hook, and every
-extension an installed package registers under the <code>wactorz.extensions</code> entry
-point, and wires them in. <code>collect_public_config(app)</code> gathers each extension's
+extension registered under the <code>wactorz.extensions</code> entry point by an installed
+package named in <code>WACTORZ_EXTENSIONS</code>, and wires them in. <code>collect_public_config(app)</code> gathers each extension's
 non-secret browser config and merges it into <code>/api/config</code>. Nothing in core
 references a specific extension.</p>
 <p>An extension is <strong>opt-in and self-disabling</strong>: it reads its own environment and
@@ -193,6 +193,9 @@ no-ops when unconfigured, so shipping one forces nothing on anyone.</p>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">actor_decorator</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">web</span><span class="o">.</span><span class="n">Application</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">actor</span><span class="p">,</span> <span class="nb">dict</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Return a per-actor payload enricher (or None to opt out)."""</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">panel</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">web</span><span class="o">.</span><span class="n">Application</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Panel</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""A tab on the dashboard (see "A dashboard tab from a package")."""</span>
 
 <span class="c1"># Optional: declare ordering dependencies for on_ready().</span>
 <span class="n">__deps__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"other-ext"</span><span class="p">]</span>  <span class="c1"># this on_ready() runs after other-ext's</span>
@@ -223,6 +226,10 @@ no-ops when unconfigured, so shipping one forces nothing on anyone.</p>
 <td><code>actor_decorator(app)</code></td>
 <td>(optional) enriches each actor in the <code>/api/actors</code> payload</td>
 </tr>
+<tr>
+<td><code>panel(app)</code></td>
+<td>(optional) a dashboard tab, read after <code>setup()</code> succeeds</td>
+</tr>
 </tbody>
 </table>
 <h3 id="enriching-the-actors-list">Enriching the actors list</h3>
@@ -243,9 +250,10 @@ in place:</p>
 <code>setup_all()</code>; <code>None</code> in standalone mode). A raising factory or one returning
 <code>None</code> is skipped — never fatal.</p>
 <h3 id="from-another-package">From another package</h3>
-<p>An extension does not have to live in this repository. Any package that is
-<code>pip install</code>ed beside Wactorz can register one, free or commercial, and it is
-loaded exactly like a module under <code>wactorz/ext/</code>, after the built-ins:</p>
+<p>An extension does not have to live in this repository. Any package installed
+beside Wactorz can register one, free or commercial, and once it is named in
+<code>WACTORZ_EXTENSIONS</code> it is loaded exactly like a module under <code>wactorz/ext/</code>, after
+the built-ins:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># pyproject.toml of the other package</span>
 <span class="k">[project.entry-points.</span><span class="s2">"wactorz.extensions"</span><span class="k">]</span>
 <span class="n">mlops</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"wactorz_mlops.ext"</span>
@@ -258,6 +266,235 @@ extension's <code>__deps__</code> refers to. A name a built-in extension already
 refused with a log line, so a package cannot stand in for one; a package that
 fails to import, or has no <code>setup()</code>, is logged and skipped like a broken module
 under <code>wactorz/ext/</code>. Restart Wactorz after installing or removing such a package.</p>
+<h3 id="enabling-a-package">Enabling a package</h3>
+<p>Loading a package runs its code in the server, so being installed is not enough:
+an agent's own requirements install packages too. Name the ones you trust, by
+distribution name, or use <code>*</code> to load everything installed:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">WACTORZ_EXTENSIONS</span><span class="o">=</span>wactorz-mlops,wactorz-tts
+</code></pre></div>
+
+<p>The setting covers all three things a package can register: <code>wactorz.extensions</code>,
+<code>wactorz.agents</code> and <code>wactorz.pipelines</code>. An unlisted package is not imported at
+all; it is named once in the log, with the line to add, and on the Overview. The
+modules under <code>wactorz/ext/</code> always load.</p>
+<p>A node reads its own <code>WACTORZ_EXTENSIONS</code>. <code>/deploy</code> rewrites the node's <code>.env</code>, so
+set it on main as <code>DEPLOY_&lt;NODE&gt;_EXTENSIONS</code>. On a node the setting decides which
+agents it can build. Under Home Assistant it is the <code>extensions</code> option, on the
+add-on and on each deploy target.</p>
+<h3 id="a-dashboard-tab-from-a-package">A dashboard tab from a package</h3>
+<p>A package adds a tab without changing the dashboard: <code>panel()</code> names an ES module
+in the package, and the page loads it the first time the tab opens.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">wactorz.ext</span><span class="w"> </span><span class="kn">import</span> <span class="n">Panel</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">panel</span><span class="p">(</span><span class="n">app</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">Panel</span><span class="p">(</span>
+        <span class="n">title</span><span class="o">=</span><span class="s2">"MLOps"</span><span class="p">,</span>
+        <span class="n">script</span><span class="o">=</span><span class="n">Path</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)</span><span class="o">.</span><span class="n">parent</span> <span class="o">/</span> <span class="s2">"panel.js"</span><span class="p">,</span>
+        <span class="n">icon</span><span class="o">=</span><span class="s2">"models"</span><span class="p">,</span>                <span class="c1"># one of the dashboard's icons, or an .svg file; "grid" otherwise</span>
+        <span class="n">topics</span><span class="o">=</span><span class="p">(</span><span class="s2">"mlops/#"</span><span class="p">,),</span>          <span class="c1"># relayed to the page for host.subscribe</span>
+    <span class="p">)</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="c1">// panel.js: one module, bundled if it needs more than one file.</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">apiVersion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1</span><span class="p">;</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">mount</span><span class="p">(</span><span class="nx">root</span><span class="p">,</span><span class="w"> </span><span class="nx">host</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">heading</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">document</span><span class="p">.</span><span class="nx">createElement</span><span class="p">(</span><span class="s2">"h2"</span><span class="p">);</span>
+<span class="w">    </span><span class="nx">heading</span><span class="p">.</span><span class="nx">textContent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"MLOps"</span><span class="p">;</span>
+<span class="w">    </span><span class="nx">root</span><span class="p">.</span><span class="nx">append</span><span class="p">(</span><span class="nx">heading</span><span class="p">);</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">stop</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">host</span><span class="p">.</span><span class="nx">subscribe</span><span class="p">(</span><span class="s2">"mlops/+/state"</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="nx">topic</span><span class="p">,</span><span class="w"> </span><span class="nx">payload</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">});</span>
+<span class="w">    </span><span class="ow">void</span><span class="w"> </span><span class="nx">host</span><span class="p">.</span><span class="nx">request</span><span class="p">(</span><span class="s2">"/api/mlops/runs"</span><span class="p">).</span><span class="nx">then</span><span class="p">(</span><span class="nx">answer</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* answer.ok, answer.value */</span><span class="w"> </span><span class="p">});</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">stop</span><span class="p">();</span><span class="w">              </span><span class="c1">// called when another view opens</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><strong>Its icon.</strong> <code>icon</code> names one of the dashboard's icons, or is a <code>Path</code> to an <code>.svg</code>
+file in the package, <code>icon=Path(__file__).parent / "icon.svg"</code>. The file is read once,
+when the extension loads, and the page keeps only the shapes inside its <code>&lt;svg&gt;</code>
+(<code>path</code>, <code>circle</code>, <code>rect</code>, <code>line</code>, <code>polyline</code>, <code>polygon</code>, <code>ellipse</code>, <code>g</code>), drawn as the
+dashboard's own icons are: lines in the text's colour, two units wide, on a 24 by 24
+grid. So draw it on that grid; the file's own <code>viewBox</code>, size and colours give way. A
+file that is missing, larger than 16 KiB, not UTF-8 or with no <code>&lt;svg&gt;</code> in it leaves the
+tab in place on the default icon, and the log says why.</p>
+<p><code>mount(root, host)</code> fills <code>root</code> and may return, or resolve to, a function that is
+called when another view opens; the tab is mounted again when it is opened again.
+<code>host</code> is the panel's whole view of the dashboard, version 1:</p>
+<table>
+<thead>
+<tr>
+<th>Member</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apiVersion</code>, <code>name</code></td>
+<td>The interface's version, and the panel's name</td>
+</tr>
+<tr>
+<td><code>route()</code>, <code>onRoute(fn)</code></td>
+<td>Where in the panel the address points: <code>#/mlops/runs/7</code> is <code>["runs", "7"]</code></td>
+</tr>
+<tr>
+<td><code>navigate(path)</code></td>
+<td>Move the address within the panel; a refresh and Back follow it</td>
+</tr>
+<tr>
+<td><code>request(path, init?)</code></td>
+<td>JSON from the server with a timeout; answers <code>{ok: true, value}</code> or <code>{ok: false, error}</code>, never rejects</td>
+</tr>
+<tr>
+<td><code>subscribe(filter, fn)</code></td>
+<td>Messages on a topic the page is sent: the dashboard's own, and the panel's <code>topics</code></td>
+</tr>
+<tr>
+<td><code>toast({title, message, type?})</code></td>
+<td>A notice; <code>type</code> is <code>info</code>, <code>warning</code> or <code>error</code></td>
+</tr>
+<tr>
+<td><code>chart(series, options)</code></td>
+<td>The dashboard's line chart, to place in <code>root</code>; returns <code>{element, update(series, options?), destroy()}</code> (below)</td>
+</tr>
+<tr>
+<td><code>setting(key)</code>, <code>onSetting(key, fn)</code></td>
+<td>What this browser chose for a setting the panel declared, and being told when it changes (below)</td>
+</tr>
+</tbody>
+</table>
+<p>What <code>onRoute</code>, <code>subscribe</code>, <code>onSetting</code> and <code>chart</code> start ends with the panel, and each returns a function
+(for <code>chart</code>, its <code>destroy</code>) that ends it sooner. A panel styles itself, inside <code>root</code>: it inherits the dashboard's
+text colour and font, and can read its CSS variables (<code>--af-text-dim</code>, <code>--af-focus</code>). A script that fails
+to load, exports no <code>mount</code>, was written for another <code>apiVersion</code> or throws says so in
+its own tab, and the rest of the dashboard is unaffected.</p>
+<p><strong>A chart.</strong> <code>host.chart</code> draws what the dashboard's own charts draw, so a tab looks like
+the rest. A series is <code>{name, points: [{t, v}], color?, spread?}</code>, <code>t</code> in milliseconds since
+the epoch and <code>v</code> a number or <code>null</code> for a gap; <code>spread: [{t, lo, hi}]</code> shades each point's
+least and most, as a bucketed series (<code>GET /api/data/{source}/series</code>) gives them. The axes
+label round values and round local times, with a faint gridline at each, worked out again
+for any window zoomed into. Options:</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>What it draws</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>title</code>, <code>format?</code></td>
+<td>The chart's name, also its name for a screen reader; how a value is written (the number as the reader's locale writes it when left out)</td>
+</tr>
+<tr>
+<td><code>yLabel?</code>, <code>xLabel?</code></td>
+<td>What the values are, beside the value axis, and what runs along the bottom (time unless said); both join the chart's name for a screen reader</td>
+</tr>
+<tr>
+<td><code>thresholds: [{value, label, color?}]</code></td>
+<td>A dashed level across the chart, kept in view, named in the legend</td>
+</tr>
+<tr>
+<td><code>bands: [{from, to, label, tone?}]</code></td>
+<td>A stretch of time shaded across it, <code>tone</code> <code>warn</code> or <code>info</code>; its label on top and in the tooltip</td>
+</tr>
+<tr>
+<td><code>marks: [{t, label, v?, shape?, color?}]</code></td>
+<td>A point in time marked in a <code>dot</code>, <code>square</code>, <code>triangle</code> or <code>diamond</code>, at height <code>v</code> or at the top; each kind counted in the legend</td>
+</tr>
+<tr>
+<td><code>mode</code>, <code>modeToggle</code></td>
+<td>How points are drawn, <code>line</code> (broken at gaps), <code>points</code> or <code>joined</code>, or <code>auto</code> (points when most of the slots are empty); <code>modeToggle: true</code> offers the choice in the chart's header</td>
+</tr>
+<tr>
+<td><code>zoom</code>, <code>onZoom(window)</code></td>
+<td><code>zoom: true</code> lets a mouse drag across the plot, or the buttons, zoom into a window of its time; <code>onZoom</code> is asked for <code>{from, to}</code> (or <code>null</code> on reset) and may answer with series for it, such as finer buckets from the server, else the chart narrows to what it holds; if it rejects, the chart keeps what it holds and says the finer view could not be read</td>
+</tr>
+</tbody>
+</table>
+<p><code>chart</code> came within version 1, so a panel that may meet an older dashboard checks
+<code>typeof host.chart === "function"</code> first.</p>
+<p>A panel need not use it: <code>root</code> is the panel's own, to draw in with its own code or any
+library. The dashboard serves the panel one script and allows scripts from its own origin
+only, so a library is bundled into <code>panel.js</code>, its stylesheet inlined (inline styles and
+<code>&lt;style&gt;</code> are allowed; a stylesheet or a font from elsewhere is not), and nothing in it may
+need <code>eval</code> or <code>new Function</code>. Canvas, SVG, <code>data:</code> images and workers from <code>blob:</code> work. A
+chart of its own ends with the function <code>mount</code> returns, as anything else the panel starts.</p>
+<div class="highlight"><pre><span></span><code><span class="kd">const</span><span class="w"> </span><span class="nx">chart</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">host</span><span class="p">.</span><span class="nx">chart</span><span class="p">(</span>
+<span class="w">    </span><span class="p">[{</span><span class="w"> </span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="s2">"score"</span><span class="p">,</span><span class="w"> </span><span class="nx">points</span><span class="w"> </span><span class="p">}],</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nx">title</span><span class="o">:</span><span class="w"> </span><span class="s2">"Pump 1"</span><span class="p">,</span><span class="w"> </span><span class="nx">thresholds</span><span class="o">:</span><span class="w"> </span><span class="p">[{</span><span class="w"> </span><span class="nx">value</span><span class="o">:</span><span class="w"> </span><span class="mf">0.22</span><span class="p">,</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s2">"alarm"</span><span class="w"> </span><span class="p">}],</span><span class="w"> </span><span class="nx">zoom</span><span class="o">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nx">modeToggle</span><span class="o">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">},</span>
+<span class="p">);</span>
+<span class="nx">root</span><span class="p">.</span><span class="nx">append</span><span class="p">(</span><span class="nx">chart</span><span class="p">.</span><span class="nx">element</span><span class="p">);</span>
+</code></pre></div>
+
+<p><strong>Its settings.</strong> A panel that has something for each person to choose declares it, and
+the dashboard draws it: a section of Settings named after the tab, at
+<code>#/settings/panel-&lt;name&gt;</code>, with a row per setting, laid out as the dashboard's own.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">wactorz.ext</span><span class="w"> </span><span class="kn">import</span> <span class="n">Panel</span><span class="p">,</span> <span class="n">PanelSetting</span>
+
+<span class="n">Panel</span><span class="p">(</span>
+    <span class="n">title</span><span class="o">=</span><span class="s2">"Air"</span><span class="p">,</span>
+    <span class="n">script</span><span class="o">=</span><span class="n">HERE</span> <span class="o">/</span> <span class="s2">"panel.js"</span><span class="p">,</span>
+    <span class="n">settings</span><span class="o">=</span><span class="p">(</span>
+        <span class="n">PanelSetting</span><span class="p">(</span><span class="s2">"temperature"</span><span class="p">,</span> <span class="s2">"Temperature"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"choice"</span><span class="p">,</span>
+                     <span class="n">choices</span><span class="o">=</span><span class="p">((</span><span class="s2">"c"</span><span class="p">,</span> <span class="s2">"°C"</span><span class="p">),</span> <span class="p">(</span><span class="s2">"f"</span><span class="p">,</span> <span class="s2">"°F"</span><span class="p">)),</span> <span class="n">default</span><span class="o">=</span><span class="s2">"c"</span><span class="p">,</span>
+                     <span class="n">hint</span><span class="o">=</span><span class="s2">"The unit the rooms' temperatures read in."</span><span class="p">),</span>
+        <span class="n">PanelSetting</span><span class="p">(</span><span class="s2">"compact"</span><span class="p">,</span> <span class="s2">"Compact cards"</span><span class="p">),</span>                      <span class="c1"># a switch, off</span>
+        <span class="n">PanelSetting</span><span class="p">(</span><span class="s2">"keep"</span><span class="p">,</span> <span class="s2">"Points kept"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"number"</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">400</span><span class="p">,</span> <span class="n">minimum</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span> <span class="n">maximum</span><span class="o">=</span><span class="mi">2000</span><span class="p">),</span>
+    <span class="p">),</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Drawn as</th>
+<th><code>default</code></th>
+<th>Also</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>switch</code> (when left out)</td>
+<td>An on/off switch</td>
+<td><code>True</code> or <code>False</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>choice</code></td>
+<td>A few choices side by side</td>
+<td>One of the values</td>
+<td><code>choices</code>: <code>(value, label)</code> pairs, in order</td>
+</tr>
+<tr>
+<td><code>number</code></td>
+<td>A number field</td>
+<td>A number</td>
+<td><code>minimum</code>, <code>maximum</code>, <code>step</code>, each optional</td>
+</tr>
+</tbody>
+</table>
+<p>A setting's <code>key</code> is lowercase letters, digits and <code>-</code>, and its <code>hint</code> is one line under
+its name. A setting that cannot be drawn (a default that is not among the choices or is
+out of range, a key used twice) is left out, the others stay, and the log says why.</p>
+<p>The values are each browser's own: the server describes the settings and never holds
+what was chosen. <code>host.setting("temperature")</code> answers with what this browser chose, the
+default until it has, and <code>undefined</code> for a key the panel did not declare. Settings is
+another view, so a panel reads its settings when it mounts; <code>host.onSetting(key, fn)</code>
+tells it of a change made meanwhile in another window of the same browser. A setting
+changes how the panel shows things, so keep what is published and stored as it is: the
+air-quality example converts to °F on display and its readings stay in °C. Both came
+within version 1, so a panel that may meet an older dashboard checks
+<code>typeof host.setting === "function"</code> first.</p>
+<p><strong>What a panel is trusted with.</strong> It runs in the page with the signed-in session, so
+it can do whatever the dashboard can: as much as the package's code already can on
+the server. So a tab is offered only for an extension whose <code>setup()</code> succeeded,
+which for a package means one named in <code>WACTORZ_EXTENSIONS</code>. Its script is served at
+<code>/api/ext/&lt;name&gt;/panel.js</code>, behind the same key as the rest of the API. The extension's
+name is the tab's address, so it is lowercase letters, digits and <code>-</code>, and cannot be a
+built-in view's; a panel that breaks a rule is logged and left out.</p>
 <h3 id="requirements">Requirements</h3>
 <ul>
 <li>Register routes on <code>app.router</code> and namespace them under <code>/api/&lt;ext&gt;/…</code>.</li>
@@ -290,19 +527,21 @@ never by calling other components directly.</p>
 <span class="w">    </span><span class="nx">available</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span>
 <span class="p">}</span>
 
-<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">register</span><span class="p">(</span><span class="nx">config</span><span class="o">:</span><span class="w"> </span><span class="kt">MyConfig</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">config</span><span class="p">.</span><span class="nx">available</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="p">;</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">register</span><span class="p">(</span><span class="nx">config</span><span class="o">:</span><span class="w"> </span><span class="kt">MyConfig</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">config</span><span class="p">.</span><span class="nx">available</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{};</span>
 <span class="w">    </span><span class="c1">// Seed the singleton, then let it self-wire via the event bus.</span>
 <span class="w">    </span><span class="nx">myManager</span><span class="p">.</span><span class="nx">setApiBase</span><span class="p">(</span><span class="nx">config</span><span class="p">.</span><span class="nx">apiBase</span><span class="p">);</span>
 <span class="w">    </span><span class="ow">void</span><span class="w"> </span><span class="nx">myManager</span><span class="p">.</span><span class="nx">init</span><span class="p">();</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">listen</span><span class="p">(</span><span class="s2">"my-event"</span><span class="p">,</span><span class="w"> </span><span class="nx">detail</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">myManager</span><span class="p">.</span><span class="nx">handle</span><span class="p">(</span><span class="nx">detail</span><span class="p">));</span>
 <span class="p">}</span>
 </code></pre></div>
 
-<h3 id="wiring-in-maints">Wiring in main.ts</h3>
-<p><code>register()</code> is called once during startup, after <code>/api/config</code> is seeded:</p>
+<h3 id="wiring-in-appts">Wiring in app.ts</h3>
+<p><code>register()</code> is called once during startup, after <code>/api/config</code> is seeded, by
+<code>bootFromConfig</code> in <code>app.ts</code>; what it returns is how <code>createApp</code>'s <code>stop</code> ends it:</p>
 <div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">register</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nx">registerMyExt</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">"./ext/myname"</span><span class="p">;</span>
 
-<span class="nx">registerMyExt</span><span class="p">({</span><span class="w"> </span><span class="nx">apiBase</span><span class="o">:</span><span class="w"> </span><span class="kt">_apiBase</span><span class="p">,</span><span class="w"> </span><span class="nx">available</span><span class="w"> </span><span class="p">});</span>
+<span class="nx">running</span><span class="p">.</span><span class="nx">stopMyExt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">registerMyExt</span><span class="p">({</span><span class="w"> </span><span class="nx">apiBase</span><span class="o">:</span><span class="w"> </span><span class="kt">ingressBase</span><span class="p">(),</span><span class="w"> </span><span class="nx">available</span><span class="w"> </span><span class="p">});</span>
 </code></pre></div>
 
 <h3 id="config-seeding">Config seeding</h3>
@@ -323,7 +562,7 @@ keys; your barrel contributes the extension's at module load — before
 <h3 id="dashboard-views-and-icons">Dashboard views and icons</h3>
 <p>An extension that adds a dashboard tab uses the two registries — core never
 imports extension views or icon names:</p>
-<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">registerIcon</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">"../../ui/dashboard/icons"</span><span class="p">;</span>
+<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">registerIcon</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">"../../ui/shell/icons"</span><span class="p">;</span>
 
 <span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">register</span><span class="p">(</span><span class="nx">config</span><span class="o">:</span><span class="w"> </span><span class="kt">MyConfig</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="c1">// 1. Register the icon BEFORE registerView() uses its name.</span>
@@ -334,9 +573,8 @@ imports extension views or icon names:</p>
 <span class="p">}</span>
 </code></pre></div>
 
-<p><code>registerView(key, icon, label, builder)</code> is a <code>CardDashboard</code> method; <code>main.ts</code>
-passes it (plus an <code>onRender</code> re-render thunk) into <code>register()</code>. The builder is
-a <code>() =&gt; HTMLElement</code> thunk called lazily on navigation — keep it pure and build
+<p>A view is asked for on the bus: <code>emit("af-register-view", { key, icon, label, build })</code>
+reaches <code>CardDashboard.registerView</code>. <code>build</code> is a <code>() =&gt; HTMLElement</code> thunk called lazily on navigation — keep it pure and build
 a fresh element tree per call.</p>
 <table>
 <thead>
@@ -349,7 +587,7 @@ a fresh element tree per call.</p>
 <tbody>
 <tr>
 <td><code>registerIcon()</code></td>
-<td><code>ui/dashboard/icons.ts</code></td>
+<td><code>ui/shell/icons.ts</code></td>
 <td>Add SVG icons by name</td>
 </tr>
 <tr>
@@ -418,10 +656,11 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 <h2 id="checklist">Checklist</h2>
 <ul>
 <li>[ ] Backend <code>setup()</code> registers routes under <code>/api/&lt;ext&gt;/…</code></li>
-<li>[ ] A packaged extension is named in <code>[project.entry-points."wactorz.extensions"]</code></li>
+<li>[ ] A packaged extension is named in <code>[project.entry-points."wactorz.extensions"]</code>, and its docs say to add the distribution to <code>WACTORZ_EXTENSIONS</code></li>
 <li>[ ] Optional <code>public_config()</code> returns only non-secret keys (never tokens)</li>
 <li>[ ] Optional <code>on_ready()</code> handles cross-extension ordering via <code>__deps__</code></li>
 <li>[ ] Optional <code>actor_decorator()</code> enriches the <code>/api/actors</code> payload</li>
+<li>[ ] Optional <code>panel()</code> names a <code>.js</code> module exporting <code>apiVersion</code> and <code>mount(root, host)</code>, an icon by name or an <code>.svg</code> on a 24 by 24 grid, and any <code>settings</code> a person chooses per browser</li>
 <li>[ ] Config is read from <code>os.getenv(…)</code>, not <code>wactorz.config.CONFIG</code></li>
 <li>[ ] Extension no-ops gracefully when its env var / dependency is absent</li>
 <li>[ ] Frontend barrel exports a <code>register(config)</code> function; wires via the event bus</li>

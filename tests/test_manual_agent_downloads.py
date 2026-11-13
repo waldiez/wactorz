@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The manual agent fetches only public web addresses, and only so much.
 
 Its candidate URLs come from search results and from links inside the pages it

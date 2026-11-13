@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import unittest
 from unittest import mock
 
@@ -9,14 +10,14 @@ from wactorz.core.integrations.google_mcp import _looks_permission_denied
 
 
 class PermissionDetectionTest(unittest.TestCase):
-    def test_detects_permission_denied(self):
+    def test_detects_permission_denied(self) -> None:
         self.assertTrue(_looks_permission_denied("The caller does not have permission"))
         self.assertTrue(_looks_permission_denied("PERMISSION_DENIED: nope"))
         self.assertFalse(_looks_permission_denied("Standup at 10:00"))
 
 
 class FormatEventsTest(unittest.TestCase):
-    def test_formats_timed_and_all_day(self):
+    def test_formats_timed_and_all_day(self) -> None:
         out = _format_events(
             [
                 {
@@ -36,12 +37,12 @@ class FormatEventsTest(unittest.TestCase):
         self.assertIn("Holiday", out)
         self.assertIn("all day", out)
 
-    def test_empty(self):
+    def test_empty(self) -> None:
         self.assertIn("No events", _format_events([]))
 
 
 class RestFallbackTest(unittest.IsolatedAsyncioTestCase):
-    async def test_falls_back_to_rest_on_permission_denied(self):
+    async def test_falls_back_to_rest_on_permission_denied(self) -> None:
         client = GoogleCalendarMcpClient()
         client._call_mcp = mock.AsyncMock(return_value="The caller does not have permission")
         client._rest_request = mock.AsyncMock(
@@ -76,7 +77,7 @@ class RestFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params["timeMin"], "2026-07-03T00:00:00+03:00")
         self.assertEqual(params["singleEvents"], "true")
 
-    async def test_no_fallback_when_mcp_succeeds(self):
+    async def test_no_fallback_when_mcp_succeeds(self) -> None:
         client = GoogleCalendarMcpClient()
         client._call_mcp = mock.AsyncMock(return_value="Standup at 10:00")
         client._rest_request = mock.AsyncMock()
@@ -86,7 +87,7 @@ class RestFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "Standup at 10:00")
         client._rest_request.assert_not_awaited()
 
-    async def test_create_event_via_rest_builds_body(self):
+    async def test_create_event_via_rest_builds_body(self) -> None:
         client = GoogleCalendarMcpClient()
         client._call_mcp = mock.AsyncMock(return_value="The caller does not have permission")
         client._rest_request = mock.AsyncMock(
@@ -115,7 +116,7 @@ class RestFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["summary"], "sports")
         self.assertEqual(body["start"]["dateTime"], "2026-07-03T08:00:00+03:00")
 
-    async def test_delete_event_via_rest(self):
+    async def test_delete_event_via_rest(self) -> None:
         client = GoogleCalendarMcpClient()
         client._call_mcp = mock.AsyncMock(return_value="The caller does not have permission")
         client._rest_request = mock.AsyncMock(return_value=(204, {}))
@@ -127,7 +128,7 @@ class RestFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(method, "DELETE")
         self.assertIn("abc123", path)
 
-    async def test_rest_error_surfaced_friendly(self):
+    async def test_rest_error_surfaced_friendly(self) -> None:
         client = GoogleCalendarMcpClient()
         client._call_mcp = mock.AsyncMock(return_value="The caller does not have permission")
         client._rest_request = mock.AsyncMock(

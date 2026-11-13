@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Whether an agent's state can travel with it when it migrates.
 
 A migration ships the state as JSON over MQTT, with each blob -- a model, an
@@ -7,8 +8,6 @@ broker or for a small node cannot either. Main and the node
 runner both ask the questions here, so the two legs of a migration refuse on
 the same terms and in the same words.
 """
-
-from __future__ import annotations
 
 import json
 from typing import Any

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The operations the model may ask a node for, by name.
 
 Free text never reaches a node's shell from the model: a command typed by the

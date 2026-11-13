@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Retry, backoff and a per-attempt timeout for LLM requests.
 
 Applied in ``LLMProvider``'s public methods, so every provider inherits this the
@@ -20,7 +21,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, TypeVar
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 

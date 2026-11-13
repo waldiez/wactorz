@@ -13,7 +13,8 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 
 - `wactorz/` — the Python package: `agents/`, `core/`, `interfaces/`, `web/` (the aiohttp
   server: `app` routes + `runtime` shared state + a module per concern — named `web` to avoid
-  colliding with `monitoring/`), `ext/` (optional features), `cli.py`, `config.py`.
+  colliding with `monitoring/`), `ext/` (optional features), `client/` (a client of a running server,
+  which imports only the standard library and `aiohttp`), `cli.py`, `config.py`.
 - **Inside `agents/`, an agent is a file until it grows a second concern; then it becomes a
   package with the same internal shape** — `agents/main/` is the worked example, and its
   `__init__.py` states the rule and the layering it depends on (a package may import from the
@@ -32,7 +33,9 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 | Run backend | `make run` · full dev stack: `make dev-full` |
 | Tests | `make test` (Python + frontend) · split: `make test-py` / `make test-frontend` · coverage: `make coverage` (or `-py` / `-frontend`) · every supported Python, opt-in: `make test-py-versions` (`PYTHONS="3.10 3.11"` to narrow) · main and a node over a real mosquitto: `make test-broker` (needs Docker) · the same two kept busy for a while, failing on anything that only grows: `make soak` (`DURATION=` seconds, default 300) · the whole product through a browser, with a real broker and a node deployed over SSH: `make e2e` (needs Docker; `make e2e-setup` once; see `e2e/README.md`) |
 | Build frontend | `make build-frontend` (never raw `bun run build` — this also syncs the installed package) |
-| Frontend lint | `make lint` (typecheck + prettier + eslint + markdownlint) |
+| Lint | `make lint` (Python + frontend + license lines) · split: `make lint-py` (ruff + basedpyright) / `make lint-frontend` (typecheck + prettier + eslint + markdownlint) / `make lint-licenses` |
+| Format | `make fmt` (Python + frontend) · split: `make fmt-py` / `make fmt-frontend` |
+| Type-check | `make typecheck` (Python + frontend) · split: `make typecheck-py` / `make typecheck-frontend` · the package's public types, scored on an install of it as users' type checkers read them: `make verifytypes` (fails without `py.typed`, or below a floor that only rises) |
 | Workflows, shell scripts, Dockerfiles | `make lint-ci` (zizmor + shellcheck + hadolint, pinned images; needs Docker, online with `GH_TOKEN`) |
 | App image checks | `make image` then `make image-smoke` (beside a broker: probes, no root, no set-id) and `make image-scan` (Trivy; accepted findings in `.trivyignore.yaml`); `IMAGE=` picks another image, and `make image FLAVOUR=ultra` builds the larger of the two (PyTorch, Ultralytics, OpenCV, GStreamer) |
 | Build everything | `make build` · local CI: `make ci` |
@@ -50,9 +53,12 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 - Bun for JS/TS. Tests run on Vitest + happy-dom and coverage is **gated** — `bun run coverage`
   fails below the floor. Raise the floor as you add tests; never lower it. New components and bug
   fixes ship with a test in `src/__tests__/`.
-- No framework: components are plain DOM classes that communicate through the typed event bus in
-  `src/events.ts` (`emit`/`listen` + `AppEventMap`) — fire events, don't call other components directly.
+- No framework: components are plain DOM classes. Across component trees, from transport to UI and to and
+  from extensions, they use the typed event bus in `src/events.ts` (`emit`/`listen` + `AppEventMap`); inside
+  a tree a parent hands its child a host interface. Every subscription has an owner that ends it.
+- Layering is linted: `io/`, `config/` and `events.ts` import no view, and core imports no extension.
 - Build elements in code; never `innerHTML` with untrusted/remote strings (escape or use `textContent`).
+- Every request goes through `src/io/api.ts`, which gives it a timeout; lint refuses `fetch` anywhere else.
 
 ## Python conventions
 
@@ -89,7 +95,8 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
   - **Superlatives.** "the largest", "the only", "the last remaining" — all of them decay
     silently.
 - Ruff is the gated linter and formatter (`pyproject.toml` `[tool.ruff]`). `make lint-py` runs it,
-  plus an advisory pass that reports but never blocks. The commit hook (prek) and CI both enforce
+  plus an advisory pass that reports but never blocks. Every function is annotated (ruff `ANN`,
+  gated): fully outside `tests/`, its return type inside it. `Any` is allowed where a value really is dynamic. The commit hook (prek) and CI both enforce
   the gated rules, so a push that skips them fails rather than merging.
 - **An exception says its own message.** Give the class a classmethod per reason
   (`ArtifactError.missing(path)`), or a class of its own with the message in `__init__`, and
@@ -112,6 +119,8 @@ main or on a node. Consequences:
   (`agent` is passed in; the host injects a few names), never its own package; it must work
   without being imported, so no relative imports.
 - **It may import `wactorz`** — a node is a wactorz install. Absolute imports only.
+- **`agent` is a `wactorz.agents.dynamic.api.AgentAPI`**, and a program annotates it so, imported for
+  real rather than under `TYPE_CHECKING`: the source is exec'd, so its annotations are evaluated.
 - **The linters, the type checker and coverage read it like any other module.** Tests reach a
   program through `tests/programs.py`, which execs it the way a DynamicAgent does.
 - `reachy_mini_agent.py` still holds its program in an `AGENT_CODE` string, which the linters see
@@ -120,6 +129,9 @@ main or on a node. Consequences:
 
 ## Safety
 
+- **Every source file opens with `SPDX-License-Identifier: Apache-2.0`** in its own comment syntax (after a shebang or
+  doctype), and nothing else: the copyright lives in `NOTICE.md`. The commit hook writes it (`make fmt-licenses` does
+  the same by hand); the build stamps `static/app`. A file under another license says so in its own SPDX line.
 - **Never commit secrets or `.env*` files.** All credentials come from environment variables (see `wactorz/config.py`).
 - **Never ship secrets to the browser.** The dashboard receives only non-secret config from `/api/config`
   (e.g. the Home Assistant URL — never tokens).

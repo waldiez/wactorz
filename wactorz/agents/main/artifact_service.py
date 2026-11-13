@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Sending a node the artifacts its agents name, when it asks.
 
 A spawn config may name artifacts -- models kept with `wactorz-artifacts` -- as
@@ -27,8 +28,10 @@ keeps it, or an empty payload when it is unset, so a subscriber that comes up
 late sees the same as one that was there. Main publishes what the index says:
 everything at start, and from then on each change it finds, on a short interval,
 so a move the CLI makes beside the server reaches the broker without the two
-talking. A change found is also one line on the feed. Nobody else publishes
-there: a pointer is moved through the store, never by writing to its topic.
+talking. A change found is also one line on the feed, and is handed to the hot
+swap (`hot_swap`), which reloads the agents whose pins follow the pointer.
+Nobody else publishes there: a pointer is moved through the store, never by
+writing to its topic.
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from ...config import ARTIFACT_MAX_BYTES
@@ -52,11 +56,19 @@ from ...core.mqtt import (
     session_kwargs,
 )
 from ...core.paths import resolve_state_dir
+from ...core.persistence.stores import get_db
+from ...core.pointer_moves import record_change, record_clear, record_move
+from ...core.provenance import Provenance
+from ...core.topics import NODES, agent_topic, model_topic, node_topic, own_topic_parts
 
 if TYPE_CHECKING:
+    from ...core.persistence.db import WactorzDB
     from .hosts import ArtifactHost
 
-logger = logging.getLogger(__name__)
+#: One pointer's change: name, pointer, where it stands now, where it stood.
+Change = tuple[str, str, "Pointer | None", "Pointer | None"]
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long to wait before reconnecting a dropped subscription.
 RECONNECT_DELAY_S = 5.0
@@ -72,7 +84,7 @@ POINTER_POLL_S = 5.0
 
 def pointer_topic(name: str, which: str) -> str:
     """The retained topic that says where ``name``'s ``which`` pointer stands."""
-    return f"models/{name}/{which}"
+    return model_topic(name, which)
 
 
 def pointer_message(name: str, which: str, now: Pointer | None, was: Pointer | None) -> str:
@@ -83,6 +95,56 @@ def pointer_message(name: str, which: str, now: Pointer | None, was: Pointer | N
     previous = f" (was {name}:{now.previous})" if now.previous is not None else ""
     reason = f": {now.reason}" if now.reason else ""
     return f"{now.reference} is now {which}{previous}, by {now.by}{reason}"
+
+
+def record_pointer_changes(
+    db: WactorzDB,
+    store: ArtifactStore,
+    changes: list[Change],
+    standing: Mapping[tuple[str, str], Pointer | None],
+) -> set[tuple[str, str]]:
+    """Write the store's journal, then each change seen, into the provenance graph.
+
+    The journal first: it says who made each change and why, in whichever
+    process, and the first record of a change is the one that stands
+    (`wactorz.core.pointer_moves`). It is trimmed once written, so a database
+    that refuses a record leaves it to the next look. What is seen in the
+    index covers a change the journal lost: a shadow that went because its
+    version became active is the promotion's, by whoever promoted; any other
+    clear is by nobody known.
+
+    Returns the (name, pointer) of each change written from the journal, so
+    main can say the history moved even when the index looks as it did: a
+    shadow tried and cleared between two looks.
+    """
+    prov = Provenance(db)
+    journalled, read = store.pointer_changes()
+    recorded: set[tuple[str, str]] = set()
+    for change in journalled:
+        if record_change(prov, change) is not None:
+            pointer = change["pointer"]
+            recorded.add((str(pointer["name"]), str(pointer["pointer"])))
+    rejected = store.forget_pointer_changes(read)
+    if rejected:
+        logger.warning(
+            "%s line(s) of the pointer journal were not a change, kept in %s",
+            len(rejected),
+            store.rejected_journal_path,
+        )
+    for name, which, now, was in changes:
+        if now is not None:
+            record_move(prov, now)
+            continue
+        if was is None:
+            continue
+        active = standing.get((name, "active"))
+        if which == "shadow" and active is not None and active.version == was.version:
+            record_clear(
+                prov, was, at=active.moved_at, by=active.by, reason=active.reason, promoted=True
+            )
+        else:
+            record_clear(prov, was, at=time.time())
+    return recorded
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -101,8 +163,16 @@ class TooLargeForNodeError(ArtifactError):
 class ArtifactService:
     """Pins the artifacts a spawn names, and sends them to the nodes that ask."""
 
-    def __init__(self, host: ArtifactHost | None = None) -> None:
+    def __init__(
+        self,
+        host: ArtifactHost | None = None,
+        *,
+        follow: Callable[[list[Change]], Awaitable[None]] | None = None,
+    ) -> None:
         self.host = host
+        #: Told each change the watcher finds, after it is published and
+        #: recorded: the hot swap, which reloads the agents that follow it.
+        self._follow = follow
         #: node -> the hashes main has sent it a spawn naming, this run. The
         #: registry says the same once a spawn is saved; this covers the moment
         #: before, when the node may already be asking.
@@ -143,11 +213,7 @@ class ArtifactService:
         allowed = set(self.offered.get(node, ()))
         if self.host is None:
             return allowed
-        configs = [
-            cfg
-            for cfg in self.host._get_spawn_registry().values()
-            if str(cfg.get("node", "")).strip() == node
-        ]
+        configs = self.host._get_spawn_registry().on_node(node)
         configs += [
             pending["config"]
             for pending in self.host.migration.pending_spawns.values()
@@ -170,8 +236,8 @@ class ArtifactService:
             data = json.loads(payload.decode())
         except (UnicodeDecodeError, ValueError):
             return
-        parts = topic.split("/")
-        if len(parts) != 3 or parts[0] != "nodes" or not isinstance(data, dict):
+        parts = own_topic_parts(topic)
+        if parts is None or len(parts) != 3 or parts[0] != NODES or not isinstance(data, dict):
             return
         node = parts[1]
         asked = data.get("sha256")
@@ -226,13 +292,18 @@ class ArtifactService:
         not, so the broker agrees with the store after a restart, and says
         nothing on the feed: nothing moved, main only came back. Called by
         the watcher on its interval, and by whatever moves a pointer through
-        main, so that move is heard at once.
+        main, so that move is heard at once. A pointer whose change is
+        written into the history from the journal is published again too,
+        though it stands where it did: the dashboard reads a model's history
+        again on any publish of its pointers.
         """
         host = self.host
         if host is None:
             return
         standing = await asyncio.to_thread(self._standing)
         first = not self._looked
+        changes: list[Change] = []
+        published: set[tuple[str, str]] = set()
         for key in sorted(set(standing) | set(self.announced)):
             now = standing.get(key)
             was = self.announced.get(key)
@@ -242,6 +313,12 @@ class ArtifactService:
             name, which = key
             payload: Any = b"" if now is None else now.payload()
             await host._mqtt_publish(pointer_topic(name, which), payload, retain=True, qos=1)
+            published.add(key)
+            # The first look records where each pointer stands, silently: a
+            # move made while main was away is written once, one already held
+            # is passed over (`wactorz.core.pointer_moves`).
+            if now is not None or (known and not first):
+                changes.append((name, which, now, was))
             # A model just stored has pointers to publish and nothing to say:
             # none of them moved.
             if first or (not known and now is None):
@@ -249,7 +326,7 @@ class ArtifactService:
             message = pointer_message(name, which, now, was)
             logger.info("[%s] %s", host.name, message)
             await host._mqtt_publish(
-                f"agents/{host.actor_id}/logs",
+                agent_topic(host.actor_id, "logs"),
                 {
                     "type": "model",
                     "message": message,
@@ -260,6 +337,40 @@ class ArtifactService:
             )
         self.announced = standing
         self._looked = True
+        # After the look is taken, so a database that refuses the record does
+        # not make every later look announce the same change again.
+        for name, which in sorted(await self._record(changes, standing) - published):
+            if (name, which) not in standing:
+                # The name was removed: its pointers were published empty already.
+                continue
+            now = standing[(name, which)]
+            payload = b"" if now is None else now.payload()
+            await host._mqtt_publish(pointer_topic(name, which), payload, retain=True, qos=1)
+        if changes and self._follow is not None:
+            try:
+                await self._follow(changes)
+            except Exception as exc:
+                logger.warning(
+                    "[%s] cannot reload the agents that follow a pointer: %s", host.name, exc
+                )
+
+    async def _record(
+        self, changes: list[Change], standing: Mapping[tuple[str, str], Pointer | None]
+    ) -> set[tuple[str, str]]:
+        """Write ``changes`` into the provenance graph, where main has a database.
+
+        Returns the pointers whose change was written from the journal.
+        """
+        db = get_db()
+        if db is None:
+            return set()
+        try:
+            return await asyncio.to_thread(
+                record_pointer_changes, db, self.store, changes, standing
+            )
+        except Exception as exc:
+            logger.warning("cannot record the model pointer moves: %s", exc)
+            return set()
 
     async def pointer_watcher(self) -> None:
         """Keep the pointer topics true to the index, until the actor stops."""
@@ -296,7 +407,7 @@ class ArtifactService:
                     identifier=client_id("srv", install_id(), "artifacts"),
                     **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                 ) as client:
-                    await client.subscribe("nodes/+/artifact_request", qos=1)
+                    await client.subscribe(node_topic("+", "artifact_request"), qos=1)
                     last_error = None
                     async for message in client.messages:
                         await self.receive_request(str(message.topic), message.payload)

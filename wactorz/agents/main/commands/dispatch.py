@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Finding the command a message calls, and what a handler may reach.
 
 Matching is on the whole stripped message, not on a leading slash. Several
@@ -193,7 +194,7 @@ class CommandRegistry:
 
 #: The registry the actor dispatches through. Filled by the package's
 #: `__init__`, which lists the commands in the order they are tried.
-registry = CommandRegistry()
+registry: CommandRegistry = CommandRegistry()
 
 
 def command(

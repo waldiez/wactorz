@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
  * The `data-testid` values the dashboard ships, in one list.
@@ -22,6 +21,7 @@ export const TEST_IDS = [
     "connection",
     "agent-card",
     "agent-state",
+    "agent-node",
     "node",
     "node-agents",
     "node-machine",

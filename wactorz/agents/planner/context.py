@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Turning a vague request into concrete topics and entities.
 
 A task names things the way a person would - "the door", "temperature". The
@@ -12,8 +13,10 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from ...config import CONFIG
+from ...core import topic_bus
 from ...core.actor import ask_through
 from ...core.mqtt import mqtt_client
+from ...core.topics import display_topic, wire_topic
 from ..lookup import find_main_actor
 
 if TYPE_CHECKING:
@@ -25,7 +28,7 @@ if TYPE_CHECKING:
 else:
     _Host = object
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class ContextMixin(_Host):
@@ -100,9 +103,7 @@ class ContextMixin(_Host):
 
         # ── Search TopicRegistry first ─────────────────────────────────────
         try:
-            from ...core.topic_bus import get_topic_bus
-
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus:
                 resolved = describe_topic_source(task, topic_candidates(bus, matched_concepts))
                 if resolved:
@@ -195,7 +196,8 @@ class ContextMixin(_Host):
         writes field names it imagines, and code reading fields no payload has
         does nothing at all.
         """
-        named = topics_named_in(task)
+        # Named as a person writes them, bare; listened to as they travel.
+        named = [wire_topic(topic) for topic in topics_named_in(task)]
         if not named:
             return []
         received = await collect_one_payload_per_topic(
@@ -248,6 +250,8 @@ def topics_named_in(task: str) -> list[str]:
 
 
 def _sample_line(topic: str, source: str, payload: dict[str, Any]) -> str:
+    """One sampled topic for the prompt, shown bare as a program is to write it."""
+    topic = display_topic(topic)
     fields = {k: type(v).__name__ for k, v in payload.items() if not k.startswith("_")}
     return f"  Topic: {topic}  ({source})\n    Fields: {fields}\n    Example payload: {payload}"
 
@@ -368,6 +372,8 @@ def describe_topic_source(task: str, candidates: list[dict[str, Any]]) -> tuple[
     """
     if not candidates:
         return None
+    # Shown bare, as the program is to write them (`display_topic`).
+    candidates = [{**c, "topic": display_topic(str(c["topic"]))} for c in candidates]
 
     if len(candidates) == 1:
         c = candidates[0]

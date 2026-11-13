@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Commands that change what main remembers or has agreed to do.
 
 Grouped apart from the read-only reports because each of these has an effect:
@@ -16,7 +17,7 @@ from ..planning import PENDING_PLANS_KEY
 from .dispatch import CommandContext, command
 from .groups import MEMORY, NOTIFICATIONS, PIPELINES
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 @command(

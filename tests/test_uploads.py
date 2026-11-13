@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Storing and serving chat attachments.
 
 The endpoint writes caller-supplied bytes to disk, and the state directory holds
@@ -7,6 +8,7 @@ of a stored path comes from a request, and the type is decided by the bytes
 rather than by what the request claims.
 """
 
+import asyncio
 import io
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -17,6 +19,7 @@ import pytest
 from aiohttp import FormData, web
 from aiohttp.test_utils import TestClient, TestServer
 
+from tests.loop_watch import LoopWatch
 from wactorz import config
 from wactorz.web import api_uploads, uploads
 from wactorz.web.app import build_app
@@ -177,6 +180,49 @@ class TestStoringAFile:
         resp = await client.post("/api/upload", data=_form(PNG, field="notfile"))
 
         assert resp.status == 400
+
+
+class TestTheDiskIsTouchedOffTheEventLoop:
+    async def test_an_upload_writes_while_the_loop_runs(
+        self, client: TestClient[Any, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        watch = LoopWatch()
+        real = api_uploads._write  # pyright: ignore[reportPrivateUsage]
+
+        def _write(handle: Any, chunk: bytes) -> None:
+            watch.during()
+            real(handle, chunk)
+
+        monkeypatch.setattr(api_uploads, "_write", _write)
+        ticker = asyncio.create_task(watch.tick())
+        try:
+            resp = await _put(client, PNG)
+        finally:
+            ticker.cancel()
+
+        assert resp.status == 200
+        assert watch.seen and all(watch.seen), "a write held the event loop"
+
+    async def test_a_download_reads_what_it_knows_while_the_loop_runs(
+        self, client: TestClient[Any, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        file_id = str((await (await _put(client, PNG)).json())["id"])
+        watch = LoopWatch()
+        real = api_uploads._read_meta  # pyright: ignore[reportPrivateUsage]
+
+        def _read_meta(path: Path) -> dict[str, Any]:
+            watch.during()
+            return real(path)
+
+        monkeypatch.setattr(api_uploads, "_read_meta", _read_meta)
+        ticker = asyncio.create_task(watch.tick())
+        try:
+            resp = await client.get(f"/api/upload/{file_id}")
+        finally:
+            ticker.cancel()
+
+        assert resp.status == 200
+        assert watch.seen == [True], "the read held the event loop"
 
 
 class TestServingItBack:

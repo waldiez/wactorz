@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Version bookkeeping across a database upgrade.
 
 Runs against a real on-disk SQLite database, because the questions are about
@@ -15,6 +16,7 @@ done and never retried.
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -81,7 +83,7 @@ class TestVersionReporting:
 
     def test_a_database_with_no_schema_at_all_is_version_zero(self, tmp_path: Path) -> None:
         bare = BareDB(str(tmp_path / "bare.db"))
-        assert get_current_version(bare) == 0
+        assert get_current_version(cast(WactorzDB, bare)) == 0
         bare.conn.close()
 
     def test_migrating_brings_it_to_the_framework_version(self, migrated: WactorzDB) -> None:
@@ -196,7 +198,7 @@ class TestPendingStateVersions:
 
     def test_a_database_with_no_history_table_owes_everything(self, tmp_path: Path) -> None:
         bare = BareDB(str(tmp_path / "bare.db"))
-        assert _pending_state_versions(bare)
+        assert _pending_state_versions(cast(WactorzDB, bare))
         bare.conn.close()
 
 

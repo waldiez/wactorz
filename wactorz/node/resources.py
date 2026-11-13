@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a node says in its heartbeat about how close it is to running out.
 
 Whether an agent fits on a node is judged from these, so each one is either

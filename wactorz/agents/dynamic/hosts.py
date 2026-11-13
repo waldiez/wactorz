@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the AgentAPI mixins require of the object they are mixed into.
 
 Typing-only, like `agents/planner/hosts.py` and `agents/mixins/host.py`: nothing
@@ -27,9 +28,13 @@ class QueryHost(Protocol):
     name: str
     _actor: DynamicAgent
 
-    async def publish(self, topic: str, data: Any) -> Any: ...
+    async def publish(self, topic: str, data: Any) -> Any:
+        """Publish ``data`` on ``topic``."""
+        ...
 
-    async def mqtt_get(self, topic: str, timeout: float = ...) -> Any: ...
+    async def mqtt_get(self, topic: str, timeout: float = ...) -> Any:
+        """The next message on ``topic``, waiting at most ``timeout`` seconds."""
+        ...
 
 
 class ApiHost(QueryHost, Protocol):

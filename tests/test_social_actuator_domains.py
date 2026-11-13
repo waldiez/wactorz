@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The actuator's domain gate — the layer under ``process_user_input_restricted``.
 
 The restricted entry point refuses spawn/delete/code, but it *allows* device
@@ -12,7 +13,7 @@ output, so they cover the gate itself rather than the intent routing above it.
 """
 
 import asyncio
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 
@@ -20,30 +21,30 @@ from wactorz.agents.home_assistant_actuator_agent import ActuatorAction
 from wactorz.agents.one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS, OneOffActuatorAgent
 
 
-def run(coro):
+def run(coro) -> Any:
     return asyncio.run(coro)
 
 
 class _RecordingHA:
     """Stands in for HAWebSocketClient — records what would have been called."""
 
-    calls: ClassVar[list] = []
+    calls: ClassVar[list[Any]] = []
 
-    def __init__(self, *_a, **_kw):
+    def __init__(self, *_a, **_kw) -> None:
         pass
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "_RecordingHA":
         return self
 
-    async def __aexit__(self, *_exc):
+    async def __aexit__(self, *_exc) -> bool:
         return False
 
-    async def call_service(self, domain, service, entity_id, **service_data):
+    async def call_service(self, domain, service, entity_id, **service_data) -> None:
         _RecordingHA.calls.append((domain, service, entity_id, service_data))
 
 
 @pytest.fixture(autouse=True)
-def _patch_ha(monkeypatch):
+def _patch_ha(monkeypatch) -> None:
     _RecordingHA.calls = []
     monkeypatch.setattr(
         "wactorz.agents.one_off_actuator_agent.HAWebSocketClient",
@@ -55,14 +56,14 @@ def _patch_ha(monkeypatch):
     )
 
 
-def make_actuator(allowed_domains):
+def make_actuator(allowed_domains) -> "OneOffActuatorAgent":
     a = OneOffActuatorAgent.__new__(OneOffActuatorAgent)
     a.name = "one-off-actuator-test"
     a.allowed_domains = frozenset(allowed_domains) if allowed_domains is not None else None
     return a
 
 
-def action(domain, service, entity_id=None, **data):
+def action(domain, service, entity_id=None, **data) -> "ActuatorAction":
     return ActuatorAction(
         domain=domain,
         service=service,
@@ -86,7 +87,7 @@ def action(domain, service, entity_id=None, **data):
         ("notify", "persistent_notification"),
     ],
 )
-def test_dangerous_domains_never_reach_call_service(domain, service):
+def test_dangerous_domains_never_reach_call_service(domain, service) -> None:
     a = make_actuator(SOCIAL_ACTUATE_DOMAINS)
     out = run(a._execute_actions([action(domain, service)]))
 
@@ -95,7 +96,7 @@ def test_dangerous_domains_never_reach_call_service(domain, service):
     assert domain in out
 
 
-def test_everyday_domains_still_execute():
+def test_everyday_domains_still_execute() -> None:
     a = make_actuator(SOCIAL_ACTUATE_DOMAINS)
     out = run(a._execute_actions([action("light", "turn_on", "light.lamp", brightness_pct=40)]))
 
@@ -103,7 +104,7 @@ def test_everyday_domains_still_execute():
     assert "Done:" in out
 
 
-def test_mixed_batch_executes_allowed_and_reports_blocked():
+def test_mixed_batch_executes_allowed_and_reports_blocked() -> None:
     """A resolver that smuggles one bad call alongside a good one must not get
     the bad one through, and the reply must not imply it ran."""
     a = make_actuator(SOCIAL_ACTUATE_DOMAINS)
@@ -121,25 +122,25 @@ def test_mixed_batch_executes_allowed_and_reports_blocked():
     assert "Skipped" in out and "shell_command.exfiltrate" in out
 
 
-def test_domain_match_is_case_insensitive():
+def test_domain_match_is_case_insensitive() -> None:
     a = make_actuator(SOCIAL_ACTUATE_DOMAINS)
     run(a._execute_actions([action("LIGHT", "turn_on", "light.lamp")]))
     assert _RecordingHA.calls == [("LIGHT", "turn_on", "light.lamp", {})]
 
 
-def test_uppercase_dangerous_domain_is_still_blocked():
+def test_uppercase_dangerous_domain_is_still_blocked() -> None:
     a = make_actuator(SOCIAL_ACTUATE_DOMAINS)
     run(a._execute_actions([action("Shell_Command", "run")]))
     assert _RecordingHA.calls == []
 
 
-def test_trusted_caller_is_unrestricted():
+def test_trusted_caller_is_unrestricted() -> None:
     """The dashboard and CLI pass None and keep full Home Assistant access."""
     a = make_actuator(None)
     run(a._execute_actions([action("shell_command", "run_backup")]))
     assert _RecordingHA.calls == [("shell_command", "run_backup", "shell_command.thing", {})]
 
 
-def test_allow_list_excludes_the_code_execution_domains():
+def test_allow_list_excludes_the_code_execution_domains() -> None:
     for domain in ("shell_command", "python_script", "hassio", "homeassistant", "script"):
         assert domain not in SOCIAL_ACTUATE_DOMAINS

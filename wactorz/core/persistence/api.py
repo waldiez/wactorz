@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The unified persist()/recall() API agents actually call.
 
 Routes each key to the store that suits it, so agent code needs no knowledge of
@@ -8,10 +9,11 @@ import logging
 from typing import Any
 
 from .db import WactorzDB
+from .memory_store import MemoryStore
 from .pickle_store import PickleStore
 from .stores import get_memory_store
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # ── Unified Persistence API ───────────────────────────────────────────────
 # This is the compatibility shim. It replaces the raw pickle persist/recall
@@ -19,7 +21,13 @@ logger = logging.getLogger(__name__)
 
 # Keys that go to SQLite (durable, structured, queryable)
 SQLITE_KEYS = {
+    # Main's spawn registry, by actor id; and where a store from before ids
+    # were kept holds it by name, read once on the way up.
+    "_spawned_agents_by_id",
     "_spawned_agents",
+    # Which of main's agents on nodes are stopped, by id: as durable as the
+    # registry it is read with, or a restart would start them again.
+    "_stopped_agents",
     # Migrations waiting on a node to confirm. Declared rather than left to fall
     # through to pickle: this has to survive the restart it exists to survive,
     # and a per-key SQLite write is the fast path. The live actor object a local
@@ -68,7 +76,7 @@ class PersistenceAPI:
 
     def __init__(self, db: WactorzDB, pickle_store: PickleStore, agent_name: str) -> None:
         self.db = db
-        self.memory = get_memory_store()
+        self.memory: MemoryStore = get_memory_store()
         self.pickle = pickle_store
         self.agent = agent_name
 
@@ -136,7 +144,7 @@ class PersistenceAPI:
 
         # Pickle keys are anything not in the SQLite or ephemeral sets — we group
         # them so one disk write covers all of them instead of N writes.
-        pickle_blob: dict = {}
+        pickle_blob: dict[str, Any] = {}
         # Keys whose old values stay: the ones just written, and any whose write
         # failed -- a failed write keeps what was there rather than deleting it.
         keep: set[str] = set()

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The commit hooks check a commit with the project's own environment.
 
 They are `language: system` hooks, so a command in one is looked up on PATH. A
@@ -16,6 +17,7 @@ fail a commit it is no part of.
 import re
 import shlex
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -29,7 +31,7 @@ PYTHON_HOOKS = ["ruff-format", "ruff-check", "basedpyright", "python-tests"]
 INTERPRETER = '"$(make -s python-path)"'
 
 
-def _hooks() -> dict[str, dict]:
+def _hooks() -> dict[str, dict[str, Any]]:
     config = yaml.safe_load((ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
     (local,) = [repo for repo in config["repos"] if repo["repo"] == "local"]
     return {hook["id"]: hook for hook in local["hooks"]}

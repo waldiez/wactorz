@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for ``wactorz.agents.main.routing.RoutingMixin``.
 
 Exercises intent classification and the one-off actuation path against a fake
@@ -5,67 +6,68 @@ LLMAgent host. No broker or real agents required.
 """
 
 import asyncio
-import tempfile
 import types
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from wactorz.agents.main.routing import RoutingMixin
+from wactorz.core.paths import resolve_state_dir
 
 
-def run(coro):
+def run(coro) -> Any:
     return asyncio.run(coro)
 
 
 class FakeLLM:
-    def __init__(self, decision=None, raises=None):
+    def __init__(self, decision=None, raises=None) -> None:
         self.decision = decision
         self.raises = raises
 
     async def complete(
         self, messages=None, system=None, max_tokens=None, reasoning_effort=None, **_kw
-    ):
+    ) -> tuple[Any | None, dict[str, Any]]:
         if self.raises is not None:
             raise self.raises
         return self.decision, {"input_tokens": 7, "output_tokens": 2, "cost_usd": 0.02}
 
 
 class FakeRegistry:
-    def __init__(self, by_name=None):
+    def __init__(self, by_name=None) -> None:
         self._by_name = by_name or {}
 
-    def find_by_name(self, name):
+    def find_by_name(self, name) -> Any | None:
         return self._by_name.get(name)
 
 
 class RoutingHost(RoutingMixin):
-    def __init__(self, llm=None, registry=None):
+    def __init__(self, llm=None, registry=None) -> None:
         self.name = "main"
         self.actor_id = "id-main"
         self.llm = llm
         self._registry = registry
         self._result_futures = {}
-        self._persistence_dir = Path(tempfile.mkdtemp()) / "main"
+        self._persistence_dir = Path(resolve_state_dir()) / "main"
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cost_usd = 0.0
         self.persisted = 0
         self.spawn_calls = []
 
-    def _persist_cost(self):
+    def _persist_cost(self) -> None:
         self.persisted += 1
 
-    def persist(self, key, value):
+    def persist(self, key, value) -> None:
         pass
 
-    def recall(self, key, default=None):
+    def recall(self, key, default=None) -> Any:
         return default
 
-    async def send(self, *_a, **_k):
+    async def send(self, *_a, **_k) -> None:
         pass
 
-    async def spawn(self, actor_class, **kwargs):
+    async def spawn(self, actor_class, **kwargs) -> object:
         self.spawn_calls.append((actor_class, kwargs))
         # Resolve the actuation future as the real OneOffActuatorAgent would.
         tid = kwargs.get("task_id", "")
@@ -78,15 +80,15 @@ class RoutingHost(RoutingMixin):
 # ── _classify_intent ─────────────────────────────────────────────────────────
 
 
-def test_classify_empty_is_other():
+def test_classify_empty_is_other() -> None:
     assert run(RoutingHost(llm=FakeLLM("HA"))._classify_intent("")) == "OTHER"
 
 
-def test_classify_slash_is_other():
+def test_classify_slash_is_other() -> None:
     assert run(RoutingHost(llm=FakeLLM("HA"))._classify_intent("/help")) == "OTHER"
 
 
-def test_classify_no_llm_is_other():
+def test_classify_no_llm_is_other() -> None:
     assert run(RoutingHost(llm=None)._classify_intent("turn on the light")) == "OTHER"
 
 
@@ -101,22 +103,22 @@ def test_classify_no_llm_is_other():
         ("nonsense", "OTHER"),  # unknown label → OTHER
     ],
 )
-def test_classify_maps_llm_output(decision, expected):
+def test_classify_maps_llm_output(decision, expected) -> None:
     assert run(RoutingHost(llm=FakeLLM(decision))._classify_intent("do a thing")) == expected
 
 
-def test_classify_accumulates_cost():
+def test_classify_accumulates_cost() -> None:
     h = RoutingHost(llm=FakeLLM("HA"))
     run(h._classify_intent("x"))
     assert h.total_input_tokens == 7 and h.total_output_tokens == 2
     assert h.persisted == 1
 
 
-def test_classify_exception_is_other():
+def test_classify_exception_is_other() -> None:
     assert run(RoutingHost(llm=FakeLLM(raises=ValueError("boom")))._classify_intent("x")) == "OTHER"
 
 
-def test_classify_timeout_is_other():
+def test_classify_timeout_is_other() -> None:
     assert (
         run(RoutingHost(llm=FakeLLM(raises=asyncio.TimeoutError()))._classify_intent("x"))
         == "OTHER"
@@ -126,18 +128,18 @@ def test_classify_timeout_is_other():
 # ── _is_home_automation_request ──────────────────────────────────────────────
 
 
-def test_is_ha_true():
+def test_is_ha_true() -> None:
     assert run(RoutingHost(llm=FakeLLM("HA"))._is_home_automation_request("x")) is True
 
 
-def test_is_ha_false():
+def test_is_ha_false() -> None:
     assert run(RoutingHost(llm=FakeLLM("PIPELINE"))._is_home_automation_request("x")) is False
 
 
 # ── _handle_actuate_intent ───────────────────────────────────────────────────
 
 
-def test_actuate_unconfigured_returns_message(monkeypatch):
+def test_actuate_unconfigured_returns_message(monkeypatch) -> None:
     # Force HA unconfigured so the test doesn't depend on the local .env.
     monkeypatch.setattr(
         "wactorz.agents.main.routing.CONFIG",
@@ -147,7 +149,7 @@ def test_actuate_unconfigured_returns_message(monkeypatch):
     assert "not configured" in msg.lower()
 
 
-def test_actuate_happy_path(monkeypatch):
+def test_actuate_happy_path(monkeypatch) -> None:
     monkeypatch.setattr(
         "wactorz.agents.main.routing.CONFIG",
         types.SimpleNamespace(ha_url="http://ha", ha_token="tok"),

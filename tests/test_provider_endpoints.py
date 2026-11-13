@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Providers must talk to the endpoint they were configured with.
 
 A dropped `base_url` does not fail loudly — it silently redirects traffic to the
@@ -9,8 +10,6 @@ The SDK class is replaced with a recorder, so these run without the optional
 extras installed.
 """
 
-# pylint: disable=missing-function-docstring,too-few-public-methods
-
 import sys
 import types
 
@@ -19,6 +18,9 @@ import pytest
 from tests.optional_deps import ensure_importable
 
 ensure_importable("openai")
+
+from collections.abc import AsyncIterator
+from typing import Any
 
 from wactorz.agents.llm_agent import (
     LLMAgent,
@@ -32,9 +34,9 @@ _CUSTOM = "https://llm.internal.example/v1"
 
 
 @pytest.fixture(name="openai_calls")
-def openai_calls_fixture(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+def openai_calls_fixture(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     """Record the kwargs the provider hands to openai.AsyncOpenAI."""
-    calls: list[dict] = []
+    calls: list[dict[str, Any]] = []
 
     def _fake_async_openai(**kwargs) -> types.SimpleNamespace:
         calls.append(kwargs)
@@ -48,31 +50,31 @@ def openai_calls_fixture(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
 # ── OpenAI ──────────────────────────────────────────────────────────────────
 
 
-def test_a_custom_base_url_reaches_the_openai_client(openai_calls: list[dict]) -> None:
+def test_a_custom_base_url_reaches_the_openai_client(openai_calls: list[dict[str, Any]]) -> None:
     OpenAIProvider(model="gpt-4o", api_key="k", base_url=_CUSTOM)
     assert openai_calls[0].get("base_url") == _CUSTOM, (
         "the configured endpoint was dropped — traffic would go to api.openai.com"
     )
 
 
-def test_no_base_url_leaves_the_client_on_its_default(openai_calls: list[dict]) -> None:
+def test_no_base_url_leaves_the_client_on_its_default(openai_calls: list[dict[str, Any]]) -> None:
     OpenAIProvider(model="gpt-4o", api_key="k")
     assert openai_calls[0].get("base_url") is None
 
 
-def test_the_api_key_is_always_passed(openai_calls: list[dict]) -> None:
+def test_the_api_key_is_always_passed(openai_calls: list[dict[str, Any]]) -> None:
     OpenAIProvider(model="gpt-4o", api_key="k", base_url=_CUSTOM)
     assert openai_calls[0]["api_key"] == "k"
 
 
-def test_the_provider_records_the_endpoint_it_uses(openai_calls: list[dict]) -> None:
+def test_the_provider_records_the_endpoint_it_uses(openai_calls: list[dict[str, Any]]) -> None:
     # `base_url` is read back for reporting; it must agree with the client.
     provider = OpenAIProvider(model="gpt-4o", api_key="k", base_url=_CUSTOM)
     assert provider.base_url == _CUSTOM
     assert openai_calls[0].get("base_url") == provider.base_url
 
 
-def test_an_empty_base_url_is_normalised_to_none(openai_calls: list[dict]) -> None:
+def test_an_empty_base_url_is_normalised_to_none(openai_calls: list[dict[str, Any]]) -> None:
     provider = OpenAIProvider(model="gpt-4o", api_key="k", base_url="")
     assert provider.base_url is None
     assert openai_calls[0].get("base_url") is None
@@ -81,7 +83,7 @@ def test_an_empty_base_url_is_normalised_to_none(openai_calls: list[dict]) -> No
 # ── the sibling providers, same class of bug ────────────────────────────────
 
 
-def test_nim_passes_its_base_url_through(openai_calls: list[dict]) -> None:
+def test_nim_passes_its_base_url_through(openai_calls: list[dict[str, Any]]) -> None:
     NIMProvider(model="m", api_key="k", base_url=_CUSTOM)
     assert openai_calls[0].get("base_url") == _CUSTOM
 
@@ -95,17 +97,17 @@ def test_ollama_keeps_the_base_url_it_was_given() -> None:
 # ── streaming capability detection ──────────────────────────────────────────
 
 
-class _CompleteOnly(LLMProvider):  # pylint: disable=abstract-method
+class _CompleteOnly(LLMProvider):
     """A custom provider that implements only the non-streaming path."""
 
-    async def _complete(self, messages, system="", **kwargs):
+    async def _complete(self, messages, system="", **kwargs) -> tuple[str, dict[str, Any]]:
         return "whole answer", {"input_tokens": 1, "output_tokens": 1, "cost_usd": 0.0}
 
 
-class _Streaming(LLMProvider):  # pylint: disable=abstract-method
+class _Streaming(LLMProvider):
     """A custom provider that really streams."""
 
-    async def _stream(self, messages, system="", **kwargs):
+    async def _stream(self, messages, system="", **kwargs) -> "AsyncIterator[str]":
         yield "a"
         yield "b"
 

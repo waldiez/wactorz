@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Deleting a remote agent must stop it on its node even when the spawn registry
 no longer records the node.
 
@@ -7,8 +8,6 @@ on its node — heartbeating back and getting re-admitted (a resurrection loop).
 The node is now resolved from live heartbeat telemetry as a fallback, mirroring
 ``migrate_agent``.
 """
-
-# pylint: disable=missing-function-docstring
 
 import time
 import types

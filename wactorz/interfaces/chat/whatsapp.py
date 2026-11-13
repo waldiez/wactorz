@@ -1,9 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
 """WhatsApp interface, via Twilio webhooks."""
 
 import asyncio
 import logging
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
@@ -23,7 +24,25 @@ from .social import SocialRateLimiter
 if TYPE_CHECKING:
     from ...orchestration import Orchestrator
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
+
+
+def _text_form(form: Mapping[str, object]) -> dict[str, str] | None:
+    """Twilio's form as text, or None when a field holds anything else, such as an upload.
+
+    Twilio posts every field as text, so a form that is not all text is not
+    Twilio's. It is refused before the signature is checked, which computes over
+    the values as strings and would fail on anything else.
+    """
+    text: dict[str, str] = {}
+    # As `dict(form)` reads it: a field given twice is taken at its first value.
+    for name in form:
+        value = form[name]
+        if not isinstance(value, str):
+            return None
+        text[name] = value
+    return text
+
 
 #: How many message ids to remember, to recognise one Twilio delivers again.
 SEEN_MESSAGES = 1000
@@ -63,12 +82,12 @@ class WhatsAppInterface:
         # The webhook is a public HTTP endpoint, so anyone who finds it can spend
         # tokens unless senders are pinned. Numbers are compared without the
         # `whatsapp:` prefix Twilio adds.
-        self.allowed_numbers = frozenset(
+        self.allowed_numbers: frozenset[str] = frozenset(
             self._normalize_number(n) for n in (allowed_numbers or CONFIG.whatsapp_allowed_numbers)
         )
-        self.limiter = SocialRateLimiter()
-        self.outbox = outbox or Outbox()
-        self.choices = PendingChoices()
+        self.limiter: SocialRateLimiter = SocialRateLimiter()
+        self.outbox: Outbox = outbox or Outbox()
+        self.choices: PendingChoices = PendingChoices()
         #: Replies still being worked out. The webhook answers Twilio before
         #: the model does, so these are what keeps them alive until they finish.
         self._replies: set[asyncio.Task[None]] = set()
@@ -95,7 +114,9 @@ class WhatsAppInterface:
             return f"{proto}://{host}{request.rel_url}"
         return str(request.url)
 
-    def _signature_valid(self, validator: Any, request: web.Request, params: dict) -> bool:
+    def _signature_valid(
+        self, validator: Any, request: web.Request, params: dict[str, Any]
+    ) -> bool:
         """Whether this request carries a signature only Twilio could produce.
 
         `From` is checked against the allow-list, but a forged POST can name
@@ -107,7 +128,7 @@ class WhatsAppInterface:
             return False
         return bool(validator.validate(self._signed_url(request), params, signature))
 
-    async def _send_message(self, twilio, body: str, to: str) -> None:
+    async def _send_message(self, twilio: Any, body: str, to: str) -> None:
         """Send one WhatsApp message, off the event loop.
 
         The Twilio SDK is synchronous, so calling it directly from the webhook
@@ -178,20 +199,25 @@ class WhatsAppInterface:
 
     def build_app(self) -> web.Application:
         """Assemble the webhook route, without binding a port."""
-        from twilio.request_validator import RequestValidator
-        from twilio.rest import Client as TwilioClient
+        from twilio.request_validator import (  # optional dependency: the `whatsapp` extra
+            RequestValidator,
+        )
+        from twilio.rest import Client as TwilioClient  # optional dependency: the `whatsapp` extra
 
         twilio = TwilioClient(self.account_sid, self.auth_token)
         validator = RequestValidator(self.auth_token)
         self._twilio = twilio
 
-        async def webhook(request):
-            data = await request.post()
-            if not self._signature_valid(validator, request, dict(data)):
+        async def webhook(request: web.Request) -> web.Response:
+            form = _text_form(await request.post())
+            if form is None:
+                logger.warning("[WhatsApp] Rejected a request whose form is not all text")
+                return web.Response(status=403, text="Forbidden")
+            if not self._signature_valid(validator, request, form):
                 logger.warning("[WhatsApp] Rejected a request with no valid Twilio signature")
                 return web.Response(status=403, text="Forbidden")
-            user_msg = data.get("Body", "")
-            from_number = data.get("From", "")
+            user_msg = form.get("Body", "")
+            from_number = form.get("From", "")
             logger.info("[WhatsApp] Message from %s: %s", from_number, user_msg[:60])
 
             sender = self._normalize_number(from_number)
@@ -201,7 +227,7 @@ class WhatsAppInterface:
 
             # Twilio delivers again when it does not get its answer in time, and
             # a message handled twice is answered twice, and paid for twice.
-            if not self._first_delivery(str(data.get("MessageSid", ""))):
+            if not self._first_delivery(form.get("MessageSid", "")):
                 logger.info("[WhatsApp] Ignoring a message from %s delivered again", sender)
                 return web.Response(text="OK")
 
@@ -229,6 +255,12 @@ class WhatsAppInterface:
         return app
 
     async def run(self) -> None:
+        """Serve the Twilio webhook and answer the allowed numbers, until cancelled.
+
+        Returns at once, logging why, without an auth token to check Twilio's signature with,
+        without an allowed number, or without ``twilio`` installed. While it runs, the webhook is
+        registered as the ``whatsapp`` outbound channel.
+        """
         if not (self.auth_token or "").strip():
             logger.error(
                 "[WhatsApp] Not starting: TWILIO_AUTH_TOKEN is empty. The webhook checks "

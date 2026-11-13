@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Liveness and readiness probes, on the monitor and on the REST interface.
 
 Liveness answers whenever the process can answer, whatever it depends on is
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.config import CONFIG
@@ -93,7 +95,7 @@ def db_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Wact
 @pytest.fixture(name="monitor")
 async def monitor_fixture(
     monkeypatch: pytest.MonkeyPatch, db: WactorzDB
-) -> AsyncGenerator[TestClient, Any]:
+) -> AsyncGenerator[TestClient[web.Request, web.Application], Any]:
     """The real monitor app, with a key set."""
     monkeypatch.setattr("wactorz.config.CONFIG", replace(CONFIG, api_key=KEY))
     monkeypatch.setattr(runtime, "system", None)
@@ -102,7 +104,9 @@ async def monitor_fixture(
         yield client
 
 
-def _rest_client(system: _System | None, api_key: str | None = KEY) -> TestClient:
+def _rest_client(
+    system: _System | None, api_key: str | None = KEY
+) -> TestClient[web.Request, web.Application]:
     # The probes never chat, so there is no orchestrator behind this interface.
     iface = RESTInterface(
         cast(Any, None),
@@ -116,7 +120,9 @@ def _rest_client(system: _System | None, api_key: str | None = KEY) -> TestClien
 
 class TestLiveness:
     @pytest.mark.parametrize("path", LIVENESS)
-    async def test_the_monitor_answers_without_a_key(self, monitor: TestClient, path: str) -> None:
+    async def test_the_monitor_answers_without_a_key(
+        self, monitor: TestClient[web.Request, web.Application], path: str
+    ) -> None:
         resp = await monitor.get(path)
 
         assert resp.status == 200
@@ -131,14 +137,16 @@ class TestLiveness:
             assert await resp.json() == {"status": "ok"}
 
     async def test_it_does_not_depend_on_the_broker_or_the_system(
-        self, monitor: TestClient
+        self, monitor: TestClient[web.Request, web.Application]
     ) -> None:
         # A liveness failure is a restart; restarting over a broker outage fixes nothing.
         runtime.system = _as_system(_System(running=False, connected=False, stopping=True))
 
         assert (await monitor.get("/health")).status == 200
 
-    async def test_head_is_answered_too(self, monitor: TestClient) -> None:
+    async def test_head_is_answered_too(
+        self, monitor: TestClient[web.Request, web.Application]
+    ) -> None:
         assert (await monitor.head("/healthz")).status == 200
 
 
@@ -249,7 +257,9 @@ class TestReadinessOverHttp:
             assert resp.status == 503
 
     @pytest.mark.parametrize("path", READINESS)
-    async def test_the_monitor_reports_its_system(self, monitor: TestClient, path: str) -> None:
+    async def test_the_monitor_reports_its_system(
+        self, monitor: TestClient[web.Request, web.Application], path: str
+    ) -> None:
         runtime.system = _as_system(_System())
         assert (await monitor.get(path)).status == 200
 
@@ -259,7 +269,9 @@ class TestReadinessOverHttp:
         assert resp.status == 503
         assert (await resp.json())["checks"]["main"] == "failed"
 
-    async def test_a_monitor_on_its_own_reports_its_broker_link(self, monitor: TestClient) -> None:
+    async def test_a_monitor_on_its_own_reports_its_broker_link(
+        self, monitor: TestClient[web.Request, web.Application]
+    ) -> None:
         # No actors in its process: the link it listens on is all it depends on.
         runtime.mqtt_connected = False
         resp = await monitor.get("/readyz")
@@ -272,13 +284,15 @@ class TestReadinessOverHttp:
 
 class TestEveryProbe:
     @pytest.mark.parametrize("path", ALL_PROBES)
-    async def test_is_never_cached(self, monitor: TestClient, path: str) -> None:
+    async def test_is_never_cached(
+        self, monitor: TestClient[web.Request, web.Application], path: str
+    ) -> None:
         # A cached "ready" outlives the moment it described.
         assert (await monitor.get(path)).headers["Cache-Control"] == "no-store"
 
     @pytest.mark.parametrize("path", ALL_PROBES)
     async def test_the_monitor_answers_under_any_host_name(
-        self, monitor: TestClient, path: str
+        self, monitor: TestClient[web.Request, web.Application], path: str
     ) -> None:
         # An orchestrator or load balancer asks under a name of its own.
         resp = await monitor.get(path, headers={"Host": "wactorz.default.svc:8888"})
@@ -286,7 +300,7 @@ class TestEveryProbe:
         assert resp.status != 403
 
     async def test_an_ordinary_route_still_refuses_an_unknown_host(
-        self, monitor: TestClient
+        self, monitor: TestClient[web.Request, web.Application]
     ) -> None:
         resp = await monitor.get(
             "/api/actors", headers={"Host": "attacker.example:8888", "X-API-Key": KEY}

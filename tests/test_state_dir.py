@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """State-directory resolution — one path, resolved one way.
 
 The regression these pin: agent factories and the central stores used to
@@ -26,7 +27,7 @@ class TestResolveStateDir:
         monkeypatch.setenv("WACTORZ_STATE_DIR", "/from/env")
         assert resolve_state_dir() == "/from/env"
 
-    def test_default_when_unset(self, monkeypatch):
+    def test_default_when_unset(self, monkeypatch) -> None:
         monkeypatch.delenv("WACTORZ_STATE_DIR", raising=False)
         assert resolve_state_dir() == "./state"
 

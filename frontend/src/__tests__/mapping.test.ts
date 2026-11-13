@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -54,6 +53,20 @@ describe("toAgentInfo", () => {
     it("passes through known states and falls back to running for unknown", () => {
         expect(toAgentInfo({ agent_id: "a", state: "stopped" } as StatePatchAgent).state).toBe("stopped");
         expect(toAgentInfo({ agent_id: "a", state: "weird" } as StatePatchAgent).state).toBe("running");
+    });
+
+    it("reads the server's failed and idle", () => {
+        expect(toAgentInfo({ agent_id: "a", state: "failed" } as StatePatchAgent).state).toEqual({
+            failed: "",
+        });
+        expect(toAgentInfo({ agent_id: "a", state: "idle" } as StatePatchAgent).state).toBe("initializing");
+    });
+
+    it("reads an agent the server has not heard from as starting", () => {
+        // A metric can open the server's entry before the first heartbeat.
+        expect(toAgentInfo({ agent_id: "a", state: "starting" } as StatePatchAgent).state).toBe(
+            "initializing",
+        );
     });
 
     it("uses status when state is absent", () => {
@@ -309,14 +322,12 @@ describe("live MQTT event feed builders", () => {
         });
     });
 
-    it("chatFeedItem formats the routed-to label", () => {
-        const msg = { from: "a1", to: "user", content: "hi", timestampMs: 7 } as ChatMessage;
-        expect(chatFeedItem(msg)).toEqual({
-            type: "chat",
-            label: "→ user: hi",
-            agentName: "a1",
-            timestamp: 7,
-        });
+    it("chatFeedItem says whom a message was to, unless it was the person", () => {
+        const toUser = { from: "a1", to: "user", content: "hi", timestampMs: 7 } as ChatMessage;
+        const toAgent = { from: "a1", to: "worker", content: "do it", timestampMs: 8 } as ChatMessage;
+
+        expect(chatFeedItem(toUser)).toEqual({ type: "chat", label: "hi", agentName: "a1", timestamp: 7 });
+        expect(chatFeedItem(toAgent).label).toBe("→ worker: do it");
     });
 
     it("stoppedFeedItem stamps the provided time", () => {
@@ -401,6 +412,17 @@ describe("reconcileActorList", () => {
     it("resolves a display name for each surviving agent", () => {
         const [a] = reconcileActorList([actor("agent-Catalog-1a2b", "")], () => false);
         expect(a?.name).toBe(resolveAgentName("", "agent-Catalog-1a2b"));
+    });
+
+    it("reads each listed state as every other path does", () => {
+        // The list arrives as the server's JSON: a state there is a plain string.
+        const listed = (state: string): AgentInfo =>
+            ({ id: state, name: state, state }) as unknown as AgentInfo;
+        const out = reconcileActorList(
+            [listed("failed"), listed("idle"), listed("starting"), listed("unknown")],
+            () => false,
+        );
+        expect(out.map(a => a.state)).toEqual([{ failed: "" }, "initializing", "initializing", "running"]);
     });
 
     it("keeps an empty list empty and never mutates the input element", () => {

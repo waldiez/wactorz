@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A broker account per node, and the access list that pens each one in.
 
 One shared account is what makes a stolen node worth stealing: it holds the
@@ -13,7 +14,8 @@ key. ``/deploy`` writes the password into the node's ``.env``, the channel that
 is authenticated before any of this exists.
 
 The access list is generated for the brokers Wactorz provides (compose, and the
-add-on's embedded broker), and it is an allow-list. A node account may use:
+add-on's embedded broker), and it is an allow-list. A node account may use, each
+under the install's namespace when one is set (`wactorz.core.topics`):
 
 - its own ``nodes/<name>/#`` -- its control topics and its reports. Another node's
   tree is simply not named, so a node can neither drive nor impersonate nor
@@ -26,11 +28,19 @@ add-on's embedded broker), and it is an allow-list. A node account may use:
   only: it asks main's model, reads main's stored history, and answers the tasks
   main sends, and reads none of them, so it cannot watch what other nodes answer
   or learn a reply topic to forge into;
+- what library agents on a node publish and read about themselves: a
+  pipeline's tick (``pipelines/#``), a model's drift alarm (``models/+/drift``),
+  read as well as written since a rule on the node may act on it, and what a
+  model on trial answers (``shadow/#``);
 - the data topics agents use by convention (`NODE_TOPICS`), and whatever
-  ``WACTORZ_NODE_TOPICS`` adds. Agent code picks its own topics, so one outside
-  these is refused by the broker, silently, until its prefix is added: that is
-  the price of a stolen node not reaching ``zigbee2mqtt/`` or anything else that
-  shares the broker.
+  ``WACTORZ_NODE_TOPICS`` adds. These are the world's and are never under a
+  namespace. Agent code picks its own topics, so one outside these is refused
+  by the broker, silently, until its prefix is added: that is the price of a
+  stolen node not reaching ``zigbee2mqtt/`` or anything else that shares the
+  broker.
+
+A namespace is enforced only where this list is: on a broker Wactorz does not
+run, two installs that share it are kept apart by their topics alone.
 
 The accounts with the whole broker are named too: the server's own, and those
 ``WACTORZ_BROKER_ACCOUNTS`` lists (Home Assistant's, zigbee2mqtt's). Mosquitto
@@ -52,8 +62,19 @@ import os
 import re
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Literal
 
 from .node_signing import derive
+from .topics import (
+    OWN_ROOTS,
+    WORLD_ROOTS,
+    agent_topic,
+    main_topic,
+    model_topic,
+    node_topic,
+    pipeline_topic,
+    shadow_topic,
+)
 
 #: The generated files, beside the certificates a broker of ours also reads.
 PASSWORD_FILE = "node_passwd"  # noqa: S105  # a file name, not a password
@@ -89,9 +110,28 @@ NODE_TOPICS: tuple[tuple[str, str], ...] = (
     ("homeassistant/state_changes/#", "read"),
 )
 
-#: Where a configured data topic may not start: these are the fences themselves,
-#: and a filter under one of them would take a fence down for every node.
-_FENCED = ("nodes/", "agents/", "main/", "system/", "$")
+
+def _reaches_a_fence(topic: str) -> bool:
+    """Whether the filter ``topic`` reaches into topics the access list keeps from nodes.
+
+    The fences are Wactorz's own roots: a filter under one would take the fence
+    down for every node. Read off the filter itself, since another install's
+    namespace on the broker is not known here: a first level that is an own
+    root, ``#`` or ``$``; a second level naming an own root under anything but a
+    world root (``other/agents/#``, while ``home/system/#`` is only a word); and a
+    first-level ``+`` followed by ``+`` or ``#``, which reaches every namespace.
+    ``zigbee2mqtt/#`` stays allowed, so a filter whose first level is another
+    install's namespace cannot be told from one that is not.
+    """
+    levels = topic.split("/")
+    first = levels[0]
+    if first in ("#", *OWN_ROOTS) or first.startswith("$"):
+        return True
+    second = levels[1] if len(levels) > 1 else ""
+    if first not in WORLD_ROOTS and second in OWN_ROOTS:
+        return True
+    return first == "+" and second in ("+", "#")
+
 
 #: What a topic filter in a setting may not contain: it is written into the
 #: access list as it is, one rule per line.
@@ -198,12 +238,107 @@ def _topic_error(topic: str) -> str | None:
         return f"Topic filter {topic!r} is empty or contains whitespace."
     if "#" in topic[:-1] or (topic.endswith("#") and topic != "#" and not topic.endswith("/#")):
         return f"Topic filter {topic!r} uses '#' somewhere other than as its last level."
-    if topic == "#" or topic.startswith(_FENCED):
+    if _reaches_a_fence(topic):
+        roots = ", ".join(f"{root}/" for root in OWN_ROOTS)
         return (
             f"Topic filter {topic!r} would give every node what the access list keeps from "
-            "it: a data topic may not be '#', nor start with nodes/, agents/, main/, system/ or $."
+            f"it: a data topic may not be '#', start with $, or reach {roots} -- at the first "
+            "level, or under another install's namespace."
         )
     return None
+
+
+def _node_rule_groups(
+    node: str, node_topics: Iterable[tuple[str, str]]
+) -> list[tuple[str, list[tuple[str, str]]]]:
+    """What ``node`` may use, as the access list writes it: each group's comment and its rules.
+
+    A rule is ``(access, filter)``, the access one of ``readwrite``, ``read``,
+    ``write`` and ``deny``. The file a broker reads and the answer main gives
+    about a topic (`node_may`) both come from here, so they cannot part ways.
+    """
+    return [
+        ("Its own control topics and reports.", [("readwrite", node_topic(node, "#"))]),
+        (
+            "What every host's agents share, except the commands that stop the server's.",
+            [("readwrite", agent_topic("#")), ("deny", agent_topic("+", "commands"))],
+        ),
+        (
+            "Asking main's model and history, and answering main's tasks: written, never read.",
+            [
+                ("write", main_topic("llm_request")),
+                ("write", main_topic("history_request")),
+                ("write", main_topic("reply", "#")),
+            ],
+        ),
+        (
+            "What library agents here publish and read about themselves: a pipeline's\n"
+            "# tick, a model's drift alarm, and what a model on trial answers.",
+            [
+                ("readwrite", pipeline_topic("#")),
+                ("readwrite", model_topic("+", "drift")),
+                ("readwrite", shadow_topic("#")),
+            ],
+        ),
+        ("Data its agents publish and read.", [(access, topic) for topic, access in node_topics]),
+    ]
+
+
+def node_rules(
+    node: str, node_topics: Iterable[tuple[str, str]] = NODE_TOPICS
+) -> list[tuple[str, str]]:
+    """The rules the access list gives ``node``, as ``(access, filter)`` pairs in the file's order."""
+    return [rule for _comment, rules in _node_rule_groups(node, node_topics) for rule in rules]
+
+
+def filter_covers(rule: str, topic: str) -> bool:
+    """Whether everything the topic or filter ``topic`` names is within the filter ``rule``.
+
+    A plain topic is covered when it matches. A filter is covered when every
+    topic it could match does: ``sensors/+/temp`` is within ``sensors/#``, and
+    ``sensors/#`` is not within ``sensors/+``.
+    """
+    wanted = rule.split("/")
+    levels = topic.split("/")
+    for index, part in enumerate(wanted):
+        if part == "#":
+            return True
+        if index >= len(levels):
+            return False
+        level = levels[index]
+        if level == "#" or (part != "+" and part != level):
+            return False
+    return len(wanted) == len(levels)
+
+
+def node_may(
+    node: str,
+    use: Literal["publish", "subscribe"],
+    topic: str,
+    node_topics: Iterable[tuple[str, str]] = NODE_TOPICS,
+) -> bool:
+    """Whether the access list lets ``node`` publish to ``topic``, or subscribe to it.
+
+    ``topic`` is as it goes on the wire. For a subscription it may be a filter,
+    shared (``$share/<group>/...``) or not, and is allowed when a rule covers
+    all of it. A ``deny`` that covers it beats every allow.
+    """
+    if use == "subscribe" and topic.startswith("$share/"):
+        topic = topic.split("/", 2)[2] if topic.count("/") >= 2 else ""
+    needed = "write" if use == "publish" else "read"
+    allowed = False
+    for access, rule in node_rules(node, node_topics):
+        if not filter_covers(rule, topic):
+            continue
+        if access == "deny":
+            return False
+        allowed = allowed or access in ("readwrite", needed)
+    return allowed
+
+
+def node_topic_addable(topic: str) -> bool:
+    """Whether ``WACTORZ_NODE_TOPICS`` could name ``topic``: it is none of what nodes are kept from."""
+    return _topic_error(topic) is None
 
 
 def acl_text(
@@ -237,22 +372,12 @@ def acl_text(
             "# that give none: a `topic` line outside a `user` block reaches only those.\n"
             "topic readwrite #\ntopic read $SYS/#\n"
         )
-    data = "".join(f"topic {access} {topic}\n" for topic, access in node_topics)
+    data = tuple(node_topics)
     for node in names:
-        blocks.append(
-            f"\nuser {node}\n"
-            "# Its own control topics and reports.\n"
-            f"topic readwrite nodes/{node}/#\n"
-            "# What every host's agents share, except the commands that stop the server's.\n"
-            "topic readwrite agents/#\n"
-            "topic deny agents/+/commands\n"
-            "# Asking main's model and history, and answering main's tasks: written, never read.\n"
-            "topic write main/llm_request\n"
-            "topic write main/history_request\n"
-            "topic write main/reply/#\n"
-            "# Data its agents publish and read.\n"
-            f"{data}"
-        )
+        blocks.append(f"\nuser {node}\n")
+        for comment, rules in _node_rule_groups(node, data):
+            blocks.append(f"# {comment}\n")
+            blocks.extend(f"topic {access} {topic}\n" for access, topic in rules)
     return "".join(blocks)
 
 

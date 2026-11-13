@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """CATALOG AGENT — smart-energy
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 LLM-powered energy brain for smart plugs exposed through Home Assistant.
@@ -108,6 +109,7 @@ import re
 import time
 from typing import Any
 
+from wactorz.agents.dynamic.api import AgentAPI
 from wactorz.config import CONFIG
 from wactorz.core.integrations.home_assistant.ha_helper import get_states, normalize_ha_ws_url
 from wactorz.core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
@@ -134,7 +136,10 @@ class PlugProtectedError(Exception):
     """
 
     @classmethod
-    def refused(cls, plug: dict, prot: Any) -> "PlugProtectedError":
+    def refused(cls, plug: dict[str, Any], prot: Any) -> "PlugProtectedError":
+        """The error for turning off ``plug``, whose protection ``prot`` does not allow this
+        agent to.
+        """
         return cls(
             f"Refusing to turn off plug '{plug.get('name')}' — protection={prot}. "
             f"Only '{AUTO_OFF}' plugs may be powered down by this agent."
@@ -146,7 +151,7 @@ class PlugProtectedError(Exception):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _ha_creds():
+def _ha_creds() -> tuple[str, str]:
     """Resolve HA url+token from app config (supervisor token in the addon)."""
     return CONFIG.ha_url, CONFIG.ha_token
 
@@ -207,7 +212,7 @@ def _assert_can_turn_off(plug: dict[str, Any]) -> None:
         raise PlugProtectedError.refused(plug, prot)
 
 
-async def _safe_turn_off(agent, plug: dict[str, Any], reason: str) -> bool:
+async def _safe_turn_off(agent: AgentAPI, plug: dict[str, Any], reason: str) -> bool:
     """Turn a plug off, but only after passing the guard. Returns True if off."""
     try:
         _assert_can_turn_off(plug)
@@ -257,16 +262,16 @@ def _period_keys(now: float) -> dict[str, Any]:
 
 
 def _account(
-    acc: dict,
+    acc: dict[str, Any],
     name: str,
     now: float,
-    watts,
-    dt_h,
-    energy_today_kwh,
-    energy_kind,
-    energy_month_kwh=None,
-    energy_total_kwh=None,
-) -> dict:
+    watts: float | None,
+    dt_h: float | None,
+    energy_today_kwh: float | None,
+    energy_kind: str | None,
+    energy_month_kwh: float | None = None,
+    energy_total_kwh: float | None = None,
+) -> dict[str, Any]:
     """Update a plug's per-period kWh buckets.
 
     Sources, by period, in priority order:
@@ -347,7 +352,10 @@ def _cost(kwh: float, rate: float) -> float:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def setup(agent):
+async def setup(agent: AgentAPI) -> None:
+    """Read the plugs, rules, energy totals and rate the agent remembers, and declare what it
+    publishes.
+    """
     agent.state["plugs"] = agent.recall("plugs") or {}  # name -> plug dict
     agent.state["rules"] = agent.recall("rules") or {}  # rule_id -> rule dict
     agent.state["accum"] = agent.recall("accum") or {}  # name -> kWh accumulators
@@ -382,7 +390,10 @@ async def setup(agent):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def process(agent):
+async def process(agent: AgentAPI) -> None:
+    """Read each plug's power from Home Assistant, add the energy since the last reading to its
+    totals, apply the rules, and publish the summary.
+    """
     plugs = agent.state["plugs"]
     if not plugs:
         return
@@ -514,7 +525,9 @@ async def process(agent):
         agent.persist("plugs", plugs)
 
 
-async def _evaluate_rules(agent, plug_name: str, plug: dict, watts: float, now: float):
+async def _evaluate_rules(
+    agent: AgentAPI, plug_name: str, plug: dict[str, Any], watts: float, now: float
+) -> None:
     """Run any rules attached to this plug. Currently: auto_off_on_idle."""
     for rule in agent.state["rules"].values():
         if rule.get("plug") != plug_name:
@@ -523,7 +536,9 @@ async def _evaluate_rules(agent, plug_name: str, plug: dict, watts: float, now: 
             await _eval_auto_off_on_idle(agent, plug, rule, watts, now)
 
 
-async def _eval_auto_off_on_idle(agent, plug: dict, rule: dict, watts: float, now: float):
+async def _eval_auto_off_on_idle(
+    agent: AgentAPI, plug: dict[str, Any], rule: dict[str, Any], watts: float, now: float
+) -> None:
     name = plug["name"]
     threshold = rule.get("idle_threshold_watts")
     delay = float(rule.get("idle_delay_s", DEFAULT_IDLE_DELAY_S))
@@ -568,7 +583,12 @@ async def _eval_auto_off_on_idle(agent, plug: dict, rule: dict, watts: float, no
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def handle_task(agent, payload):
+async def handle_task(agent: AgentAPI, payload: Any) -> dict[str, Any]:
+    """Answer an ``action``: the status, a cost report, adding, listing and removing plugs and
+    rules, or setting the rate.
+
+    The payload may come as JSON in ``text``, as an @mention sends it, or as the bare action.
+    """
     # Unwrap JSON sent as text via @mention
     if isinstance(payload, dict) and not payload.get("action") and payload.get("text"):
         try:
@@ -619,7 +639,7 @@ async def handle_task(agent, payload):
     return {"result": _welcome(agent)}
 
 
-async def _refresh_live_snapshot(agent):
+async def _refresh_live_snapshot(agent: AgentAPI) -> None:
     """Refresh live HA readings before answering an interactive request.
 
     The process loop keeps last_watts in memory, but that cache is intentionally
@@ -642,7 +662,7 @@ async def _refresh_live_snapshot(agent):
 # later (e.g. "turn my printer off when it's done").
 
 
-def _welcome(agent) -> str:
+def _welcome(agent: AgentAPI) -> str:
     n = len(agent.state.get("plugs", {}))
     if n == 0:
         return (
@@ -720,7 +740,7 @@ def _is_cancel(low: str) -> bool:
     return low.strip() in ("cancel", "never mind", "nevermind", "stop", "abort", "quit")
 
 
-def _parse_rate(low: str):
+def _parse_rate(low: str) -> float | None:
     """Pull a kWh rate.
 
     Out of 'set rate to 0.20', 'electricity is 0.25 per kwh',
@@ -756,7 +776,7 @@ def _is_remove_intent(low: str) -> bool:
     )
 
 
-async def _converse(agent, text: str) -> dict:
+async def _converse(agent: AgentAPI, text: str) -> dict[str, Any]:
     low = text.lower().strip()
     convo = agent.state.get("convo") or {}
     has_plugs = bool(agent.state.get("plugs"))
@@ -828,7 +848,7 @@ async def _converse(agent, text: str) -> dict:
     return await _ask_llm(agent, text)
 
 
-def _help_text(agent) -> str:
+def _help_text(agent: AgentAPI) -> str:
     return (
         "Here's what I can do (just talk to me normally):\n"
         '  • **"import my plugs"** — scan Home Assistant and add plugs to watch\n'
@@ -843,7 +863,7 @@ def _help_text(agent) -> str:
     )
 
 
-async def _start_import(agent) -> dict:
+async def _start_import(agent: AgentAPI) -> dict[str, Any]:
     states = await _ha_get_states()
     if not states:
         return {
@@ -890,7 +910,7 @@ async def _start_import(agent) -> dict:
     return {"result": "\n".join(lines)}
 
 
-async def _handle_selection(agent, text: str) -> dict:
+async def _handle_selection(agent: AgentAPI, text: str) -> dict[str, Any]:
     convo = agent.state["convo"]
     candidates = convo.get("candidates", [])
     chosen = await _interpret_selection(agent, text, candidates)
@@ -957,7 +977,7 @@ async def _handle_selection(agent, text: str) -> dict:
 _EVERYTHING = re.compile(r"\b(all|every|everything|both|yes please)\b")
 
 
-async def _interpret_selection(agent, text: str, candidates: list) -> list:
+async def _interpret_selection(agent: AgentAPI, text: str, candidates: list[Any]) -> list[Any]:
     """Map a free-text reply to a subset of candidates. Robust without an LLM."""
     low = text.lower().strip()
     if not candidates:
@@ -1079,7 +1099,9 @@ def _energy_kind(eid: str, friendly: str) -> str:
     return "total"
 
 
-def _find_energy_sensor(states: dict, power_entity: str, kind: str):
+def _find_energy_sensor(
+    states: dict[str, Any], power_entity: str, kind: str
+) -> tuple[str | None, float]:
     """Find a sibling energy sensor of the given kind ('month'|'total').
 
     For the same device as power_entity, by matching the entity's base name
@@ -1106,7 +1128,7 @@ def _find_energy_sensor(states: dict, power_entity: str, kind: str):
     return None, 1.0
 
 
-def _discover_candidates(states: dict) -> list:
+def _discover_candidates(states: dict[str, Any]) -> list[Any]:
     """Find power-reporting plugs in HA and best-effort pair each with a switch.
 
     A candidate only needs a power sensor — the switch is optional (and unused
@@ -1155,7 +1177,7 @@ def _discover_candidates(states: dict) -> list:
                 }
             )
 
-    def _pick_energy(base: str):
+    def _pick_energy(base: str) -> dict[str, Any] | None:
         """Choose the best energy sensor for a base.
 
         Prefer a daily-reset 'today' sensor (gives an accurate full-day figure directly),
@@ -1227,7 +1249,7 @@ def _src_label(rec: Any) -> str:
     return "metered" if rec.get("source") == "meter" else "estimated"
 
 
-def _status(agent) -> dict[str, Any]:
+def _status(agent: AgentAPI) -> dict[str, Any]:
     plugs = agent.state["plugs"]
     rate = agent.state["rate"]
     cur = agent.state["currency"]
@@ -1266,7 +1288,7 @@ def _status(agent) -> dict[str, Any]:
     }
 
 
-async def _report(agent, payload: Any) -> dict[str, Any]:
+async def _report(agent: AgentAPI, payload: Any) -> dict[str, Any]:
     rate = agent.state["rate"]
     cur = agent.state["currency"]
     plugs = agent.state["plugs"]
@@ -1304,7 +1326,7 @@ async def _report(agent, payload: Any) -> dict[str, Any]:
     }
 
 
-def _add_plug(agent, plug: Any) -> dict[str, Any]:
+def _add_plug(agent: AgentAPI, plug: Any) -> dict[str, Any]:
     if isinstance(plug, str):
         return {"result": "error", "error": "add_plug needs a plug object, not a name"}
     if not isinstance(plug, dict) or not plug.get("name"):
@@ -1354,7 +1376,7 @@ def _tokens(s: str) -> set[str]:
     return {t for t in re.split(r"[^a-z0-9]+", (s or "").lower()) if len(t) >= 2}
 
 
-def _resolve_plug_name(agent, query: Any) -> str | None:
+def _resolve_plug_name(agent: AgentAPI, query: Any) -> str | None:
     """Find a plug key from free text.
 
     Either exact name/slug, else by best token
@@ -1382,7 +1404,7 @@ def _resolve_plug_name(agent, query: Any) -> str | None:
     return best
 
 
-def _remove_plug(agent, name: str) -> dict[str, Any]:
+def _remove_plug(agent: AgentAPI, name: str) -> dict[str, Any]:
     key = name if name in agent.state["plugs"] else _resolve_plug_name(agent, name)
     if key and key in agent.state["plugs"]:
         fr = agent.state["plugs"][key].get("friendly", key)
@@ -1394,7 +1416,7 @@ def _remove_plug(agent, name: str) -> dict[str, Any]:
     return {"result": "error", "error": f"I'm not monitoring a plug called '{name}'."}
 
 
-def _add_rule(agent, rule: Any) -> dict[str, Any]:
+def _add_rule(agent: AgentAPI, rule: Any) -> dict[str, Any]:
     if not isinstance(rule, dict) or not rule.get("type"):
         return {"result": "error", "error": "rule must be a dict with a 'type'"}
     requested_plug = rule.get("plug")
@@ -1425,7 +1447,7 @@ def _add_rule(agent, rule: Any) -> dict[str, Any]:
     return {"result": f"Added rule '{rid}' ({rule['type']}) on plug '{plug_name}'", "rule": rule}
 
 
-def _new_rule_id(rules: dict) -> str:
+def _new_rule_id(rules: dict[str, Any]) -> str:
     """A rule id no other rule has, readable as when it was made."""
     base = rid = f"rule_{int(time.time())}"
     n = 2
@@ -1435,7 +1457,7 @@ def _new_rule_id(rules: dict) -> str:
     return rid
 
 
-def _remove_rule(agent, rid: str | int) -> dict[str, Any]:
+def _remove_rule(agent: AgentAPI, rid: str | int) -> dict[str, Any]:
     if rid in agent.state["rules"]:
         del agent.state["rules"][rid]
         agent.persist("rules", agent.state["rules"])
@@ -1443,7 +1465,7 @@ def _remove_rule(agent, rid: str | int) -> dict[str, Any]:
     return {"result": "error", "error": f"no rule '{rid}'"}
 
 
-def _set_rate(agent, rate: Any, currency: str | None) -> dict:
+def _set_rate(agent: AgentAPI, rate: Any, currency: str | None) -> dict[str, Any]:
     try:
         agent.state["rate"] = float(rate)
     except (TypeError, ValueError):
@@ -1455,7 +1477,7 @@ def _set_rate(agent, rate: Any, currency: str | None) -> dict:
     return {"result": f"Rate set to {agent.state['rate']} {agent.state['currency']}/kWh"}
 
 
-async def _ask_llm(agent, question: str) -> dict[str, Any]:
+async def _ask_llm(agent: AgentAPI, question: str) -> dict[str, Any]:
     """Answer a free-text question using current readings + accumulators."""
     if agent.llm is None:
         return {"result": "No LLM configured — try: status, cost, list_plugs, list_rules"}

@@ -122,7 +122,17 @@ jobs:
       # Sent as one half of a parallel build, and added to the other half by
       # the `coverage` job below. Both halves speak lcov, so the badge is one
       # number over the whole repository rather than one language's.
+      #
+      # A failed upload does not fail the build, here or in the two steps below:
+      # the coverage floor is gated by the test run itself, and the action
+      # fetches its reporter from GitHub's release downloads, so an outage there
+      # or at Coveralls would otherwise fail a change that broke nothing -- and,
+      # in the frontend job, skip the build check after it. `continue-on-error`
+      # on the step rather than the action's `fail-on-error`: the action checks
+      # its download under `set -e`, so an error page saved in place of the
+      # checksum file ends the step before `fail-on-error` is ever read.
       - name: Send to Coveralls
+        continue-on-error: true
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
           file: coverage/python-coverage.lcov
@@ -162,6 +172,16 @@ jobs:
       - name: Lint
         run: make lint-py
 
+      # How complete the package's public types are, scored on an install of it
+      # rather than the checkout, py.typed and all. The floor only rises.
+      - name: Public type completeness
+        run: make verifytypes
+
+      # Every source file and the committed static/app open with the license
+      # line. Reads files only: no frontend toolchain needed.
+      - name: License lines
+        run: make lint-licenses
+
       # static/docs is committed and shipped in the wheel, so a change under
       # docs/ without a rebuild releases documentation for the previous version
       # — the same failure the static/app check below covers for the frontend.
@@ -192,7 +212,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
 
@@ -281,6 +301,15 @@ jobs:
           # Dockerfile's `runtime` stage).
           no-cache-filters: runtime
 
+      # The build's layers stay in the builder after the image is loaded, and
+      # Trivy exports another copy of the image to scan it: for the ultra image
+      # the three do not fit on a hosted runner together. The build step has
+      # written the cache already, so the builder's copy is not needed again.
+      - name: Room for the scan
+        run: |
+          docker buildx prune --all --force
+          df -h /
+
       - name: Smoke test
         run: make image-smoke IMAGE=wactorz:ci
 
@@ -319,6 +348,7 @@ jobs:
       # the Python half writes them relative to the repository root. Without it
       # every file here lands at a path that does not exist.
       - name: Send to Coveralls
+        continue-on-error: true
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
           file: frontend/coverage/lcov.info
@@ -358,6 +388,7 @@ jobs:
     if: always()
     steps:
       - name: Combine the two halves
+        continue-on-error: true
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
           parallel-finished: true

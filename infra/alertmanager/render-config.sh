@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Write the configuration Alertmanager starts with, into the directory given.
 #
 # With ALERT_WEBHOOK_URL set, every alert is POSTed there as Alertmanager's own

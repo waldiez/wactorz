@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Deleting an agent, and everything that has to go with it.
 
 Delete is not a stronger stop. A stop keeps the agent's state so it can resume;
@@ -25,17 +26,21 @@ import json
 import logging
 import re
 import shutil
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import derive_actor_id
-from ...core.topics import RETAINED_AGENT_LEAVES
+from ...core.topics import RETAINED_AGENT_LEAVES, agent_topic, node_topic
+from .addresses import registered_agent
+from .manifests import is_agent
+from .spawn_registry import placed_on
 
 if TYPE_CHECKING:
     from .hosts import LifecycleHost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How far back `_record_agent_deletion` looks for a note it would repeat. Wide
 #: enough to cover the pair a first path appended, narrow enough that a later
@@ -60,6 +65,30 @@ PROTECTED_AGENTS = frozenset(
 )
 
 
+#: What a withdrawal comes to: it stands, it is refused, it waits on a node's
+#: next heartbeat, or it is that of an agent kept stopped on its node, which
+#: goes quiet and is not gone.
+STANDS, REFUSED, HELD, KEPT = "stands", "refused", "held", "kept"
+
+#: Told the id of every agent whose withdrawal stands, once it does.
+WithdrawalWatcher = Callable[[str], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class WithdrawalDecision:
+    """Whether a withdrawal stands, and what main's records say of the agent it is for.
+
+    ``name`` and ``node`` are the spawn registry's, when it keeps the agent;
+    ``spawned`` says whether it does, and with it whether a standing withdrawal
+    has a registry entry to remove.
+    """
+
+    verdict: str
+    name: str = ""
+    node: str = ""
+    spawned: bool = False
+
+
 class LifecycleService:
     """Removes an agent and every trace it left behind."""
 
@@ -72,9 +101,12 @@ class LifecycleService:
         #: the reset has emptied the spawn registry, a late tombstone finds
         #: nothing to remove and stops there by itself.
         self._withdrawals_suppressed = False
-        #: agent name -> (its node, its actor id), for a withdrawal that node's
+        #: (agent name, its node) -> its actor id, for a withdrawal that node's
         #: last heartbeat contradicts, until its next one decides it.
-        self._held: dict[str, tuple[str, str]] = {}
+        self._held: dict[tuple[str, str], str] = {}
+        #: Told of every withdrawal that stands, by whichever path it comes to:
+        #: at once, or when a node's heartbeat settles it. The dashboard is one.
+        self.watchers: list[WithdrawalWatcher] = []
 
     @contextmanager
     def withdrawals_suppressed(self) -> Iterator[None]:
@@ -148,63 +180,156 @@ class LifecycleService:
         Returns whether the withdrawal stands, and with it whether the agent's
         manifest is to be forgotten. Any node may publish one, and it carries
         nothing that says who did, so it is weighed against where the agent
-        runs: one for an agent running here is refused, since an agent leaves
-        main's registry before it withdraws, and one for an agent its node's
-        latest heartbeat still lists -- recent or not, while main still knows
-        that node -- is held for that node's next heartbeat, or for main
-        forgetting the node, which removes its agents anyway
-        (`settle_withdrawals`).
+        runs (`withdrawal_decision`): one for an agent running here is refused,
+        since an agent leaves main's registry before it withdraws, and the
+        manifest the empty payload took off the broker is put back; one for an
+        agent its node's latest heartbeat still lists -- recent or not, while
+        main still knows that node -- is held for that node's next heartbeat,
+        or for main forgetting the node, which removes its agents anyway
+        (`settle_withdrawals`). Each that stands, now or then, is told to the
+        `watchers`.
         """
-        if self._withdrawals_suppressed:
-            return True
-        registry = self.host._get_spawn_registry() or {}
-        if not name:
-            # No manifest cached for it — a withdrawal can arrive before this
-            # process ever saw what it withdraws. The id is derived from the
-            # name, so the registry can be asked which name produces it.
-            name = next((n for n in registry if derive_actor_id(n) == actor_id), "")
-        config = registry.get(name) if name else None
-        if config is None:
-            # Not a spawned agent, or already gone. Either way there is nothing
-            # left to remove, and a withdrawal is not an error.
-            return True
-        node = (config.get("node") or "").strip()
-        if not node and self.host._registry and self.host._registry.find_by_name(name):
+        decision = self.withdrawal_decision(actor_id, name)
+        if decision.verdict == REFUSED:
             logger.warning(
-                "[%s] Ignored a withdrawal of %r, which is running here.", self.host.name, name
+                "[%s] Ignored a withdrawal of %r, which is running here.",
+                self.host.name,
+                decision.name or actor_id[:8],
             )
+            await self._restore_manifest(actor_id)
             return False
-        if node and self.host._node_last_listing(name) == node:
-            self._held[name] = (node, actor_id)
+        if decision.verdict == HELD:
+            self._held[(decision.name, decision.node)] = actor_id
             logger.info(
                 "[%s] A withdrawal of %r waits for %r's next heartbeat, which last listed it.",
                 self.host.name,
-                name,
-                node,
+                decision.name,
+                decision.node,
             )
             return False
-        await self._withdraw(name, node)
+        if decision.verdict == KEPT:
+            # Its manifest is forgotten, as that of any agent not running; its
+            # entry stays and no watcher is told, so whatever shows the agent
+            # goes on showing it, stopped, with a way to start it.
+            logger.info(
+                "[%s] %r withdrew its manifest: it is stopped on %r and kept.",
+                self.host.name,
+                decision.name,
+                decision.node,
+            )
+            return True
+        if decision.spawned and not self._withdrawals_suppressed:
+            await self._withdraw(decision.name, decision.node)
+        await self._tell_watchers(actor_id)
         return True
+
+    def withdrawal_decision(self, actor_id: str, name: str = "") -> WithdrawalDecision:
+        """What a withdrawal of the agent ``actor_id`` comes to, without acting on it.
+
+        In order: a reset that is clearing state lets every withdrawal stand; an
+        agent running in this process -- main itself and every supervised agent
+        included, which the spawn registry does not keep -- is refused; one the
+        spawn registry does not keep stands, as there is nothing of it to
+        protect; one running here under the registry's name is refused; one
+        kept stopped on its node is kept, whatever that node last listed, since
+        stopping is what made it withdraw; one whose node's latest heartbeat
+        still lists it is held; the rest stand.
+        """
+        if self._withdrawals_suppressed:
+            return WithdrawalDecision(STANDS, name)
+        live = self.host._registry
+        if live is not None and live.get(actor_id) is not None:
+            return WithdrawalDecision(REFUSED, name)
+        registry = self.host._get_spawn_registry()
+        # Every entry keeps its id, so the registry is asked whose it is: the
+        # name alone may be kept in more than one place, and with no manifest
+        # cached -- a withdrawal can arrive before this process ever saw what
+        # it withdraws -- there is no name at all.
+        config = registry.by_id(actor_id)
+        if config is None and name:
+            config = registry.only(name)
+        if config is None:
+            return WithdrawalDecision(STANDS, name)
+        name = config["name"]
+        node = placed_on(config)
+        if not node and live is not None and live.find_by_name(name):
+            return WithdrawalDecision(REFUSED, name, node, spawned=True)
+        if node and registry.is_stopped(config["actor_id"]):
+            return WithdrawalDecision(KEPT, name, node, spawned=True)
+        if node and self.host._node_last_listing(name) == node:
+            return WithdrawalDecision(HELD, name, node, spawned=True)
+        return WithdrawalDecision(STANDS, name, node, spawned=True)
+
+    async def _restore_manifest(self, actor_id: str) -> None:
+        """Publish again the manifest of the agent ``actor_id`` running here, retained.
+
+        A withdrawal is an empty retained payload, so even one refused has
+        taken the broker's copy away; the agent puts back the one it last sent.
+        """
+        live = self.host._registry
+        agent = live.get(actor_id) if live is not None else None
+        manifest = getattr(agent, "_published_manifest", None)
+        send: Any = getattr(agent, "_send_manifest", None)
+        if isinstance(manifest, dict) and send is not None:
+            try:
+                await send(manifest)
+            except Exception as exc:
+                logger.warning(
+                    "[%s] Could not put back %s's manifest: %s", self.host.name, actor_id[:8], exc
+                )
+
+    async def _tell_watchers(self, actor_id: str) -> None:
+        """Tell every watcher that the withdrawal of ``actor_id`` stands.
+
+        A watcher that fails is logged and the rest are still told: what shows
+        an agent must not stop main removing it.
+        """
+        for watcher in list(self.watchers):
+            try:
+                await watcher(actor_id)
+            except Exception:
+                logger.exception(
+                    "[%s] A withdrawal watcher failed on %s", self.host.name, actor_id[:8]
+                )
 
     async def settle_withdrawals(self, node: str, running: set[str]) -> None:
         """Decide the withdrawals held for ``node``, now that it reports ``running``."""
-        for name, (held_on, actor_id) in list(self._held.items()):
+        for (name, held_on), actor_id in list(self._held.items()):
             if held_on != node:
                 continue
-            self._held.pop(name)
+            self._held.pop((name, held_on))
             if name in running:
                 logger.warning(
                     "[%s] Ignored a withdrawal of %r: %r still runs it.", self.host.name, name, node
                 )
                 continue
             await self._clear_agent_manifest(name, actor_id)
-            config = (self.host._get_spawn_registry() or {}).get(name)
-            if config is not None and (config.get("node") or "").strip() == node:
+            registry = self.host._get_spawn_registry()
+            entry = registry.at(name, node)
+            if entry is not None and registry.is_stopped(entry["actor_id"]):
+                # Stopped while its withdrawal waited: kept, and shown as it is.
+                continue
+            if entry is not None:
                 await self._withdraw(name, node)
+            await self._tell_watchers(actor_id)
 
     async def _withdraw(self, name: str, node: str) -> None:
-        """Take a withdrawn agent out of the spawn registry and its node's desired state."""
-        self.host._remove_from_spawn_registry(name)
+        """Take a withdrawn agent out of the spawn registry and its node's desired state.
+
+        One kept stopped is left where it is: an agent that was stopped is
+        expected to go quiet, and its entry is what starts it again.
+        """
+        registry = self.host._get_spawn_registry()
+        entry = registry.at(name, node)
+        if entry is not None and registry.is_stopped(entry["actor_id"]):
+            logger.info(
+                "[%s] %r withdrew its manifest; it is stopped on %r and kept.",
+                self.host.name,
+                name,
+                node,
+            )
+            return
+        self.host._remove_from_spawn_registry(name, node)
         if node:
             await self.host._update_node_desired_state(node, remove_name=name)
         self._record_agent_deletion(name, reason="it withdrew its manifest")
@@ -220,21 +345,28 @@ class LifecycleService:
 
         Call this whenever an agent is stopped/deleted/replaced.
         """
-        # Drop from in-memory caches immediately
-        self.host._agent_manifests.pop(name, None)
-        for topic, entries in list(self.host._topic_registry.items()):
-            self.host._topic_registry[topic] = [m for m in entries if m.get("name") != name]
-            if not self.host._topic_registry[topic]:
-                self.host._topic_registry.pop(topic, None)
-        # Publish empty retained payload to clear the broker-side retained manifest.
-        # Need actor_id for the topic — fall back to looking it up from the registry
-        # (only works if the actor is still alive — best-effort).
+        # The id first, so another agent of the same name keeps its manifest:
+        # the given one, else the running agent's (best-effort: only while it is
+        # still alive).
         if not actor_id and self.host._registry:
             target = self.host._registry.find_by_name(name)
             if target:
                 actor_id = target.actor_id
+        # Drop from in-memory caches immediately
+        manifests = self.host._agent_manifests
+        key = next(
+            (k for k, m in manifests.items() if actor_id and m.get("actor_id") == actor_id), name
+        )
+        manifests.pop(key, None)
+        for topic, entries in list(self.host._topic_registry.items()):
+            self.host._topic_registry[topic] = [
+                m for m in entries if not is_agent(m, name, actor_id)
+            ]
+            if not self.host._topic_registry[topic]:
+                self.host._topic_registry.pop(topic, None)
+        # Publish empty retained payload to clear the broker-side retained manifest.
         if actor_id:
-            await self.host._mqtt_publish(f"agents/{actor_id}/manifest", b"", retain=True)
+            await self.host._mqtt_publish(agent_topic(actor_id, "manifest"), b"", retain=True)
             logger.debug("[%s] Cleared retained manifest for %r", self.host.name, name)
 
     async def _purge_agent_retained_topics(self, actor_id: str | None) -> None:
@@ -249,7 +381,7 @@ class LifecycleService:
             return
         for metric in RETAINED_AGENT_LEAVES:
             try:
-                await self.host._mqtt_publish(f"agents/{actor_id}/{metric}", b"", retain=True)
+                await self.host._mqtt_publish(agent_topic(actor_id, metric), b"", retain=True)
             except Exception as e:
                 logger.debug(
                     "[%s] Failed to clear retained agents/%s/%s: %s",
@@ -300,7 +432,32 @@ class LifecycleService:
                     "[%s] Could not remove persistence dir for %r: %s", self.host.name, name, e
                 )
 
-    async def delete_spawned_agent(self, name: str) -> None:
+    def _doomed(self, name: str, node: str | None) -> tuple[dict[str, Any] | None, str, str]:
+        """The agent a delete of ``name`` (``node``) acts on: its entry, its node, and its id.
+
+        Found before anything is torn down. The node first: with no registry
+        record of the agent (e.g. already pruned), the live heartbeats, or a
+        remote agent would take the local-only path and keep running on its
+        node. Then the id, so its retained topics can be purged once it is
+        gone: the running agent's, then the one its entry keeps, then -- for
+        an agent main never spawned -- the one derived from its name. An agent
+        of the name here is another agent when this one is on a node.
+        """
+        reg = self.host._get_spawn_registry()
+        entry = reg.only(name) if node is None else reg.at(name, node)
+        if entry is not None:
+            node = placed_on(entry)
+        elif node is None:
+            node = self.host._node_running_agent(name)
+        here = self.host._registry.find_by_name(name) if self.host._registry and not node else None
+        actor_id = (
+            (here.actor_id if here else None)
+            or (entry or {}).get("actor_id")
+            or derive_actor_id(name)
+        )
+        return entry, node, actor_id
+
+    async def delete_spawned_agent(self, name: str, node: str | None = None) -> None:
         """Permanently delete an agent.
 
         Unlike a stop (which preserves state so the agent can resume later),
@@ -317,36 +474,19 @@ class LifecycleService:
           - Either way, main also publishes empty retained payloads on the
             per-agent MQTT topics as a defensive second pass — if the runner
             is offline or main is acting alone, the broker is still cleared.
+
+        ``node`` says which agent of the name, "" for main's own; None for the
+        only one main keeps, or else wherever the heartbeats say it runs.
         """
-        # Find node before removing from registry. If the registry has no record
-        # of the agent (e.g. already pruned), fall back to live heartbeat
-        # telemetry — otherwise a remote agent would take the local-only branch
-        # below and keep running on its node.
-        reg = self.host._get_spawn_registry()
-        node = reg.get(name, {}).get("node", "").strip()
-        if not node:
-            node = self.host._node_running_agent(name)
-
-        # Capture/derive the deterministic actor_id BEFORE we tear anything down,
-        # so we can purge per-agent retained topics even after the local actor
-        # is gone from the registry.
-        actor_id: str | None = None
-        if self.host._registry:
-            target = self.host._registry.find_by_name(name)
-            if target:
-                actor_id = target.actor_id
-        if not actor_id:
-            # Remote agents (and local ones missing from the registry) follow the
-            # same uuid5 scheme used by _RemoteAgent and Actor — derive it.
-            actor_id = derive_actor_id(name)
-
-        self.host._remove_from_spawn_registry(name)
+        entry, node, actor_id = self._doomed(name, node)
+        if entry is not None:
+            self.host._remove_from_spawn_registry(name, actor_id=entry["actor_id"])
 
         # Remote path — let the runner do the heavy work on the edge node.
         if node:
             await self.host._update_node_desired_state(node, remove_name=name)
             await self.host._mqtt_publish(
-                f"nodes/{node}/stop",
+                node_topic(node, "stop"),
                 {"name": name, "delete": True},
                 qos=1,
             )
@@ -382,16 +522,20 @@ class LifecycleService:
         await self._purge_agent_retained_topics(actor_id)
         self._record_agent_deletion(name, reason="deleted (no live actor found)")
 
-    async def _process_delete_commands(self, response: str) -> tuple[str, list[str], list[str]]:
+    async def _process_delete_commands(
+        self, response: str
+    ) -> tuple[str, list[str], list[str], list[str]]:
         """Scan the LLM response for <delete>{"name": "agent-name"}</delete> blocks
         and execute them. Mirrors _process_spawn_commands so deletion has the same
         UX as spawn: the LLM emits a tagged block, we parse and execute, and the
         block is stripped from the user-visible response.
 
-        Returns (cleaned_response, [deleted_names], [missing_names]):
+        Returns (cleaned_response, [deleted_names], [missing_names], [refusals]):
           - cleaned_response: response with <delete> blocks removed
           - deleted_names:    names that were actually running and got removed
           - missing_names:    names the LLM asked to delete that didn't exist
+          - refusals:         why a name was not acted on: one kept in more
+                              than one place, or an address naming no agent
 
         We track the missing list separately so the response footer can tell the
         user "you asked me to delete X but it wasn't running" instead of silently
@@ -409,36 +553,29 @@ class LifecycleService:
             known_names |= {a.name for a in self.host._registry.all_actors()}
         # Spawn registry is the strongest signal — if it's persisted there, deletion
         # is meaningful even if the live actor isn't currently up.
-        known_names |= set(self.host._get_spawn_registry().keys())
+        known_names |= self.host._get_spawn_registry().names()
+        refused: list[str] = []
 
         for match in re.findall(pattern, response, re.DOTALL):
             block = match.strip()
             try:
-                # Accept either a JSON object {"name": "x"} or a bare string "x"
-                # so the LLM has a forgiving format.
-                name: str | None = None
-                stripped = block.strip()
-                if stripped.startswith("{"):
-                    payload = json.loads(stripped)
-                    if isinstance(payload, dict):
-                        name = payload.get("name") or payload.get("agent")
-                else:
-                    # Bare token form: <delete>math-agent</delete>
-                    name = stripped.strip("\"'").split()[0] if stripped else None
-                if not name or not isinstance(name, str):
+                name = _named_in(block)
+                if not name:
                     logger.warning(
                         "[%s] Empty or malformed <delete> block: %s", self.host.name, block[:200]
                     )
                     continue
-                name = name.strip()
-
-                if name in PROTECTED_AGENTS:
+                named, refusal = registered_agent(self.host, name)
+                # On the name the block names, address or not: `main@main` is main.
+                if named.name in PROTECTED_AGENTS:
                     logger.warning(
                         "[%s] Refused to delete protected agent %r", self.host.name, name
                     )
                     continue
-
-                if name not in known_names:
+                if refusal:
+                    refused.append(refusal)
+                    continue
+                if named.name not in known_names:
                     logger.info(
                         "[%s] LLM requested deletion of unknown agent %r", self.host.name, name
                     )
@@ -448,7 +585,7 @@ class LifecycleService:
                 logger.info("[%s] LLM-requested deletion of %r", self.host.name, name)
                 # Reuse the existing helper — it handles spawn registry, stop,
                 # manifest cleanup, history note, and remote-vs-local routing.
-                await self.delete_spawned_agent(name)
+                await self.delete_spawned_agent(named.name, named.node if named.entry else None)
                 deleted.append(name)
             except json.JSONDecodeError:
                 logger.exception(
@@ -458,4 +595,19 @@ class LifecycleService:
                 logger.exception("[%s] Delete failed\nRaw block:\n%s", self.host.name, block[:500])
 
         clean = re.sub(pattern, "", response, flags=re.DOTALL).strip()
-        return clean, deleted, missing
+        return clean, deleted, missing, refused
+
+
+def _named_in(block: str) -> str | None:
+    """The agent a `<delete>` block names, or None for an empty or malformed one.
+
+    Either a JSON object, ``{"name": "x"}`` (or ``"agent"``), or a bare name,
+    so the model has a forgiving format. A block that is not JSON raises.
+    """
+    stripped = block.strip()
+    if not stripped.startswith("{"):
+        # Bare token form: <delete>math-agent</delete>
+        return stripped.strip("\"'").split()[0] if stripped else None
+    payload = json.loads(stripped)
+    name = (payload.get("name") or payload.get("agent")) if isinstance(payload, dict) else None
+    return name.strip() or None if isinstance(name, str) else None

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The server's ledger of questions, built from the books agents publish retained.
 
 Fed through ``parse_topic`` as the broker delivers each book, so an agent here
@@ -9,6 +10,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.core import outbound
@@ -115,12 +117,12 @@ def test_a_deleted_agents_book_is_left_out_before_it_is_cleared() -> None:
 
 
 @pytest.mark.parametrize("payload", ["not json", "[1, 2]", '"text"'])
-def test_a_frame_that_is_not_a_book_leaves_the_agent_with_none(payload: str) -> None:
+def test_a_frame_that_is_not_a_book_leaves_the_last_book_standing(payload: str) -> None:
     _publish("a1", "one", _question("q1", asked_at=1.0))
 
     events.parse_topic(questions_topic("a1"), payload)
 
-    assert _ids("open") == []
+    assert _ids("open") == ["q1"]
 
 
 def test_records_that_are_not_questions_are_left_out_and_a_nameless_agent_is_its_id() -> None:
@@ -150,14 +152,16 @@ def test_answered_questions_are_as_many_as_one_book_keeps() -> None:
 
 
 @pytest.fixture(name="client")
-async def client_fixture() -> AsyncIterator[TestClient]:
+async def client_fixture() -> AsyncIterator[TestClient[web.Request, web.Application]]:
     client = TestClient(TestServer(build_app()))
     await client.start_server()
     yield client
     await client.close()
 
 
-async def test_the_route_answers_with_the_ledger(client: TestClient) -> None:
+async def test_the_route_answers_with_the_ledger(
+    client: TestClient[web.Request, web.Application],
+) -> None:
     _publish("a1", "one", _question("q1", asked_at=1.0))
 
     response = await client.get("/api/questions")
@@ -225,7 +229,7 @@ def sent_fixture(monkeypatch: pytest.MonkeyPatch) -> _Sent:
 
 class TestAnswering:
     async def test_a_pick_goes_to_the_agent_with_the_options_index(
-        self, client: TestClient, sent: _Sent
+        self, client: TestClient[web.Request, web.Application], sent: _Sent
     ) -> None:
         _publish("a1", "one", _question("q1", asked_at=1.0))
 
@@ -253,7 +257,12 @@ class TestAnswering:
         ],
     )
     async def test_an_answer_the_ledger_will_not_send_is_refused(
-        self, client: TestClient, sent: _Sent, path: str, body: object, status: int
+        self,
+        client: TestClient[web.Request, web.Application],
+        sent: _Sent,
+        path: str,
+        body: object,
+        status: int,
     ) -> None:
         _publish(
             "a1",
@@ -269,7 +278,7 @@ class TestAnswering:
         assert sent.published == []
 
     async def test_a_deleted_agents_question_is_not_answered(
-        self, client: TestClient, sent: _Sent
+        self, client: TestClient[web.Request, web.Application], sent: _Sent
     ) -> None:
         _publish("a1", "one", _question("q1", asked_at=1.0))
         runtime.mark_deleted("a1")
@@ -279,7 +288,7 @@ class TestAnswering:
         assert response.status == 404
 
     async def test_without_a_broker_the_answer_is_not_lost_silently(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(runtime, "mqtt_client_ref", None)
         monkeypatch.setattr(runtime, "registry", None)
@@ -319,7 +328,7 @@ class TestTheNote:
     """What a person adds to a pick, in their own words, where the channel lets them."""
 
     async def test_the_route_sends_the_note_with_the_pick(
-        self, client: TestClient, sent: _Sent
+        self, client: TestClient[web.Request, web.Application], sent: _Sent
     ) -> None:
         _publish("a1", "one", _question("q1", asked_at=1.0))
 
@@ -332,7 +341,7 @@ class TestTheNote:
         assert payload["note"] == "valve swapped"
 
     async def test_a_note_that_is_not_text_is_refused(
-        self, client: TestClient, sent: _Sent
+        self, client: TestClient[web.Request, web.Application], sent: _Sent
     ) -> None:
         _publish("a1", "one", _question("q1", asked_at=1.0))
 

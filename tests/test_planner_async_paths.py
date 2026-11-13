@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The planner's async paths: routing, scheduling, decomposition, caching.
 
 Driven through a fake LLM and no broker, so these exercise the real methods

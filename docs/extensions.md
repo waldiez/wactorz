@@ -16,8 +16,8 @@ wactorz/
 
 frontend/src/
 ├── ext/                    # Frontend extensions (TypeScript) — mirror backend
-│   └── tts/index.ts        #     register({ apiBase, available })
-├── ui/dashboard/
+│   └── tts/index.ts        #     register({ apiBase, configRead })
+├── ui/shell/
 │   └── icons.ts            #     Icon registry — registerIcon(name, svg)
 ├── ui/CardDashboard.ts     #     View registry — registerView(key, icon, label, builder)
 └── config/serverConfig.ts  #     Config-seeding registry — registerConfigEntry(key, extract)
@@ -25,8 +25,8 @@ frontend/src/
 
 At startup the monitor calls `setup_all(app)`, which auto-discovers every module
 or package under `wactorz/ext/` that exposes a `setup(app)` hook, and every
-extension an installed package registers under the `wactorz.extensions` entry
-point, and wires them in. `collect_public_config(app)` gathers each extension's
+extension registered under the `wactorz.extensions` entry point by an installed
+package named in `WACTORZ_EXTENSIONS`, and wires them in. `collect_public_config(app)` gathers each extension's
 non-secret browser config and merges it into `/api/config`. Nothing in core
 references a specific extension.
 
@@ -56,6 +56,9 @@ async def on_ready(app: web.Application) -> None:
 def actor_decorator(app: web.Application) -> Callable[[actor, dict], None] | None:
     """Return a per-actor payload enricher (or None to opt out)."""
 
+def panel(app: web.Application) -> Panel:
+    """A tab on the dashboard (see "A dashboard tab from a package")."""
+
 # Optional: declare ordering dependencies for on_ready().
 __deps__ = ["other-ext"]  # this on_ready() runs after other-ext's
 ```
@@ -68,6 +71,7 @@ __deps__ = ["other-ext"]  # this on_ready() runs after other-ext's
 | `public_config(app)`  | (optional) merged into `/api/config` at startup             |
 | `on_ready(app)`       | (optional) runs as `on_startup`, topo-sorted by `__deps__`  |
 | `actor_decorator(app)`| (optional) enriches each actor in the `/api/actors` payload |
+| `panel(app)`          | (optional) a dashboard tab, read after `setup()` succeeds   |
 
 ### Enriching the actors list
 
@@ -92,9 +96,10 @@ The registry itself is on `app[contract.ACTOR_REGISTRY]` (set by core before
 
 ### From another package
 
-An extension does not have to live in this repository. Any package that is
-`pip install`ed beside Wactorz can register one, free or commercial, and it is
-loaded exactly like a module under `wactorz/ext/`, after the built-ins:
+An extension does not have to live in this repository. Any package installed
+beside Wactorz can register one, free or commercial, and once it is named in
+`WACTORZ_EXTENSIONS` it is loaded exactly like a module under `wactorz/ext/`, after
+the built-ins:
 
 ```toml
 # pyproject.toml of the other package
@@ -109,6 +114,173 @@ extension's `__deps__` refers to. A name a built-in extension already uses is
 refused with a log line, so a package cannot stand in for one; a package that
 fails to import, or has no `setup()`, is logged and skipped like a broken module
 under `wactorz/ext/`. Restart Wactorz after installing or removing such a package.
+
+### Enabling a package
+
+Loading a package runs its code in the server, so being installed is not enough:
+an agent's own requirements install packages too. Name the ones you trust, by
+distribution name, or use `*` to load everything installed:
+
+```bash
+WACTORZ_EXTENSIONS=wactorz-mlops,wactorz-tts
+```
+
+The setting covers all three things a package can register: `wactorz.extensions`,
+`wactorz.agents` and `wactorz.pipelines`. An unlisted package is not imported at
+all; it is named once in the log, with the line to add, and on the Overview. The
+modules under `wactorz/ext/` always load.
+
+A node reads its own `WACTORZ_EXTENSIONS`. `/deploy` rewrites the node's `.env`, so
+set it on main as `DEPLOY_<NODE>_EXTENSIONS`. On a node the setting decides which
+agents it can build. Under Home Assistant it is the `extensions` option, on the
+add-on and on each deploy target.
+
+### A dashboard tab from a package
+
+A package adds a tab without changing the dashboard: `panel()` names an ES module
+in the package, and the page loads it the first time the tab opens.
+
+```python
+from pathlib import Path
+
+from wactorz.ext import Panel
+
+
+def panel(app):
+    return Panel(
+        title="MLOps",
+        script=Path(__file__).parent / "panel.js",
+        icon="models",                # one of the dashboard's icons, or an .svg file; "grid" otherwise
+        topics=("mlops/#",),          # relayed to the page for host.subscribe
+    )
+```
+
+```js
+// panel.js: one module, bundled if it needs more than one file.
+export const apiVersion = 1;
+
+export function mount(root, host) {
+    const heading = document.createElement("h2");
+    heading.textContent = "MLOps";
+    root.append(heading);
+    const stop = host.subscribe("mlops/+/state", (topic, payload) => { /* ... */ });
+    void host.request("/api/mlops/runs").then(answer => { /* answer.ok, answer.value */ });
+    return () => stop();              // called when another view opens
+}
+```
+
+**Its icon.** `icon` names one of the dashboard's icons, or is a `Path` to an `.svg`
+file in the package, `icon=Path(__file__).parent / "icon.svg"`. The file is read once,
+when the extension loads, and the page keeps only the shapes inside its `<svg>`
+(`path`, `circle`, `rect`, `line`, `polyline`, `polygon`, `ellipse`, `g`), drawn as the
+dashboard's own icons are: lines in the text's colour, two units wide, on a 24 by 24
+grid. So draw it on that grid; the file's own `viewBox`, size and colours give way. A
+file that is missing, larger than 16 KiB, not UTF-8 or with no `<svg>` in it leaves the
+tab in place on the default icon, and the log says why.
+
+`mount(root, host)` fills `root` and may return, or resolve to, a function that is
+called when another view opens; the tab is mounted again when it is opened again.
+`host` is the panel's whole view of the dashboard, version 1:
+
+| Member | What it does |
+|--------|--------------|
+| `apiVersion`, `name` | The interface's version, and the panel's name |
+| `route()`, `onRoute(fn)` | Where in the panel the address points: `#/mlops/runs/7` is `["runs", "7"]` |
+| `navigate(path)` | Move the address within the panel; a refresh and Back follow it |
+| `request(path, init?)` | JSON from the server with a timeout; answers `{ok: true, value}` or `{ok: false, error}`, never rejects |
+| `subscribe(filter, fn)` | Messages on a topic the page is sent: the dashboard's own, and the panel's `topics` |
+| `toast({title, message, type?})` | A notice; `type` is `info`, `warning` or `error` |
+| `chart(series, options)` | The dashboard's line chart, to place in `root`; returns `{element, update(series, options?), destroy()}` (below) |
+| `setting(key)`, `onSetting(key, fn)` | What this browser chose for a setting the panel declared, and being told when it changes (below) |
+
+What `onRoute`, `subscribe`, `onSetting` and `chart` start ends with the panel, and each returns a function
+(for `chart`, its `destroy`) that ends it sooner. A panel styles itself, inside `root`: it inherits the dashboard's
+text colour and font, and can read its CSS variables (`--af-text-dim`, `--af-focus`). A script that fails
+to load, exports no `mount`, was written for another `apiVersion` or throws says so in
+its own tab, and the rest of the dashboard is unaffected.
+
+**A chart.** `host.chart` draws what the dashboard's own charts draw, so a tab looks like
+the rest. A series is `{name, points: [{t, v}], color?, spread?}`, `t` in milliseconds since
+the epoch and `v` a number or `null` for a gap; `spread: [{t, lo, hi}]` shades each point's
+least and most, as a bucketed series (`GET /api/data/{source}/series`) gives them. The axes
+label round values and round local times, with a faint gridline at each, worked out again
+for any window zoomed into. Options:
+
+| Option | What it draws |
+|--------|---------------|
+| `title`, `format?` | The chart's name, also its name for a screen reader; how a value is written (the number as the reader's locale writes it when left out) |
+| `yLabel?`, `xLabel?` | What the values are, beside the value axis, and what runs along the bottom (time unless said); both join the chart's name for a screen reader |
+| `thresholds: [{value, label, color?}]` | A dashed level across the chart, kept in view, named in the legend |
+| `bands: [{from, to, label, tone?}]` | A stretch of time shaded across it, `tone` `warn` or `info`; its label on top and in the tooltip |
+| `marks: [{t, label, v?, shape?, color?}]` | A point in time marked in a `dot`, `square`, `triangle` or `diamond`, at height `v` or at the top; each kind counted in the legend |
+| `mode`, `modeToggle` | How points are drawn, `line` (broken at gaps), `points` or `joined`, or `auto` (points when most of the slots are empty); `modeToggle: true` offers the choice in the chart's header |
+| `zoom`, `onZoom(window)` | `zoom: true` lets a mouse drag across the plot, or the buttons, zoom into a window of its time; `onZoom` is asked for `{from, to}` (or `null` on reset) and may answer with series for it, such as finer buckets from the server, else the chart narrows to what it holds; if it rejects, the chart keeps what it holds and says the finer view could not be read |
+
+`chart` came within version 1, so a panel that may meet an older dashboard checks
+`typeof host.chart === "function"` first.
+
+A panel need not use it: `root` is the panel's own, to draw in with its own code or any
+library. The dashboard serves the panel one script and allows scripts from its own origin
+only, so a library is bundled into `panel.js`, its stylesheet inlined (inline styles and
+`<style>` are allowed; a stylesheet or a font from elsewhere is not), and nothing in it may
+need `eval` or `new Function`. Canvas, SVG, `data:` images and workers from `blob:` work. A
+chart of its own ends with the function `mount` returns, as anything else the panel starts.
+
+```js
+const chart = host.chart(
+    [{ name: "score", points }],
+    { title: "Pump 1", thresholds: [{ value: 0.22, label: "alarm" }], zoom: true, modeToggle: true },
+);
+root.append(chart.element);
+```
+
+**Its settings.** A panel that has something for each person to choose declares it, and
+the dashboard draws it: a section of Settings named after the tab, at
+`#/settings/panel-<name>`, with a row per setting, laid out as the dashboard's own.
+
+```python
+from wactorz.ext import Panel, PanelSetting
+
+Panel(
+    title="Air",
+    script=HERE / "panel.js",
+    settings=(
+        PanelSetting("temperature", "Temperature", kind="choice",
+                     choices=(("c", "°C"), ("f", "°F")), default="c",
+                     hint="The unit the rooms' temperatures read in."),
+        PanelSetting("compact", "Compact cards"),                      # a switch, off
+        PanelSetting("keep", "Points kept", kind="number", default=400, minimum=50, maximum=2000),
+    ),
+)
+```
+
+| Kind | Drawn as | `default` | Also |
+|------|----------|-----------|------|
+| `switch` (when left out) | An on/off switch | `True` or `False` | |
+| `choice` | A few choices side by side | One of the values | `choices`: `(value, label)` pairs, in order |
+| `number` | A number field | A number | `minimum`, `maximum`, `step`, each optional |
+
+A setting's `key` is lowercase letters, digits and `-`, and its `hint` is one line under
+its name. A setting that cannot be drawn (a default that is not among the choices or is
+out of range, a key used twice) is left out, the others stay, and the log says why.
+
+The values are each browser's own: the server describes the settings and never holds
+what was chosen. `host.setting("temperature")` answers with what this browser chose, the
+default until it has, and `undefined` for a key the panel did not declare. Settings is
+another view, so a panel reads its settings when it mounts; `host.onSetting(key, fn)`
+tells it of a change made meanwhile in another window of the same browser. A setting
+changes how the panel shows things, so keep what is published and stored as it is: the
+air-quality example converts to °F on display and its readings stay in °C. Both came
+within version 1, so a panel that may meet an older dashboard checks
+`typeof host.setting === "function"` first.
+
+**What a panel is trusted with.** It runs in the page with the signed-in session, so
+it can do whatever the dashboard can: as much as the package's code already can on
+the server. So a tab is offered only for an extension whose `setup()` succeeded,
+which for a package means one named in `WACTORZ_EXTENSIONS`. Its script is served at
+`/api/ext/<name>/panel.js`, behind the same key as the rest of the API. The extension's
+name is the tab's address, so it is lowercase letters, digits and `-`, and cannot be a
+built-in view's; a panel that breaks a rule is logged and left out.
 
 ### Requirements
 
@@ -148,22 +320,24 @@ export interface MyConfig {
     available: boolean;
 }
 
-export function register(config: MyConfig): void {
-    if (!config.available) return;
+export function register(config: MyConfig): () => void {
+    if (!config.available) return () => {};
     // Seed the singleton, then let it self-wire via the event bus.
     myManager.setApiBase(config.apiBase);
     void myManager.init();
+    return listen("my-event", detail => myManager.handle(detail));
 }
 ```
 
-### Wiring in main.ts
+### Wiring in app.ts
 
-`register()` is called once during startup, after `/api/config` is seeded:
+`register()` is called once during startup, after `/api/config` is seeded, by
+`bootFromConfig` in `app.ts`; what it returns is how `createApp`'s `stop` ends it:
 
 ```ts
 import { register as registerMyExt } from "./ext/myname";
 
-registerMyExt({ apiBase: _apiBase, available });
+running.stopMyExt = registerMyExt({ apiBase: ingressBase(), available });
 ```
 
 ### Config seeding
@@ -191,7 +365,7 @@ An extension that adds a dashboard tab uses the two registries — core never
 imports extension views or icon names:
 
 ```ts
-import { registerIcon } from "../../ui/dashboard/icons";
+import { registerIcon } from "../../ui/shell/icons";
 
 export function register(config: MyConfig): void {
     // 1. Register the icon BEFORE registerView() uses its name.
@@ -202,14 +376,13 @@ export function register(config: MyConfig): void {
 }
 ```
 
-`registerView(key, icon, label, builder)` is a `CardDashboard` method; `main.ts`
-passes it (plus an `onRender` re-render thunk) into `register()`. The builder is
-a `() => HTMLElement` thunk called lazily on navigation — keep it pure and build
+A view is asked for on the bus: `emit("af-register-view", { key, icon, label, build })`
+reaches `CardDashboard.registerView`. `build` is a `() => HTMLElement` thunk called lazily on navigation — keep it pure and build
 a fresh element tree per call.
 
 | Registry                | Module                   | Purpose                      |
 |-------------------------|--------------------------|------------------------------|
-| `registerIcon()`        | `ui/dashboard/icons.ts`  | Add SVG icons by name        |
+| `registerIcon()`        | `ui/shell/icons.ts`      | Add SVG icons by name        |
 | `registerView()`        | `CardDashboard` (method) | Add a nav tab + view builder |
 | `registerConfigEntry()` | `config/serverConfig.ts` | Seed `/api/config` fields    |
 
@@ -265,10 +438,11 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 ## Checklist
 
 - [ ] Backend `setup()` registers routes under `/api/<ext>/…`
-- [ ] A packaged extension is named in `[project.entry-points."wactorz.extensions"]`
+- [ ] A packaged extension is named in `[project.entry-points."wactorz.extensions"]`, and its docs say to add the distribution to `WACTORZ_EXTENSIONS`
 - [ ] Optional `public_config()` returns only non-secret keys (never tokens)
 - [ ] Optional `on_ready()` handles cross-extension ordering via `__deps__`
 - [ ] Optional `actor_decorator()` enriches the `/api/actors` payload
+- [ ] Optional `panel()` names a `.js` module exporting `apiVersion` and `mount(root, host)`, an icon by name or an `.svg` on a 24 by 24 grid, and any `settings` a person chooses per browser
 - [ ] Config is read from `os.getenv(…)`, not `wactorz.config.CONFIG`
 - [ ] Extension no-ops gracefully when its env var / dependency is absent
 - [ ] Frontend barrel exports a `register(config)` function; wires via the event bus

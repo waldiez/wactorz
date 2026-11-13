@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """GoogleCalendarAgent - Read and manage Google Calendar events."""
 
 import json
@@ -5,6 +6,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
@@ -16,7 +18,7 @@ from ..core.integrations.google_calendar_mcp import (
 )
 from .llm_agent import LLMAgent, LLMProvider
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 CALENDAR_PARSE_PROMPT = """You convert a user calendar request into JSON only.
@@ -41,6 +43,12 @@ Use the live date/time context from the system prompt to resolve relative dates.
 
 class GoogleCalendarAgent(LLMAgent):
     """Google Calendar agent for listing, creating, and deleting events."""
+
+    #: What this agent's model requests have taken, kept by the base class's
+    #: accounting and added to here.
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost_usd: float
 
     DESCRIPTION = (
         "Accesses Google Calendar events: list today/upcoming events, create events, delete events"
@@ -69,14 +77,15 @@ class GoogleCalendarAgent(LLMAgent):
         "status": "Sanitized Calendar configuration status",
     }
 
-    def __init__(self, llm_provider: LLMProvider | None = None, **kwargs) -> None:
+    def __init__(self, llm_provider: LLMProvider | None = None, **kwargs: Any) -> None:
         kwargs.setdefault("name", "google-calendar-agent")
         kwargs.setdefault("system_prompt", CALENDAR_PARSE_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
-        self.client = GoogleCalendarMcpClient()
+        self.client: GoogleCalendarMcpClient = GoogleCalendarMcpClient()
         self._pending_create: dict[str, Any] = {}
 
     async def chat(self, user_message: str) -> str:
+        """Answer ``user_message`` and keep the turn in the conversation and the chat log."""
         ts_user = time.time()
         self._conversation_history.append({"role": "user", "content": user_message, "ts": ts_user})
         result = await self._process({"text": user_message})
@@ -88,11 +97,17 @@ class GoogleCalendarAgent(LLMAgent):
         self._log_chat_turn(user_message, response, ts_user=ts_user, ts_reply=time.time())
         return response
 
-    async def chat_stream(self, user_message: str):
+    async def chat_stream(self, user_message: str) -> AsyncGenerator[str | dict[str, Any], None]:
+        """The answer :meth:`chat` gives, whole, followed by an empty usage dict: no model is
+        called.
+        """
         yield await self.chat(user_message)
         yield {}
 
     async def handle_message(self, msg: Message) -> None:
+        """Answer a task with its result, the task's id echoed, sent to its reply address; other
+        messages are ignored.
+        """
         if msg.type != MessageType.TASK:
             return
         payload = msg.payload if isinstance(msg.payload, dict) else {"text": str(msg.payload or "")}

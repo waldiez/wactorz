@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
  * AmbientManager — procedural background soundscapes via Web Audio API.
@@ -12,6 +11,7 @@
 
 import { listen } from "../events";
 import { safeStorage } from "../safeStorage";
+import { isMuted } from "./soundMute";
 
 const DUCK_VOLUME = 0.12;
 const LS_TRACK = "wactorz.ambientTrack";
@@ -254,11 +254,29 @@ export class AmbientManager {
     constructor() {
         this._track = readTrack();
         this._volume = readVolume();
+    }
 
-        // Listen for TTS audio events — decoupled via the event bus so
-        // TTSManager doesn't need to import AmbientManager directly.
-        listen("tts-audio-start", () => this.duck(true));
-        listen("tts-audio-end", () => this.duck(false));
+    /**
+     * Duck while speech plays; returns the way to stop. Decoupled via the event
+     * bus so TTSManager doesn't need to import AmbientManager directly.
+     */
+    followSpeech(): () => void {
+        const stops = [
+            listen("tts-audio-start", () => this.duck(true)),
+            listen("tts-audio-end", () => this.duck(false)),
+        ];
+        return () => stops.forEach(stop => stop());
+    }
+
+    /** Fall silent while the browser is muted, and play the chosen track again when it is not; returns the way to stop. */
+    followMute(): () => void {
+        return listen("af-mute-changed", ({ muted }) => {
+            if (muted) {
+                this._stopCurrent();
+            } else {
+                this._restart();
+            }
+        });
     }
 
     /** Currently selected track id. */
@@ -270,7 +288,7 @@ export class AmbientManager {
         return this._volume;
     }
 
-    /** Switch to a track (persisted) and restart playback. */
+    /** Switch to a track (persisted) and restart playback, unless the browser is muted. */
     setTrack(id: AmbientTrackId): void {
         this._track = id;
         safeStorage.set(LS_TRACK, id);
@@ -320,7 +338,7 @@ export class AmbientManager {
 
     private _restart(): void {
         this._stopCurrent();
-        if (this._track === "none") {
+        if (this._track === "none" || isMuted()) {
             return;
         }
         const { ctx, master } = this._ensureCtx();

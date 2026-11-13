@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """CatalogAgent — Pre-built Agent Recipe Library
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Holds a catalog of ready-made DynamicAgent recipes (name → full spawn config).
@@ -23,74 +24,59 @@ Or via main (natural language):
 
 import asyncio
 import importlib
-import importlib.metadata
 import importlib.util
+import json
 import logging
 import pathlib
-import re
+import sys
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .. import plugins
-from ..core.actor import Actor, Message, MessageType
+from ..core.actor import Actor, Message, MessageType, ReplyError
+from ..core.addresses import Address
+from ..core.manifests import AgentManifest
 from ..core.paths import resolve_state_dir
+from ..core.pip import missing_requirements, pending_restart
+from ..core.topics import agent_topic
+from .dependency_install import InstallOutcome, install_for_agent
+from .dynamic import DynamicAgent
 from .lookup import find_main_actor
+from .mixins import KeptHere, spawn_actor_id
 
 if TYPE_CHECKING:
     from .main import MainActor
 
-logger = logging.getLogger(__name__)
-
-#: How long a spawn waits for the installer to finish a recipe's missing
-#: packages before it goes ahead without them.
-INSTALL_WAIT_S = 120.0
+logger: logging.Logger = logging.getLogger(__name__)
 
 BETA_WARNING = (
     "Experimental/Beta agent: behavior may change, fail, or be removed. "
     "Use it for trials, not unattended production workflows."
 )
 
-_REACHY_MINI_SDK_VERSION = "1.8.4"
+INSTALL_WAIT_S = 120.0
+
+_REACHY_MINI_SDK_VERSION = "1.12.0"
 _REACHY_MINI_REQUIREMENT = f"reachy-mini=={_REACHY_MINI_SDK_VERSION}"
-
-_IMPORT_NAME_MAP = {
-    "scikit-learn": "sklearn",
-    "stable-baselines3": "stable_baselines3",
-    "pillow": "PIL",
-    "pyyaml": "yaml",
-    "pymupdf": "fitz",
-    "beautifulsoup4": "bs4",
-    "python-dateutil": "dateutil",
-    "typing-extensions": "typing_extensions",
-    "opencv-python": "cv2",
-    "scikit-image": "skimage",
-    "webrtcvad-wheels": "webrtcvad",
-}
-
-
-def _dependency_is_satisfied(requirement: str) -> bool:
-    """Return whether a recipe dependency, including an exact pin, is installed."""
-    pip_name = re.split(r"[<>=!~;]", requirement, maxsplit=1)[0]
-    pip_name = pip_name.split("[", 1)[0].strip().lower()
-    import_name = _IMPORT_NAME_MAP.get(pip_name) or pip_name.replace("-", "_")
-    try:
-        importlib.import_module(import_name)
-    except ImportError:
-        return False
-
-    exact_version = re.search(r"(?<![<>=!~])==\s*([^,;\s]+)", requirement)
-    if exact_version is None:
-        return True
-    try:
-        installed_version = importlib.metadata.version(pip_name)
-    except importlib.metadata.PackageNotFoundError:
-        return False
-    return installed_version == exact_version.group(1)
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # RECIPE IMPORTS
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+def _list_message(agents: list[dict[str, Any]], include_experimental: bool) -> str:
+    """The catalog listing as text, for a chat that shows only a reply's text.
+
+    The dashboard renders the `agents` field itself; every other chat reaches
+    the catalog through main, which shows the message and nothing else.
+    """
+    shown = [a["name"] for a in agents if include_experimental or not a["experimental"]]
+    hidden = len(agents) - len(shown)
+    message = f"{len(agents)} agent(s) available in catalog: {', '.join(shown)}"
+    if hidden:
+        message += f". {hidden} experimental agent(s) hidden; say `list experimental` to show them"
+    return message
 
 
 def _chat_message_with_beta_warning(message: str, beta_warning: str) -> str:
@@ -113,6 +99,75 @@ def _wants_experimental(text: str) -> bool:
 #: package; its source travels, as text, in the spawn config's `code`, and is
 #: compiled into a DynamicAgent wherever the agent runs.
 _PROGRAMS = pathlib.Path(__file__).parent.parent / "catalogue_agents"
+
+
+#: What may end a spawn, for a name that already runs on another host: as in
+#: main's own spawns, ``replace`` moves it here and ``alongside`` adds a second.
+_SPAWN_WORDS = ("replace", "alongside")
+
+
+def _spawn_request(text: str) -> tuple[str, dict[str, Any]]:
+    """The recipe a typed spawn names, and the payload its closing word and its options ask for.
+
+    Options are a JSON object after the name, ``spawn recorder {"topics":
+    ["sensors/#"]}``, handed to a library agent as the keyword arguments it
+    takes; an object that does not parse is left as part of the name, so the
+    reply says what was not found.
+    """
+    text, options = _split_options(text)
+    name, _, word = text.rpartition(" ")
+    payload: dict[str, Any] = {}
+    if name.strip() and word.lower() in _SPAWN_WORDS:
+        text, payload = name.strip(), {word.lower(): True}
+    if options is not None:
+        payload["options"] = options
+    return text, payload
+
+
+def _split_options(text: str) -> tuple[str, dict[str, Any] | None]:
+    """``text`` without the JSON object that ends it, and that object; None when there is none."""
+    head, brace, tail = text.partition("{")
+    if not brace:
+        return text, None
+    try:
+        parsed = json.loads(brace + tail)
+    except ValueError:
+        return text, None
+    if not isinstance(parsed, dict):
+        return text, None
+    return head.strip(), parsed
+
+
+@dataclass(frozen=True)
+class _Placing:
+    """How a settled spawn goes on: as a second agent of its name, or moved from a place."""
+
+    alongside: bool = False
+    moved_from: Address | None = None
+
+    @property
+    def saved(self) -> dict[str, bool]:
+        """What the spawn registry is told, so a second agent gets an entry of its own."""
+        return {"alongside": True} if self.alongside else {}
+
+
+#: The spawn of a name that runs nowhere else.
+_HERE = _Placing()
+
+
+def _runs_elsewhere(name: str, kept: KeptHere) -> dict[str, Any]:
+    """The answer to a spawn of ``name`` that runs on another host and said neither word."""
+    where = " and ".join(f"'{address}'" for address in kept.elsewhere)
+    return {
+        "ok": False,
+        "agent": name,
+        "elsewhere": list(kept.elsewhere),
+        "message": (
+            f"Did not spawn '{name}': it already runs as {where}. "
+            f"`@catalog spawn {name} replace` moves it to main, and "
+            f"`@catalog spawn {name} alongside` runs a second one there."
+        ),
+    }
 
 
 def _load_recipe(relative: str) -> str | None:
@@ -149,7 +204,7 @@ def _load_embedded_recipe(relative: str) -> str | None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _build_native_catalog() -> dict:
+def _build_native_catalog() -> dict[str, Any]:
     """Native Actor subclasses spawned directly by the catalog."""
     native = {}
 
@@ -292,7 +347,7 @@ def _build_native_catalog() -> dict:
     # The agents this deployment brings, beside the packaged ones: listed,
     # described and spawned the same way, and restored from the registry by
     # name through `get_native_factory`.
-    for plugin in plugins.discover().values():
+    for plugin in [*plugins.built_in().values(), *plugins.discover().values()]:
         if plugin.name in native:
             logger.warning(
                 "[catalog] Plugin %r is shadowed by a packaged recipe of the same name",
@@ -303,7 +358,7 @@ def _build_native_catalog() -> dict:
     return native
 
 
-def get_native_factory(name: str):
+def get_native_factory(name: str) -> type[Actor] | None:
     """Return the Actor subclass that backs a native catalog agent, or None.
 
     Used by the local spawn router to restore a ``type: "native"`` agent from
@@ -314,7 +369,44 @@ def get_native_factory(name: str):
     return recipe.get("factory") if recipe else None
 
 
-def _build_catalog() -> dict:
+class RecipeRestoreError(ValueError):
+    """A saved catalogue recipe that needs a fresh approved spawn."""
+
+    @classmethod
+    def dependencies_changed(cls, name: str) -> "RecipeRestoreError":
+        """The error for restoring ``name`` when its catalogue dependencies have changed, which
+        needs an install approved through a fresh spawn.
+        """
+        return cls(
+            f"{name}: catalogue dependencies changed; respawn through "
+            "@catalog so installation is approved before restoring this agent"
+        )
+
+
+def current_recipe_config(saved: dict[str, Any]) -> dict[str, Any]:
+    """Refresh code only for recipes explicitly supporting saved configuration.
+
+    Dependency changes need a fresh catalogue spawn so the installer asks for
+    approval again. A restored config must never authorize new requirements
+    merely because the recipe changed. Instance settings and state stay saved.
+    """
+    if not saved.get("trusted") or saved.get("type", "dynamic") != "dynamic":
+        return saved
+    recipe = _build_catalog().get(str(saved.get("name") or ""))
+    if not recipe or recipe.get("type") != "dynamic" or not recipe.get("refresh_on_restore"):
+        return saved
+    if saved.get("install", []) != recipe.get("install", []):
+        raise RecipeRestoreError.dependencies_changed(str(saved.get("name")))
+    return {
+        **recipe,
+        **saved,
+        "code": recipe["code"],
+        "require_install_success": recipe.get("require_install_success", False),
+        "minimum_python": recipe.get("minimum_python", []),
+    }
+
+
+def _build_catalog() -> dict[str, Any]:
     catalog = _build_native_catalog()
 
     # ── doc-to-pptx-agent ─────────────────────────────────────────────────────
@@ -483,19 +575,26 @@ def _build_catalog() -> dict:
             ),
             "docs": (
                 "Setup:\n"
-                "1. Install the recipe dependencies when prompted, or preinstall: "
-                f"pip install {_REACHY_MINI_REQUIREMENT} numpy edge-tts pillow "
-                "webrtcvad-wheels faster-whisper.\n"
-                "2. For Reachy Mini Wireless, put the robot and Wactorz host on the "
+                "0. Run Wactorz on Windows or macOS for everything; on Linux (Python "
+                "3.11 to 3.13, build tools and GStreamer first) movement and speech "
+                "work. Docker and the Home Assistant add-on are not supported yet.\n"
+                "1. For Reachy Mini Wireless, put the robot and Wactorz host on the "
                 "same WiFi network. Stop any Hugging Face app running on the robot.\n"
-                "3. For Reachy Mini Lite, start the local daemon first: "
+                "2. For Reachy Mini Lite, start the local daemon first: "
                 "reachy-mini-daemon -p <serial_port>.\n"
-                "4. Spawn the agent: @catalog spawn reachy-mini.\n"
-                "5. If discovery is flaky, pin the Wireless host by publishing "
-                '{"robot_host": "192.168.1.42"} to custom/reachy/config, then restart '
-                "the agent.\n"
+                "3. Spawn the agent: @catalog spawn reachy-mini. With Wactorz "
+                "installed as `pip install 'wactorz[reachy]'` it starts at once; "
+                "otherwise the first spawn installs its packages, which takes a few "
+                "minutes, and usually asks for one restart of Wactorz.\n"
+                "4. If Reachy is not found (always the case from WSL or a virtual "
+                'machine), publish {"robot_host": "192.168.1.42", '
+                '"connection_mode": "network"} to custom/reachy/config, then say '
+                "reconnect.\n"
+                "5. Optional voice input: set DEEPGRAM_API_KEY and restart Wactorz.\n"
                 "\n"
                 "Try:\n"
+                "- help\n"
+                "- help voice\n"
                 "- wake up\n"
                 "- do a happy gesture\n"
                 "- wiggle your antennas\n"
@@ -507,7 +606,7 @@ def _build_catalog() -> dict:
                 "- start conversation\n"
                 "- turn on the light and nod\n"
                 "\n"
-                "For structured control, send a dict with cmd wake, sleep, pose, "
+                "For structured control, send a dict with cmd help, wake, sleep, pose, "
                 "antennas, look_at, camera, listen, ask_voice, conversation_start, "
                 "conversation_stop, doa, emotion, say, volume, health, ha, "
                 "bind, unbind, or stop."
@@ -536,21 +635,35 @@ def _build_catalog() -> dict:
                 _REACHY_MINI_REQUIREMENT,
                 "numpy",
                 "edge-tts",
-                "pillow",
+                "pillow>=13",
                 "webrtcvad-wheels",
-                # Speech recognition for `ask_voice` and `conversation_start`,
-                # and the default STT backend. Listed because leaving it out
-                # meant every voice feature failed on a robot installed exactly
-                # as instructed, with nothing said until the first attempt.
-                "faster-whisper",
+                # Default cloud speech recognition for `ask_voice` and
+                # `conversation_start`. Local Whisper remains selectable when
+                # installed separately.
+                "deepgram-sdk>=3,<4",
             ],
+            # Shown when the packages are installed at spawn: installed with
+            # Wactorz instead, they resolve before it starts and need no restart.
+            "install_hint": (
+                "Next time, `pip install 'wactorz[reachy]'` puts these in place "
+                "ahead of time, and the spawn has nothing to install."
+            ),
+            # A task can include real-time speech playback or a hardware move,
+            # which outlasts the default handle_task() limit. Kept below the chat
+            # gateway's own reply deadline so a reply still arrives.
+            "task_timeout_s": 140.0,
+            "require_install_success": True,
+            "refresh_on_restore": True,
+            "minimum_python": [3, 11],
             "input_schema": {
-                "cmd": "str  — wake|sleep|pose|turn|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|health|ha",
+                "cmd": "str  — help|wake|sleep|pose|turn|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|health|ha|life",
                 "text": "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
-                "voice": "str   — edge-tts voice (cmd=say); auto-picks by script, e.g. el-GR for Greek",
+                "voice": "str   — edge-tts voice (cmd=say); omit it, the voice follows the text's script",
+                "enabled": "bool  — ambient idle motion on/off (cmd=life); breathing, gaze drift, antenna flicks",
+                "amplitude": "float — 0-1 scale for ambient motion (cmd=life); 1 is full, 0 is still",
                 "gain_db": "float — per-say file trim in dB (cmd=say), <=0 to make one line quieter",
                 "loud": "bool  — cmd=say; default true (compress+limit file to max); false plays raw quiet TTS",
-                "preset": "str   — speaking mode (cmd=volume): whisper(70)|normal(85)|louder(93)|presenter(100)",
+                "preset": "str   — cmd=volume: whisper(70)|normal(85)|louder(93)|presenter(100); cmd=life: off|calm|antennas|alive|showtime",
                 "level": "float — 0-100 robot speaker volume (cmd=volume); 100=loudest, 0=quietest (daemon /api/volume/set)",
                 "delta": "float — relative volume change in level points (cmd=volume), e.g. +15 / -25",
                 "mute": "bool  — cmd=volume; true silences (remembers level), false restores it",
@@ -574,9 +687,14 @@ def _build_catalog() -> dict:
                 "path": "str   — save the frame/clip to this file (cmd=camera|listen)",
                 "publish": "bool  — also emit on custom/reachy/camera|audio (cmd=camera|listen)",
                 "include_b64": "bool  — include the base64 blob in the result (cmd=camera|listen), default true",
-                "stt_backend": "str — ask_voice/conversation backend: faster-whisper (default)|whisper|openai",
+                "stt_backend": "str — ask_voice/conversation backend: deepgram (default)|faster-whisper|whisper|openai",
                 "stt_model": "str — optional voice transcription model override",
-                "stt_language": "str — optional language lock; unset auto-detects",
+                "stt_timeout_s": "float — hosted transcription timeout (default 60s)",
+                "stt_language": "str — prerecorded language lock; unset auto-detects",
+                "stt_streaming": "bool — stream Deepgram conversation audio (default true)",
+                "stt_stream_language": "str — Deepgram stream language (default multi: English and Greek; en or el keeps one)",
+                "stt_endpointing_ms": "int — streaming silence that finalizes speech (default 500ms)",
+                "stt_utterance_end_ms": "int — streaming final-gap backstop (default 1200ms)",
                 "stt_hotwords": "str — optional comma-separated recognition hints",
                 "stt_fallback_language": "str — retry language for uncertain short speech",
                 "stt_min_language_probability": "float - reject/retry auto-language guesses below this (default 0.60)",
@@ -587,7 +705,7 @@ def _build_catalog() -> dict:
                 "cooldown_s": "float - post-TTS mic drain time (default 0s)",
                 "vad_min_rms": "float - minimum speech-frame RMS (default 0.01)",
                 "name": "str   — emotion clip name (e.g. curious1, success1)",
-                "topic": "str   — MQTT topic to bind/unbind",
+                "topic": "str   — help category, or MQTT topic for bind/unbind",
                 "when": "dict  — dotted-path equality matcher for bindings",
                 "do": "dict  — payload to dispatch when binding fires",
                 "id": "str   — optional correlation id; ack on custom/reachy/cmd_result/{id}",
@@ -652,19 +770,25 @@ class CatalogAgent(Actor):
     Spawns any catalog agent on request by delegating to main's spawn pipeline.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "catalog")
         super().__init__(**kwargs)
         self.protected = True
         self._catalog = _build_catalog()
+        #: Recipes whose packages are being installed right now, so a second
+        #: request during a minutes-long install does not start another one.
+        self._installing: set[str] = set()
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
-    async def on_start(self):
+    async def on_start(self) -> None:
+        """Announce the recipes, publish the manifest, and give main a manifest for each recipe,
+        so it can route to an agent before one is spawned.
+        """
         names = list(self._catalog.keys())
         logger.info("[%s] Catalog ready — %s recipe(s): %s", self.name, len(names), names)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {
                 "type": "log",
                 "message": f"Catalog ready: {', '.join(names)}",
@@ -695,7 +819,7 @@ class CatalogAgent(Actor):
             await asyncio.sleep(0.5)
 
         for name, recipe in self._catalog.items():
-            manifest = {
+            manifest: AgentManifest = {
                 "name": name,
                 "actor_id": f"catalog.{name}",
                 "description": recipe.get("description", ""),
@@ -724,7 +848,8 @@ class CatalogAgent(Actor):
 
     # ── Message handling ───────────────────────────────────────────────────────
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
+        """Answer a task (spawn, list or info), with the task's id echoed, to its reply address."""
         if msg.type != MessageType.TASK:
             return
 
@@ -742,7 +867,7 @@ class CatalogAgent(Actor):
         if target:
             await self.send(target, MessageType.RESULT, result)
 
-    async def _handle(self, payload) -> dict:
+    async def _handle(self, payload: Any) -> dict[str, Any]:
         if isinstance(payload, dict) and payload.get("action"):
             action = payload["action"].lower().strip()
             if action == "list":
@@ -751,11 +876,13 @@ class CatalogAgent(Actor):
             if action == "info":
                 return self._action_info(payload.get("agent", ""))
             if action == "spawn":
-                return await self._action_spawn(payload.get("agent", ""), payload)
+                return await self._action_spawn(
+                    payload.get("agent", ""), payload, background_install=True
+                )
             return {"ok": False, "message": f"Unknown action '{action}'. Use: spawn | list | info"}
 
         if isinstance(payload, dict) and "spawn" in payload and isinstance(payload["spawn"], str):
-            return await self._action_spawn(payload["spawn"], payload)
+            return await self._action_spawn(payload["spawn"], payload, background_install=True)
 
         if isinstance(payload, str):
             text = payload.strip()
@@ -775,9 +902,9 @@ class CatalogAgent(Actor):
             if cmd == "info":
                 return self._action_info(arg)
             if cmd == "spawn":
-                return await self._action_spawn(arg, {})
+                return await self._action_spawn(*_spawn_request(arg), background_install=True)
             if self._resolve_name(cmd):
-                return await self._action_spawn(cmd, {})
+                return await self._action_spawn(*_spawn_request(text), background_install=True)
 
         return self._action_list()
 
@@ -824,7 +951,7 @@ class CatalogAgent(Actor):
 
     # ── Actions ────────────────────────────────────────────────────────────────
 
-    def _action_list(self, include_experimental: bool = False) -> dict:
+    def _action_list(self, include_experimental: bool = False) -> dict[str, Any]:
         """List catalog agents. The full set (including beta) is always returned
         in ``agents`` so other consumers get complete data; ``show_experimental``
         tells the chat formatter whether to display the beta agents or hide them
@@ -845,12 +972,12 @@ class CatalogAgent(Actor):
             )
         return {
             "ok": True,
-            "message": f"{len(agents)} agent(s) available in catalog",
+            "message": _list_message(agents, include_experimental),
             "agents": agents,
             "show_experimental": include_experimental,
         }
 
-    def _action_info(self, name: str) -> dict:
+    def _action_info(self, name: str) -> dict[str, Any]:
         if not name:
             return {"ok": False, "message": "Provide 'agent' name for info action"}
         resolved = self._resolve_name(name)
@@ -864,9 +991,27 @@ class CatalogAgent(Actor):
             message += (
                 f" ({recipe.get('stability', 'beta')}: {recipe.get('warning', BETA_WARNING)})"
             )
+        # The text is all a chat through main shows, so it carries what a person
+        # asked `info` for: what the agent does and how to set it up.
+        if recipe.get("description"):
+            message += f": {recipe['description']}"
+        if recipe.get("docs"):
+            message += "\n\n" + str(recipe["docs"])
         return {"ok": True, "message": message, "recipe": safe}
 
-    async def _action_spawn(self, name: str, payload: dict) -> dict:
+    async def _action_spawn(
+        self, name: str, payload: dict[str, Any], *, background_install: bool = False
+    ) -> dict[str, Any]:
+        """Spawn the recipe `name`, installing its packages first when needed.
+
+        A first install can take minutes, so it is announced in chat before it
+        starts. With `background_install` (a request typed at the catalog) the
+        reply returns straight after that announcement and the outcome follows
+        in chat: the caller's own reply deadline is shorter than an install can
+        be, and a reply that outlasts it reads as the catalog not responding.
+        Callers that need the running agent back leave it off and wait for the
+        real answer.
+        """
         if not name:
             return {"ok": False, "message": "Provide 'agent' name to spawn"}
 
@@ -876,6 +1021,14 @@ class CatalogAgent(Actor):
             available = list(self._catalog.keys())
             return {"ok": False, "message": f"'{name}' not in catalog. Available: {available}"}
 
+        minimum = recipe.get("minimum_python", [])
+        if tuple(sys.version_info[:2]) < tuple(minimum):
+            return {
+                "ok": False,
+                "message": f"'{resolved}' requires Python {'.'.join(map(str, minimum))}+; "
+                "core Wactorz remains supported on Python 3.10. No packages were installed.",
+            }
+
         if not self._registry:
             return {"ok": False, "message": "No registry available — cannot spawn"}
 
@@ -883,10 +1036,73 @@ class CatalogAgent(Actor):
         if existing:
             return {"ok": True, "message": f"'{resolved}' is already running"}
 
-        beta_warning = recipe.get("warning") if recipe.get("experimental") else ""
+        options = payload.get("options")
+        if options is not None and not isinstance(options, dict):
+            return {"ok": False, "message": "options must be a JSON object", "agent": resolved}
+        if options and not recipe.get("plugin"):
+            return {
+                "ok": False,
+                "message": f"'{resolved}' takes no options; its settings are asked for in chat",
+                "agent": resolved,
+            }
+        placing = await self._settle(resolved, payload)
+        if isinstance(placing, dict):
+            return placing
+        result = await self._start_recipe(
+            resolved, recipe, placing, background_install, options=options
+        )
+        if not result.get("ok"):
+            await self._put_back(placing)
+        return result
+
+    async def _settle(self, name: str, payload: dict[str, Any]) -> dict[str, Any] | _Placing:
+        """Decide a spawn of ``name`` on main against where it already runs, as main's own are.
+
+        The result to answer with when nothing is to be spawned; else how to
+        place it, an agent moved here having been stopped where it was.
+        """
+        main = find_main_actor(self._registry)
+        if main is None:
+            return _HERE
+        alongside = bool(payload.get("alongside"))
+        settled = await main._settle_spawn(
+            {"name": name, "replace": bool(payload.get("replace")), "alongside": alongside}
+        )
+        refused = settled.refused
+        if isinstance(refused, KeptHere):
+            return _runs_elsewhere(name, refused)
+        if refused is not None:
+            return {
+                "ok": False,
+                "agent": name,
+                "message": f"Did not spawn '{name}': {refused.reason}",
+            }
+        return _Placing(alongside=alongside, moved_from=settled.moved_from)
+
+    async def _put_back(self, placing: _Placing) -> None:
+        """Start the agent this spawn stopped where it was, the spawn not having happened."""
+        main = find_main_actor(self._registry)
+        if main is not None and placing.moved_from is not None:
+            await main._put_back_spawn(placing.moved_from)
+
+    async def _start_recipe(
+        self,
+        resolved: str,
+        recipe: dict[str, Any],
+        placing: _Placing,
+        background_install: bool,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Start the recipe ``resolved``, settled against where its name runs.
+
+        ``options`` are a library agent's keyword arguments, from the JSON after
+        a typed spawn; kept in the spawn registry, so a restart builds the
+        agent as it was asked for.
+        """
+        beta_warning = (recipe.get("warning") or "") if recipe.get("experimental") else ""
         if beta_warning:
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/alert",
+                agent_topic(self.actor_id, "alert"),
                 {
                     "severity": "warning",
                     "message": f"{resolved} is Experimental/Beta. {beta_warning}",
@@ -896,7 +1112,7 @@ class CatalogAgent(Actor):
 
         logger.info("[%s] Spawning '%s'...", self.name, resolved)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": f"Spawning '{resolved}'...", "timestamp": time.time()},
         )
 
@@ -909,13 +1125,16 @@ class CatalogAgent(Actor):
                 factory = recipe.get("factory")
                 if not factory:
                     return {"ok": False, "message": f"Native recipe '{resolved}' has no factory"}
+                actor_id = spawn_actor_id(self._registry, resolved, alongside=placing.alongside)
                 native_kwargs: dict[str, Any] = {
                     "name": resolved,
                     "persistence_dir": persistence_dir,
                 }
                 if llm_provider:
                     native_kwargs["llm_provider"] = llm_provider
-                actor = await self.spawn(factory, **native_kwargs)
+                if options:
+                    native_kwargs["options"] = dict(options)
+                actor = await self.spawn(factory, actor_id=actor_id, **native_kwargs)
                 if actor:
                     if main:
                         # Persist a JSON-safe descriptor so the agent is restored
@@ -925,109 +1144,194 @@ class CatalogAgent(Actor):
                         # bypasses the safety validator like other catalog agents.
                         save_config = {k: v for k, v in recipe.items() if k != "factory"}
                         save_config["trusted"] = True
-                        main._save_to_spawn_registry(save_config)
+                        if options:
+                            save_config["options"] = dict(options)
+                        main._save_to_spawn_registry({**save_config, **placing.saved})
                     msg = _chat_message_with_beta_warning(
                         f"'{resolved}' spawned and running", beta_warning
                     )
                     logger.info("[%s] %s", self.name, msg)
                     await self._mqtt_publish(
-                        f"agents/{self.actor_id}/logs",
+                        agent_topic(self.actor_id, "logs"),
                         {"type": "log", "message": msg, "timestamp": time.time()},
                     )
                     return {"ok": True, "message": msg, "agent": resolved}
                 return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
 
-            from .dynamic import DynamicAgent
-
-            install = recipe.get("install", [])
-            if install:
-                # Fast-path: check which packages are already importable.
-                # Avoids the installer wait when deps were installed in a
-                # previous session — same logic as main._spawn_dynamic_agent.
-                needed = [pkg for pkg in install if not _dependency_is_satisfied(pkg)]
-
-                if needed:
-                    installer = self._registry.find_by_name("installer") if self._registry else None
-                    if installer:
-                        logger.info(
-                            "[%s] Installing missing deps for '%s': %s", self.name, name, needed
+            if recipe.get("require_install_success") is not True:
+                needed = await asyncio.to_thread(missing_requirements, recipe.get("install", []))
+                if needed and self._registry and self._registry.find_by_name("installer"):
+                    try:
+                        await self.ask(
+                            "installer",
+                            {"action": "install", "packages": needed},
+                            timeout=INSTALL_WAIT_S,
                         )
-                        # Asked by the catalogue itself: a reply it waits for is
-                        # settled as it arrives, so its own busy mailbox loop is
-                        # not in the way.
-                        try:
-                            await self.ask(
-                                "installer",
-                                {"action": "install", "packages": needed},
-                                timeout=INSTALL_WAIT_S,
-                            )
-                        except asyncio.TimeoutError:
-                            logger.warning(
-                                "[%s] Install timeout for '%s' — proceeding anyway", self.name, name
-                            )
-                        except RuntimeError as exc:
-                            # Not taking messages, or a failed install: the agent
-                            # is spawned either way and reports an import it lacks.
-                            logger.warning(
-                                "[%s] installer: %s — proceeding with '%s' anyway",
-                                self.name,
-                                exc,
-                                name,
-                            )
-                    else:
+                    except ReplyError as exc:
+                        if exc.reply.get("refused"):
+                            return {
+                                "ok": False,
+                                "message": str(exc.reply["error"]),
+                                "agent": resolved,
+                            }
                         logger.warning(
-                            "[%s] installer not found — skipping dep install for '%s'",
+                            "[%s] installer: %s — proceeding with '%s' anyway",
                             self.name,
-                            name,
+                            exc,
+                            resolved,
                         )
-                else:
-                    logger.info(
-                        "[%s] All deps for '%s' already installed — skipping installer",
-                        self.name,
-                        resolved,
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "[%s] Install timeout for '%s' — proceeding anyway", self.name, resolved
+                        )
+                    except RuntimeError as exc:
+                        logger.warning(
+                            "[%s] installer: %s — proceeding with '%s' anyway",
+                            self.name,
+                            exc,
+                            resolved,
+                        )
+                return await self._spawn_dynamic(resolved, recipe, beta_warning, placing)
+
+            if resolved in self._installing:
+                return {
+                    "ok": True,
+                    "installing": True,
+                    "agent": resolved,
+                    "message": f"{resolved} is still installing; I'll post here when it's ready.",
+                }
+            needed = await asyncio.to_thread(missing_requirements, recipe.get("install", []))
+            if needed:
+                heads_up = self._install_heads_up(resolved, needed, recipe.get("install_hint", ""))
+                if background_install:
+                    # The reply is the notice here; sending it to chat as well
+                    # would show it twice.
+                    self._installing.add(resolved)
+                    self.run_detached(
+                        self._install_then_spawn(resolved, recipe, needed, beta_warning, placing),
+                        name=f"install-{resolved}",
                     )
+                    return {"ok": True, "installing": True, "agent": resolved, "message": heads_up}
+                await self.notify_user(heads_up)
+                self._installing.add(resolved)
+                try:
+                    outcome = await install_for_agent(self, main, needed, resolved)
+                finally:
+                    self._installing.discard(resolved)
+                if not outcome.ok:
+                    return self._install_failed(resolved, recipe, outcome, placing)
+            else:
+                logger.info("[%s] All deps for '%s' already installed", self.name, resolved)
 
-            actor = await self.spawn(
-                DynamicAgent,
-                name=resolved,
-                code=recipe["code"],
-                poll_interval=float(recipe.get("poll_interval", 3600)),
-                description=recipe.get("description", ""),
-                input_schema=recipe.get("input_schema", {}),
-                output_schema=recipe.get("output_schema", {}),
-                llm_provider=llm_provider,
-                persistence_dir=persistence_dir,
-                trusted=True,  # catalog agents are pre-built — skip safety validator
-            )
-
-            if actor:
-                if main:
-                    # Mark as trusted so it bypasses safety validator on restore
-                    save_config = dict(recipe)
-                    save_config["trusted"] = True
-                    main._save_to_spawn_registry(save_config)
-
-                msg = _chat_message_with_beta_warning(
-                    f"'{resolved}' spawned and running", beta_warning
-                )
-                logger.info("[%s] %s", self.name, msg)
-                await self._mqtt_publish(
-                    f"agents/{self.actor_id}/logs",
-                    {"type": "log", "message": msg, "timestamp": time.time()},
-                )
-                return {"ok": True, "message": msg, "agent": resolved}
+            return await self._spawn_dynamic(resolved, recipe, beta_warning, placing)
 
         except Exception as e:
             msg = f"Failed to spawn '{resolved}': {e}"
             logger.exception("[%s] %s", self.name, msg)
             return {"ok": False, "message": msg}
-        else:
-            return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
+
+    @staticmethod
+    def _install_heads_up(name: str, needed: list[str], hint: str = "") -> str:
+        """The chat notice sent before a recipe's packages are installed."""
+        notice = (
+            f"Installing {len(needed)} package(s) for {name} first: {', '.join(needed)}. "
+            "A first install can take a few minutes; I'll post here when "
+            f"{name} is ready."
+        )
+        return f"{notice} {hint}" if hint else notice
+
+    def _install_failed(
+        self, name: str, recipe: dict[str, Any], outcome: InstallOutcome, placing: _Placing = _HERE
+    ) -> dict[str, Any]:
+        """The result for a recipe whose packages did not leave it ready to run.
+
+        When only a restart stands in the way, the recipe is recorded now, so the
+        restart the message asks for brings it up without being asked again.
+        """
+        message = outcome.problem(name)
+        if outcome.restart_required and not (outcome.failed or outcome.refused or outcome.error):
+            main = find_main_actor(self._registry)
+            if main:
+                main._save_to_spawn_registry({**recipe, "trusted": True, **placing.saved})
+            # The way to not meet this again, said where it was met.
+            if recipe.get("install_hint"):
+                message = f"{message} {recipe['install_hint']}"
+        return {
+            "ok": False,
+            "agent": name,
+            "restart_required": bool(outcome.restart_required),
+            "message": message,
+        }
+
+    async def _install_then_spawn(
+        self,
+        name: str,
+        recipe: dict[str, Any],
+        needed: list[str],
+        beta_warning: str,
+        placing: _Placing = _HERE,
+    ) -> None:
+        """Install a recipe's packages, spawn it, and say how that went in chat."""
+        try:
+            main = find_main_actor(self._registry)
+            outcome = await install_for_agent(self, main, needed, name)
+            if not outcome.ok:
+                result = self._install_failed(name, recipe, outcome, placing)
+            elif self._registry and self._registry.find_by_name(name):
+                result = {"ok": True, "message": f"'{name}' is already running"}
+            else:
+                result = await self._spawn_dynamic(name, recipe, beta_warning, placing)
+        except Exception as e:
+            logger.exception("[%s] Background install+spawn failed for '%s'", self.name, name)
+            result = {"ok": False, "message": f"Failed to spawn '{name}': {e}"}
+        finally:
+            self._installing.discard(name)
+        if not result.get("ok"):
+            await self._put_back(placing)
+        await self.notify_user(result["message"])
+
+    async def _spawn_dynamic(
+        self, name: str, recipe: dict[str, Any], beta_warning: str, placing: _Placing = _HERE
+    ) -> dict[str, Any]:
+        """Start a dynamic recipe whose packages are in place, and record it."""
+        if recipe.get("require_install_success") is True and (replaced := pending_restart()):
+            return self._install_failed(
+                name, recipe, InstallOutcome(restart_required=replaced), placing
+            )
+        main = find_main_actor(self._registry)
+        actor = await self.spawn(
+            DynamicAgent,
+            actor_id=spawn_actor_id(self._registry, name, alongside=placing.alongside),
+            name=name,
+            code=recipe["code"],
+            poll_interval=float(recipe.get("poll_interval", 3600)),
+            description=recipe.get("description", ""),
+            input_schema=recipe.get("input_schema", {}),
+            output_schema=recipe.get("output_schema", {}),
+            llm_provider=main.llm if main else None,
+            persistence_dir=str(main._persistence_dir.parent) if main else resolve_state_dir(),
+            trusted=True,  # catalog agents are pre-built — skip safety validator
+            task_timeout_s=recipe.get("task_timeout_s"),
+        )
+        if not actor:
+            return {"ok": False, "message": f"Spawn returned no actor for '{name}'"}
+        if main:
+            # Mark as trusted so it bypasses safety validator on restore
+            main._save_to_spawn_registry({**recipe, "trusted": True, **placing.saved})
+        msg = _chat_message_with_beta_warning(f"'{name}' spawned and running", beta_warning)
+        logger.info("[%s] %s", self.name, msg)
+        await self._mqtt_publish(
+            agent_topic(self.actor_id, "logs"),
+            {"type": "log", "message": msg, "timestamp": time.time()},
+        )
+        return {"ok": True, "message": msg, "agent": name}
 
     # Public API ─────────────────────────────────────────────────────────────
 
     def list_recipes(self) -> list[str]:
+        """The names of every recipe in the catalogue."""
         return list(self._catalog.keys())
 
-    def get_recipe(self, name: str) -> dict | None:
+    def get_recipe(self, name: str) -> dict[str, Any] | None:
+        """The recipe called ``name``, or None when there is none."""
         return self._catalog.get(name)

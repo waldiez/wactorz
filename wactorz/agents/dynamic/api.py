@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The surface generated agent code is handed as `agent`.
 
 Two other places are written against this shape: the planner repairs generated
@@ -19,12 +20,13 @@ from ..lookup import find_main_actor
 if TYPE_CHECKING:
     from .agent import DynamicAgent
 
+from ...core.topics import agent_topic
 from .awaitable import AWAITABLE_NONE
 from .messaging import MessagingMixin
 from .queries import QueriesMixin
 from .streams import StreamsMixin
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Where `converse()` keeps its conversation, in `agent.state` and in what the
 #: agent persists.
@@ -60,7 +62,7 @@ class LLMInterface:
             if hasattr(self._actor, "total_input_tokens"):
                 self._actor._accrue_usage(usage)
                 await self._actor._mqtt_publish(
-                    f"agents/{self._actor.actor_id}/metrics",
+                    agent_topic(self._actor.actor_id, "metrics"),
                     self._actor._build_metrics(),
                 )
         except Exception as e:
@@ -78,7 +80,7 @@ class LLMInterface:
         if hasattr(self._actor, "total_input_tokens"):
             self._actor._accrue_usage(usage)
             await self._actor._mqtt_publish(
-                f"agents/{self._actor.actor_id}/metrics",
+                agent_topic(self._actor.actor_id, "metrics"),
                 self._actor._build_metrics(),
             )
         return response
@@ -145,14 +147,16 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
 
     def __init__(self, actor: DynamicAgent) -> None:
         self._actor = actor
-        self.name = actor.name
-        self.actor_id = actor.actor_id
+        self.name: str = actor.name
+        self.actor_id: str = actor.actor_id
         # Shared mutable namespace — generated code can store anything here
-        self.state: dict = {}
+        self.state: dict[str, Any] = {}
         # LLM interface — available if llm_provider was passed at spawn time
-        self.llm = LLMInterface(actor, self.state) if actor._llm_provider else None
+        self.llm: LLMInterface | None = (
+            LLMInterface(actor, self.state) if actor._llm_provider else None
+        )
         # Auto-discovered topics this agent publishes to
-        self._published_topics: set = set()
+        self._published_topics: set[Any] = set()
         #: One window per topic, so repeated `agent.window(...)` calls -- which
         #: generated code makes from a process loop -- return the one that has
         #: been filling rather than a fresh empty one on a new connection.
@@ -300,6 +304,7 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
     # ── Persistence ────────────────────────────────────────────────────────
 
     def persist(self, key: str, value: Any) -> Any:
+        """Remember ``value`` under ``key``, across restarts; the result may be awaited or not."""
         self._actor.persist(key, value)
         return AWAITABLE_NONE  # safe to await
 
@@ -538,7 +543,9 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
     # ── Metrics ────────────────────────────────────────────────────────────
 
     def increment_processed(self) -> None:
+        """Count one more message processed, in the agent's metrics."""
         self._actor.metrics.messages_processed += 1
 
     def increment_errors(self) -> None:
+        """Count one more error, in the agent's metrics."""
         self._actor.metrics.errors += 1

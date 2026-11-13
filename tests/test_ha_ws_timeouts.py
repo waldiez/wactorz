@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Home Assistant WebSocket calls must not wait forever — except where they should.
 
 `connect()` sets `ping_interval`/`ping_timeout`, so a *dead* socket is closed by
@@ -11,10 +12,9 @@ event, by contrast, is exactly what a subscription is for — putting a deadline
 there would break it, so `receive_event` stays unbounded on purpose.
 """
 
-# pylint: disable=missing-function-docstring,too-few-public-methods
-
 import asyncio
 import json
+from typing import Any
 
 import pytest
 
@@ -25,9 +25,9 @@ from wactorz.core.integrations.home_assistant.ha_web_socket_client import HAWebS
 class _FakeWS:
     """Replays queued frames, then goes silent without closing."""
 
-    def __init__(self, frames: list[dict] | None = None):
+    def __init__(self, frames: list[dict[str, Any]] | None = None) -> None:
         self._frames = [json.dumps(f) for f in (frames or [])]
-        self.sent: list[dict] = []
+        self.sent: list[dict[str, Any]] = []
 
     async def send(self, raw: str) -> None:
         self.sent.append(json.loads(raw))
@@ -49,25 +49,25 @@ def _client(ws: _FakeWS) -> HAWebSocketClient:
 
 
 @pytest.fixture(autouse=True)
-def _fast_timeout(monkeypatch: pytest.MonkeyPatch):
+def _fast_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod, "_RESPONSE_TIMEOUT", 0.1)
 
 
 class TestBoundedCalls:
     @pytest.mark.asyncio
-    async def test_call_gives_up_on_a_silent_peer(self):
+    async def test_call_gives_up_on_a_silent_peer(self) -> None:
         client = _client(_FakeWS())
         with pytest.raises((TimeoutError, asyncio.TimeoutError)):
             await client.call("get_states")
 
     @pytest.mark.asyncio
-    async def test_call_still_returns_a_normal_reply(self):
+    async def test_call_still_returns_a_normal_reply(self) -> None:
         ws = _FakeWS([{"id": 1, "success": True, "result": [{"entity_id": "light.x"}]}])
         result = await _client(ws).call("get_states")
         assert result == [{"entity_id": "light.x"}]
 
     @pytest.mark.asyncio
-    async def test_call_is_bounded_overall_not_merely_per_frame(self):
+    async def test_call_is_bounded_overall_not_merely_per_frame(self) -> None:
         """Unrelated chatter must not keep a call alive indefinitely."""
         noise = [{"id": 999, "type": "event"} for _ in range(500)]
         client = _client(_FakeWS(noise))
@@ -75,19 +75,19 @@ class TestBoundedCalls:
             await client.call("get_states")
 
     @pytest.mark.asyncio
-    async def test_authenticate_gives_up_on_a_silent_peer(self):
+    async def test_authenticate_gives_up_on_a_silent_peer(self) -> None:
         client = _client(_FakeWS())
         with pytest.raises((TimeoutError, asyncio.TimeoutError)):
             await client._authenticate()
 
     @pytest.mark.asyncio
-    async def test_authenticate_succeeds_normally(self):
+    async def test_authenticate_succeeds_normally(self) -> None:
         ws = _FakeWS([{"type": "auth_required"}, {"type": "auth_ok"}])
         await _client(ws)._authenticate()
         assert ws.sent[0]["type"] == "auth"
 
     @pytest.mark.asyncio
-    async def test_subscribe_gives_up_on_a_silent_peer(self):
+    async def test_subscribe_gives_up_on_a_silent_peer(self) -> None:
         client = _client(_FakeWS())
         with pytest.raises((TimeoutError, asyncio.TimeoutError)):
             await client.subscribe_events("state_changed")
@@ -109,18 +109,18 @@ class TestUnboundedSubscription:
         return pending
 
     @pytest.mark.asyncio
-    async def test_receive_event_is_not_given_a_deadline(self):
+    async def test_receive_event_is_not_given_a_deadline(self) -> None:
         """Hours between events is normal; a timeout here would be the bug."""
         client = _client(_FakeWS())
         assert await self._still_waiting_after_the_command_deadline(client.receive_event(1))
 
     @pytest.mark.asyncio
-    async def test_receive_event_still_delivers_a_matching_event(self):
+    async def test_receive_event_still_delivers_a_matching_event(self) -> None:
         ws = _FakeWS([{"type": "event", "id": 7, "event": {"a": 1}}])
         got = await _client(ws).receive_event(7)
         assert got["event"] == {"a": 1}
 
     @pytest.mark.asyncio
-    async def test_receive_json_is_unbounded_by_default(self):
+    async def test_receive_json_is_unbounded_by_default(self) -> None:
         client = _client(_FakeWS())
         assert await self._still_waiting_after_the_command_deadline(client.receive_json())

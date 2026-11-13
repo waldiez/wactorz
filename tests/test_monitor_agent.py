@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The monitor watches, classifies and tells the user. It never restarts anything.
 
 The Supervisor is the single restart authority, so everything the monitor does

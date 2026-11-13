@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
  * What the service worker intercepts, and what it keeps.
@@ -32,11 +31,18 @@ interface FakeCache {
 
 interface Scope {
     fetchEvent(url: string, method?: string): { respondWithCalled: boolean; responded: unknown };
+    activate(): Promise<void>;
     cache: FakeCache;
+    deleted: string[];
 }
 
 /** Run sw.js against a fake scope and return a handle for driving it. */
-function loadServiceWorker(networkResponse: { ok: boolean } = { ok: true }): Scope {
+function loadServiceWorker(
+    networkResponse: { ok: boolean; redirected?: boolean } = { ok: true },
+    scope = `${ORIGIN}/`,
+    heldCaches: string[] = [],
+): Scope {
+    const deleted: string[] = [];
     const entries = new Map<string, unknown>();
     const cache: FakeCache = {
         entries,
@@ -49,8 +55,11 @@ function loadServiceWorker(networkResponse: { ok: boolean } = { ok: true }): Sco
     };
     const caches = {
         open: async () => cache,
-        keys: async () => [],
-        delete: async () => true,
+        keys: async () => heldCaches,
+        delete: async (name: string) => {
+            deleted.push(name);
+            return true;
+        },
         match: async () => undefined,
     };
 
@@ -60,6 +69,7 @@ function loadServiceWorker(networkResponse: { ok: boolean } = { ok: true }): Sco
             handlers[name] = fn;
         },
         location: { origin: ORIGIN },
+        registration: { scope },
         clients: { claim: async () => {} },
         skipWaiting: () => {},
     };
@@ -79,6 +89,12 @@ function loadServiceWorker(networkResponse: { ok: boolean } = { ok: true }): Sco
 
     return {
         cache,
+        deleted,
+        async activate() {
+            let waited: Promise<unknown> = Promise.resolve();
+            handlers["activate"]!({ waitUntil: (p: Promise<unknown>) => (waited = p) });
+            await waited;
+        },
         fetchEvent(url: string, method = "GET") {
             let respondWithCalled = false;
             let responded: unknown = null;
@@ -106,24 +122,63 @@ describe("what the worker refuses to intercept", () => {
         expect(sw.fetchEvent("https://evil.test/assets/app.js").respondWithCalled).toBe(false);
     });
 
-    it("leaves the API alone", () => {
-        expect(sw.fetchEvent(`${ORIGIN}/api/actors`).respondWithCalled).toBe(false);
-    });
-
-    it("leaves the websocket upgrade alone", () => {
-        expect(sw.fetchEvent(`${ORIGIN}/ws`).respondWithCalled).toBe(false);
-    });
-
-    it("does not treat a sibling path as the websocket", () => {
-        expect(sw.fetchEvent(`${ORIGIN}/wsfoo`).respondWithCalled).toBe(true);
+    it.each([
+        "/api/actors",
+        "/api/upload/abc",
+        "/ws",
+        // The API answers under bare names too, with the same private data.
+        "/chats",
+        "/config",
+        "/actors",
+        "/feed",
+        "/upload/abc",
+        "/login",
+        "/docs/guide/index.html",
+        "/docs/assets/app.js",
+        "/wsfoo",
+    ])("leaves %s to the network, so nothing of it is kept", path => {
+        expect(sw.fetchEvent(`${ORIGIN}${path}`).respondWithCalled).toBe(false);
     });
 
     it("leaves non-GET requests alone", () => {
-        expect(sw.fetchEvent(`${ORIGIN}/thing`, "POST").respondWithCalled).toBe(false);
+        expect(sw.fetchEvent(`${ORIGIN}/assets/app.js`, "POST").respondWithCalled).toBe(false);
+    });
+});
+
+describe("what the worker keeps", () => {
+    it.each(["/", "/index.html", "/assets/app.js", "/assets/app.css", "/favicon.svg", "/site.webmanifest"])(
+        "keeps the shell's %s",
+        async path => {
+            expect(sw.fetchEvent(`${ORIGIN}${path}`).respondWithCalled).toBe(true);
+            await new Promise(r => setTimeout(r, 0));
+
+            expect(sw.cache.entries.has(`${ORIGIN}${path}`)).toBe(true);
+        },
+    );
+
+    it("reads paths under its scope, for a dashboard served under a prefix", () => {
+        const prefixed = loadServiceWorker({ ok: true }, `${ORIGIN}/wactorz/`);
+
+        expect(prefixed.fetchEvent(`${ORIGIN}/wactorz/assets/app.js`).respondWithCalled).toBe(true);
+        expect(prefixed.fetchEvent(`${ORIGIN}/wactorz/chats`).respondWithCalled).toBe(false);
+        expect(prefixed.fetchEvent(`${ORIGIN}/assets/app.js`).respondWithCalled).toBe(false);
     });
 
-    it("still handles its own origin", () => {
-        expect(sw.fetchEvent(`${ORIGIN}/assets/app.js`).respondWithCalled).toBe(true);
+    it("does not keep a page it was redirected for, such as the sign-in form", async () => {
+        const redirected = loadServiceWorker({ ok: true, redirected: true });
+
+        redirected.fetchEvent(`${ORIGIN}/`);
+        await new Promise(r => setTimeout(r, 0));
+
+        expect(redirected.cache.entries.size).toBe(0);
+    });
+
+    it("deletes what an earlier worker kept when it takes over", async () => {
+        const updated = loadServiceWorker({ ok: true }, `${ORIGIN}/`, ["wactorz-v5", "wactorz-v6"]);
+
+        await updated.activate();
+
+        expect(updated.deleted).toEqual(["wactorz-v5"]);
     });
 });
 

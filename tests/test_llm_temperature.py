@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for LLM_TEMPERATURE plumbing (config → providers)."""
 
 import types
@@ -15,13 +16,15 @@ from tests.optional_deps import ensure_importable
 # the rest of the process.
 ensure_importable("openai", "anthropic")
 
+from collections.abc import AsyncIterator, Iterator
+
 from wactorz.agents.llm.base import _ollama_options, _resolve_temperature, _temp_params
 from wactorz.agents.llm.providers import anthropic as anthropic_provider
 from wactorz.agents.llm_agent import AnthropicProvider, OllamaProvider
 from wactorz.config import CONFIG, _env_opt_float
 
 
-def _with_temp(value):
+def _with_temp(value) -> Any:
     """CONFIG patched to a given llm_temperature."""
     return patch("wactorz.config.CONFIG", replace(CONFIG, llm_temperature=value))
 
@@ -29,14 +32,14 @@ def _with_temp(value):
 # ── config parsing ───────────────────────────────────────────────────────────
 
 
-def test_env_opt_float_unset_and_empty(monkeypatch):
+def test_env_opt_float_unset_and_empty(monkeypatch) -> None:
     monkeypatch.delenv("LLM_TEMPERATURE", raising=False)
     assert _env_opt_float("LLM_TEMPERATURE") is None
     monkeypatch.setenv("LLM_TEMPERATURE", "  ")
     assert _env_opt_float("LLM_TEMPERATURE") is None
 
 
-def test_env_opt_float_parses_values(monkeypatch):
+def test_env_opt_float_parses_values(monkeypatch) -> None:
     monkeypatch.setenv("LLM_TEMPERATURE", "0")
     assert _env_opt_float("LLM_TEMPERATURE") == 0.0
     monkeypatch.setenv("LLM_TEMPERATURE", "0.7")
@@ -46,22 +49,22 @@ def test_env_opt_float_parses_values(monkeypatch):
 # ── resolution precedence ────────────────────────────────────────────────────
 
 
-def test_resolve_prefers_call_site_over_config():
+def test_resolve_prefers_call_site_over_config() -> None:
     with _with_temp(0.7):
         assert _resolve_temperature({"temperature": 0.0}) == 0.0
 
 
-def test_resolve_falls_back_to_config():
+def test_resolve_falls_back_to_config() -> None:
     with _with_temp(0.3):
         assert _resolve_temperature({}) == 0.3
 
 
-def test_resolve_none_when_unconfigured():
+def test_resolve_none_when_unconfigured() -> None:
     with _with_temp(None):
         assert _resolve_temperature({}) is None
 
 
-def test_zero_temperature_is_honored_not_treated_as_unset():
+def test_zero_temperature_is_honored_not_treated_as_unset() -> None:
     with _with_temp(0.0):
         assert _resolve_temperature({}) == 0.0
         assert _temp_params({}) == {"temperature": 0.0}
@@ -70,17 +73,17 @@ def test_zero_temperature_is_honored_not_treated_as_unset():
 # ── request parameter shaping ────────────────────────────────────────────────
 
 
-def test_temp_params_omitted_when_unconfigured():
+def test_temp_params_omitted_when_unconfigured() -> None:
     with _with_temp(None):
         assert _temp_params({}) == {}
 
 
-def test_ollama_options_nests_under_options():
+def test_ollama_options_nests_under_options() -> None:
     with _with_temp(0.2):
         assert _ollama_options({}) == {"options": {"temperature": 0.2}}
 
 
-def test_ollama_options_empty_when_unconfigured():
+def test_ollama_options_empty_when_unconfigured() -> None:
     with _with_temp(None):
         assert _ollama_options({}) == {}
 
@@ -89,48 +92,48 @@ def test_ollama_options_empty_when_unconfigured():
 
 
 class _FakeResponse:
-    def __init__(self, payload):
+    def __init__(self, payload) -> None:
         self.payload = payload
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "_FakeResponse":
         return self
 
-    async def __aexit__(self, *exc):
+    async def __aexit__(self, *exc) -> None:
         return None
 
-    def raise_for_status(self):
+    def raise_for_status(self) -> None:
         """No-op: this fake only ever stands in for a 200."""
 
-    async def json(self):
+    async def json(self) -> dict[str, Any]:
         return {"message": {"content": "ok"}, "prompt_eval_count": 1, "eval_count": 1}
 
 
 class _FakeSession:
-    def __init__(self, sink):
+    def __init__(self, sink) -> None:
         self.sink = sink
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "_FakeSession":
         return self
 
-    async def __aexit__(self, *exc):
+    async def __aexit__(self, *exc) -> None:
         return None
 
-    def post(self, url, json=None, timeout=None):
+    def post(self, url, json=None, timeout=None) -> "_FakeResponse":
         self.sink.append(json)
         return _FakeResponse(json)
 
 
 @pytest.mark.asyncio
-async def test_ollama_complete_sends_temperature():
-    sent: list[dict] = []
+async def test_ollama_complete_sends_temperature() -> None:
+    sent: list[dict[str, Any]] = []
     with _with_temp(0.0), patch("aiohttp.ClientSession", lambda *a, **k: _FakeSession(sent)):
         await OllamaProvider(model="qwen3:4b").complete(messages=[{"role": "user", "content": "x"}])
     assert sent[0]["options"] == {"temperature": 0.0}
 
 
 @pytest.mark.asyncio
-async def test_ollama_complete_omits_temperature_when_unset():
-    sent: list[dict] = []
+async def test_ollama_complete_omits_temperature_when_unset() -> None:
+    sent: list[dict[str, Any]] = []
     with _with_temp(None), patch("aiohttp.ClientSession", lambda *a, **k: _FakeSession(sent)):
         await OllamaProvider(model="qwen3:4b").complete(messages=[{"role": "user", "content": "x"}])
     assert "options" not in sent[0]
@@ -185,7 +188,7 @@ class _FakeStream:
         return None
 
     @property
-    async def text_stream(self):
+    async def text_stream(self) -> "AsyncIterator[str]":
         yield "ok"
 
     async def get_final_message(self) -> types.SimpleNamespace:
@@ -201,7 +204,7 @@ def _provider(model: str, messages: _FakeAnthropicMessages) -> AnthropicProvider
 
 
 @pytest.fixture(autouse=True)
-def _forget_learned_models():
+def _forget_learned_models() -> "Iterator[None]":
     """What one test taught the provider must not leak into the next."""
     anthropic_provider._learned_no_sampling.clear()
     yield
@@ -209,7 +212,7 @@ def _forget_learned_models():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_sends_temperature_to_a_model_that_takes_it():
+async def test_anthropic_sends_temperature_to_a_model_that_takes_it() -> None:
     messages = _FakeAnthropicMessages()
     with _with_temp(0.0):
         await _provider("claude-sonnet-4-6", messages).complete([{"role": "user", "content": "x"}])
@@ -221,7 +224,7 @@ async def test_anthropic_sends_temperature_to_a_model_that_takes_it():
     ["claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "anthropic.claude-opus-5"],
 )
 @pytest.mark.asyncio
-async def test_anthropic_omits_temperature_for_models_that_dropped_it(model):
+async def test_anthropic_omits_temperature_for_models_that_dropped_it(model) -> None:
     """These models 400 on `temperature`, so it never goes out in the first place."""
     messages = _FakeAnthropicMessages()
     with _with_temp(0.0):
@@ -230,7 +233,7 @@ async def test_anthropic_omits_temperature_for_models_that_dropped_it(model):
 
 
 @pytest.mark.asyncio
-async def test_anthropic_retries_without_temperature_when_a_new_model_rejects_it():
+async def test_anthropic_retries_without_temperature_when_a_new_model_rejects_it() -> None:
     """A model too new to be on the list costs one 400, then behaves."""
     messages = _FakeAnthropicMessages(fail_first_with=_BadRequest(_TEMPERATURE_DEPRECATED))
     provider = _provider("claude-opus-9", messages)
@@ -246,7 +249,7 @@ async def test_anthropic_retries_without_temperature_when_a_new_model_rejects_it
 
 
 @pytest.mark.asyncio
-async def test_anthropic_stream_retries_without_temperature():
+async def test_anthropic_stream_retries_without_temperature() -> None:
     messages = _FakeAnthropicMessages(fail_first_with=_BadRequest(_TEMPERATURE_DEPRECATED))
     with _with_temp(0.0):
         chunks = [
@@ -260,7 +263,7 @@ async def test_anthropic_stream_retries_without_temperature():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_does_not_swallow_an_out_of_range_temperature():
+async def test_anthropic_does_not_swallow_an_out_of_range_temperature() -> None:
     """A value the model *would* take in another range is a config error the
     caller has to see — not something to retry into silent success."""
     error = _BadRequest("Error code: 400 - temperature: Input should be less than or equal to 1")

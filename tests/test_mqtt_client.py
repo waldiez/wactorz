@@ -1,7 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests for the central aiomqtt client factory (wactorz.core.mqtt)."""
 
 import types
 import unittest
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -12,7 +14,7 @@ pytestmark = pytest.mark.real_mqtt_client
 
 
 class MqttClientFactoryTest(unittest.TestCase):
-    def _call(self, cfg_user, cfg_pass, **kwargs):
+    def _call(self, cfg_user, cfg_pass, **kwargs) -> dict[Any, Any]:
         import wactorz.core.mqtt as m
 
         captured = {}
@@ -35,24 +37,24 @@ class MqttClientFactoryTest(unittest.TestCase):
             m.mqtt_client("broker", 1883, **kwargs)
         return captured
 
-    def test_anonymous_when_blank(self):
+    def test_anonymous_when_blank(self) -> None:
         # Empty creds (the default) must connect anonymously — no kwargs injected.
         c = self._call("", "")
         self.assertEqual(c["args"], ("broker", 1883))
         self.assertNotIn("username", c["kwargs"])
         self.assertNotIn("password", c["kwargs"])
 
-    def test_credentials_injected_when_set(self):
+    def test_credentials_injected_when_set(self) -> None:
         c = self._call("alice", "s3cret")
         self.assertEqual(c["kwargs"]["username"], "alice")
         self.assertEqual(c["kwargs"]["password"], "s3cret")
 
-    def test_caller_override_wins(self):
+    def test_caller_override_wins(self) -> None:
         # An explicit per-call username must not be overwritten by CONFIG.
         c = self._call("alice", "s3cret", username="explicit")
         self.assertEqual(c["kwargs"]["username"], "explicit")
 
-    def test_extra_kwargs_passed_through(self):
+    def test_extra_kwargs_passed_through(self) -> None:
         c = self._call("", "", identifier="my-id")
         self.assertEqual(c["kwargs"]["identifier"], "my-id")
 

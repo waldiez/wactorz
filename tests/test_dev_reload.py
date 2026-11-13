@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The development auto-reloader: what it watches, and what it refuses to do.
 
 Everything worth pinning here is a *guard*, because the thing this module does
@@ -83,12 +84,18 @@ def quiet_timers_fixture(monkeypatch: pytest.MonkeyPatch) -> Generator[None, Non
 
 
 @pytest.fixture(name="logger")
-def logger_fixture() -> logging.Logger:
-    """A logger of this test's own, so records cannot reach the root handlers."""
+def logger_fixture() -> Generator[logging.Logger, None, None]:
+    """Provide a logger without leaking its mutable state into later tests."""
     log = logging.getLogger("test.dev_reload")
-    log.addHandler(logging.NullHandler())
-    log.propagate = False
-    return log
+    previous_handlers = list(log.handlers)
+    previous_propagate = log.propagate
+    log.handlers.clear()
+    log.propagate = True
+    try:
+        yield log
+    finally:
+        log.handlers[:] = previous_handlers
+        log.propagate = previous_propagate
 
 
 @pytest.fixture(name="handler")

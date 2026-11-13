@@ -1,14 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
 """AnthropicProvider — Claude, via the anthropic SDK."""
 
 import inspect
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 from ..base import LLMProvider, ToolCall, ToolCompletion, _temp_params
 from ..pricing import calc_cost
 from ..retry import attempt_timeout
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # Anthropic removed the sampling parameters on Claude Opus 4.7 and has kept them
 # out of every model released since: `temperature` is a 400, not a field the API
@@ -238,14 +240,16 @@ def _replayable_block(block: Any) -> dict[str, Any] | None:
 
 
 class AnthropicProvider(LLMProvider):
-    def __init__(self, model: str = "claude-sonnet-4-6", api_key: str | None = None):
-        import anthropic
+    """Anthropic's Messages API, through the ``anthropic`` package."""
+
+    def __init__(self, model: str = "claude-sonnet-4-6", api_key: str | None = None) -> None:
+        import anthropic  # optional dependency: the `anthropic` extra
 
         # No retries of the SDK's own: `LLMProvider` retries, with one policy
         # for every provider, and the two would multiply. The timeout is the
         # configured one for the same reason: left to the SDK's default, a
         # setting of "no limit" would still be cut off at the SDK's.
-        self.client = anthropic.AsyncAnthropic(
+        self.client: Any = anthropic.AsyncAnthropic(
             api_key=api_key, max_retries=0, timeout=attempt_timeout()
         )
         self.model = model
@@ -274,7 +278,9 @@ class AnthropicProvider(LLMProvider):
             self._temp_ok = cached
         return cached
 
-    def _request_params(self, messages: list[dict], system: str, kwargs: dict) -> dict[str, Any]:
+    def _request_params(
+        self, messages: list[dict[str, Any]], system: str, kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
         """The common request body, with each optional knob only where it is legal."""
         params: dict[str, Any] = {
             "model": self.model,
@@ -394,7 +400,7 @@ class AnthropicProvider(LLMProvider):
         )
         return True
 
-    async def _create(self, params: dict[str, Any]):
+    async def _create(self, params: dict[str, Any]) -> Any:
         """`messages.create`, retried once without whatever the model refused."""
         try:
             return await self.client.messages.create(**params)  # pyright: ignore[reportCallIssue,reportArgumentType]
@@ -403,7 +409,7 @@ class AnthropicProvider(LLMProvider):
                 raise
         return await self.client.messages.create(**params)  # pyright: ignore[reportCallIssue,reportArgumentType]
 
-    def _extract_text(self, response) -> str:
+    def _extract_text(self, response: Any) -> str:
         """Join every text block, skipping thinking / redacted_thinking and any
         other non-text block. Robust whether or not extended thinking is enabled;
         without this, content[0] is a ThinkingBlock and .text raises.
@@ -434,7 +440,9 @@ class AnthropicProvider(LLMProvider):
             )
         return text
 
-    async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+    async def _complete(
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         response = await self._create(self._request_params(messages, system, kwargs))
         text = self._extract_text(response)
         usage = {
@@ -448,7 +456,7 @@ class AnthropicProvider(LLMProvider):
 
     async def _complete_with_tools(
         self,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
@@ -508,7 +516,7 @@ class AnthropicProvider(LLMProvider):
         ]
 
     @staticmethod
-    def _anthropic_messages(messages: list[dict]) -> list[dict]:
+    def _anthropic_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         converted: list[dict[str, Any]] = []
         for message in messages:
             role = message.get("role")
@@ -540,7 +548,9 @@ class AnthropicProvider(LLMProvider):
             )
         return converted
 
-    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
+    async def _stream(
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> AsyncIterator[str | dict[str, Any]]:
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         params = self._request_params(messages, system, kwargs)
         started = False
@@ -559,7 +569,7 @@ class AnthropicProvider(LLMProvider):
         async for item in self._stream_once(params):
             yield item
 
-    async def _stream_once(self, params: dict[str, Any]):
+    async def _stream_once(self, params: dict[str, Any]) -> AsyncIterator[str | dict[str, Any]]:
         """One streaming attempt, from the request to the closing usage dict."""
         input_tokens = output_tokens = 0
         async with self.client.messages.stream(**params) as s:  # pyright: ignore[reportCallIssue,reportArgumentType]

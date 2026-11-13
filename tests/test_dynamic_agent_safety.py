@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The pre-exec safety scan over generated agent code, and the body extractor.
 
 DynamicAgent runs code an LLM wrote, so this scan is a mistake-catcher in front

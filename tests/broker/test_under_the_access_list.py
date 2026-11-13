@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Main and a node still work together with the access list in force.
 
 `test_access_list.py` asks the broker what each rule allows. This runs the real
@@ -21,13 +22,16 @@ import pytest
 
 from wactorz.agents.lookup import find_main_actor
 from wactorz.agents.main import history as main_history
+from wactorz.agents.main import node_access
 from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.nodes import VANISH_MISS_THRESHOLD
 from wactorz.core import broker_accounts, node_signing
 from wactorz.core.mqtt_publisher import MQTTPublisher
 from wactorz.core.persistence import WactorzDB
 from wactorz.core.registry import ActorSystem
+from wactorz.core.topics import NAMESPACE
 
-from .acl_fixture import PASSWORD, SERVER
+from .acl_fixture import PASSWORD, SERVER, node_topics
 from .conftest import until
 from .test_access_list import locked_fixture  # noqa: F401  # a fixture, used by name
 
@@ -45,6 +49,25 @@ async def setup(agent):
 
 async def handle_task(agent, payload):
     return {"result": "echo:" + str(payload.get("text", ""))}
+"""
+
+#: One topic outside what a node may publish to, then one the test's access list adds.
+OUTSIDE = """
+async def setup(agent):
+    await agent.publish("anomalies/imu", {"v": 1})
+    await agent.publish("plant/pump", {"v": 1})
+"""
+
+#: Counts the tasks it was sent, in the state a stop keeps.
+COUNTER = """
+async def setup(agent):
+    pass
+
+
+async def handle_task(agent, payload):
+    count = agent.recall("count", 0) + 1
+    agent.persist("count", count)
+    return {"result": count}
 """
 
 READER = """
@@ -100,6 +123,9 @@ def node_process_fixture(
         WACTORZ_NODE_KEY=node_signing.node_key(NODE),
         WACTORZ_NODE_SIGNING="enforce",
     )
+    # As `node_env_text` tells a node main's namespace: only when one is set.
+    if NAMESPACE:
+        env["WACTORZ_NAMESPACE"] = NAMESPACE
     process = subprocess.Popen(
         [
             sys.executable,
@@ -146,8 +172,11 @@ async def _node_heard(main: MainActor, node_process: subprocess.Popen[bytes]) ->
     await until(_node_is_running, "main hearing from the node process", NODE_WAIT_S)
 
 
-async def _spawned_on_the_node(main: MainActor, name: str, code: str) -> None:
-    await main._spawn_remote({"name": name, "type": "dynamic", "code": code}, NODE, save=False)
+async def _spawned_on_the_node(
+    main: MainActor, name: str, code: str, *, kept: bool = False
+) -> None:
+    """Spawn ``name`` on the node; ``kept`` has main keep it in its registry, as a chat spawn does."""
+    await main._spawn_remote({"name": name, "type": "dynamic", "code": code}, NODE, save=kept)
     await until(
         lambda: name in _agents_main_sees(main), f"main seeing {name!r} on the node", NODE_WAIT_S
     )
@@ -184,3 +213,76 @@ async def test_an_agent_on_the_node_reads_main_s_history(
 
     assert reply is not None
     assert reply.get("result") == [21.5]
+
+
+async def test_main_says_which_topic_of_a_nodes_agent_the_broker_refuses(
+    main: MainActor, node_process: subprocess.Popen[bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The broker's files are the fixture's, not written from this server's settings.
+    monkeypatch.setattr(node_access, "node_is_under_access_list", lambda node: node == NODE)
+    monkeypatch.setattr(node_access, "node_data_topics", node_topics)
+    await _node_heard(main, node_process)
+
+    await _spawned_on_the_node(main, "outside", OUTSIDE)
+
+    def _said() -> list[str]:
+        return [str(n.get("message", "")) for n in main._pending_notifications]
+
+    # The second topic is in the manifest by then too: it is the one sent after it.
+    await until(
+        lambda: "plant/pump" in main.manifests.manifests.get("outside", {}).get("publishes", []),
+        "the agent's manifest naming both topics",
+        NODE_WAIT_S,
+    )
+    about = [message for message in _said() if "'outside' on node 'node-a'" in message]
+    assert len(about) == 1
+    assert "publishes to `anomalies/imu`" in about[0]
+    assert "add `anomalies/imu` to WACTORZ_NODE_TOPICS" in about[0]
+
+
+async def _asked(main: MainActor, name: str) -> object:
+    reply = await asyncio.wait_for(main.delegation.delegate_task(name, "count", timeout=30), 60)
+    assert reply is not None
+    return reply.get("result")
+
+
+async def test_an_agent_on_the_node_is_stopped_stays_stopped_and_starts_with_its_state(
+    main: MainActor, node_process: subprocess.Popen[bytes]
+) -> None:
+    await _node_heard(main, node_process)
+    await _spawned_on_the_node(main, "counter", COUNTER, kept=True)
+    assert [await _asked(main, "counter"), await _asked(main, "counter")] == [1, 2]
+    entry = main._get_spawn_registry().at("counter", NODE)
+    assert entry is not None
+
+    stopped = await main.stop_agent_on_node("counter", NODE, entry["actor_id"])
+
+    assert stopped.sent
+    await until(
+        lambda: "counter" not in _agents_main_sees(main), "the node stopping the agent", NODE_WAIT_S
+    )
+    # Heartbeats without it, as many as main takes for a crash and one more: it
+    # is kept, stopped, and its node goes on not running it.
+    seen: set[float] = set()
+
+    def _heartbeats_since() -> bool:
+        seen.add(float(main._known_nodes[NODE].get("last_seen", 0)))
+        return len(seen) > VANISH_MISS_THRESHOLD + 1
+
+    await until(_heartbeats_since, "the node's next heartbeats", NODE_WAIT_S * 2)
+    registry = main._get_spawn_registry()
+    assert registry.at("counter", NODE) is not None
+    assert registry.is_stopped(entry["actor_id"])
+    assert "counter" not in _agents_main_sees(main)
+
+    started = await main.start_agent_on_node("counter", NODE, entry["actor_id"])
+
+    assert started.sent
+    await until(
+        lambda: "counter" in _agents_main_sees(main),
+        "the node running the agent again",
+        NODE_WAIT_S,
+    )
+    assert not main._get_spawn_registry().is_stopped(entry["actor_id"])
+    # Where it left off: the state it kept on the node, under the id it had.
+    assert await _asked(main, "counter") == 3

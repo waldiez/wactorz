@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which packages may be installed without anyone being asked.
 
 A package an agent asks for is chosen by a model from a description, and a
@@ -86,6 +87,7 @@ IMPORT_TO_PACKAGE = {
 _CATALOGUE_AND_EXAMPLES = (
     "aiomqtt",
     "edge-tts",
+    "deepgram-sdk",
     "faster-whisper",
     "reachy-mini",
     "webrtcvad-wheels",

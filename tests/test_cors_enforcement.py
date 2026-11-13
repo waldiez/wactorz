@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A page on another origin cannot act on this server.
 
 Driven through the real application so both spellings of every route are

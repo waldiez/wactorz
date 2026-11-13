@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """List every installed distribution with its version and license.
 
 An image redistributes the packages installed in it, and most of their licenses

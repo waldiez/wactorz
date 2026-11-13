@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """FlicAgent — Flic buttons as MQTT triggers.
 
 Pairs buttons over Bluetooth from chat (`@flic pair`, `@flic scan`,...) and turns
@@ -17,7 +18,7 @@ import logging
 import re
 import sys
 import time
-from collections.abc import Collection, Iterable
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import asdict, dataclass, replace
 from enum import Enum
 from pathlib import Path
@@ -698,7 +699,7 @@ class FlicAgent(Actor):
         """Turn late presses on or off, or say which they are."""
         wanted = _SWITCH_WORDS.get(value.strip().lower())
         if wanted is not None:
-            self.late_presses = wanted == "on"
+            self.late_presses: bool = wanted == "on"
             await self._remember()
         if self.late_presses:
             return (
@@ -982,7 +983,7 @@ class FlicAgent(Actor):
         except Exception:
             LOG.debug("Disconnect did not complete cleanly", exc_info=True)
 
-    def _make_press_handler(self, key: str):
+    def _make_press_handler(self, key: str) -> Callable[[str, dict[str, Any]], None]:
         """A callback for one button's presses.
 
         The library calls this synchronously while handling a BLE notification,
@@ -1000,7 +1001,7 @@ class FlicAgent(Actor):
 
         return handler
 
-    def _make_state_handler(self, key: str):
+    def _make_state_handler(self, key: str) -> Callable[[Any], None]:
         """A callback for one button's connection coming and going.
 
         The library reconnects by itself, so the first start is not the only

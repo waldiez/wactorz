@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Cancelling a task you own must not absorb a cancellation aimed at you.
 
 Three shutdown helpers cancel a task they started and then wait for it. Catching
@@ -276,7 +277,7 @@ class _Scheduled(Actor):
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "scheduled")
         super().__init__(**kwargs)
-        self._loop_task: asyncio.Task | None = None
+        self._loop_task: asyncio.Task[Any] | None = None
         self.cancelling = asyncio.Event()
         self.release = asyncio.Event()
         self.entered = asyncio.Event()

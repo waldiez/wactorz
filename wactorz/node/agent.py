@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A Wactorz agent, running on a node.
 
 :class:`NodeAgent` *is* a :class:`~wactorz.agents.DynamicAgent` — the same class
@@ -30,6 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..agents.dynamic.agent import DynamicAgent, _ProgramHalted
+from ..core.identity import given_actor_id
 from ..core.topic_bus import TopicContract
 from ..monitoring.agent_metrics import RecentDurations
 from .history import read_history, read_stats
@@ -39,14 +41,14 @@ from .llm import BridgeProvider, request_over_mqtt
 if TYPE_CHECKING:
     from .runner import NodeRunner
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class NodeAgent(NodeHosted, DynamicAgent):
     """A dynamic agent whose host is a node rather than main."""
 
     def __init__(
-        self, config: dict, runner: "NodeRunner", state_dir: str | Path | None = None
+        self, config: dict[str, Any], runner: "NodeRunner", state_dir: str | Path | None = None
     ) -> None:
         name = config.get("name") or f"remote-agent-{uuid.uuid4().hex[:6]}"
         directory = Path(state_dir) if state_dir else Path(runner.state_dir)
@@ -57,17 +59,19 @@ class NodeAgent(NodeHosted, DynamicAgent):
             input_schema=config.get("input_schema"),
             output_schema=config.get("output_schema"),
             trusted=bool(config.get("trusted", False)),
+            task_timeout_s=config.get("task_timeout_s"),
             artifacts=runner.readable_artifacts(config),
             # Passed in rather than assigned after, because `AgentAPI` is built
             # inside this call and decides there whether `agent.llm` exists. It
             # only holds the reference, so handing it a half-built agent is safe.
             llm_provider=BridgeProvider(self),
+            actor_id=given_actor_id(config.get("actor_id")),
             name=str(name),
             persistence_dir=str(directory),
         )
         #: What the spawn said this agent does, so the planner sees it before
         #: the agent's own code has declared or published anything.
-        self.capabilities = list(config.get("capabilities") or [])
+        self.capabilities: list[str] = list(config.get("capabilities") or [])
         self._spawn_contract = TopicContract.from_spawn_config({**config, "node": runner.node_name})
         #: What this agent's model requests took, there through main and back,
         #: and how many main never answered in time. Reported in the metrics
@@ -87,7 +91,7 @@ class NodeAgent(NodeHosted, DynamicAgent):
         """Record one model request that could not be sent to main at all."""
         self._llm_unsent += 1
 
-    def _build_metrics(self) -> dict:
+    def _build_metrics(self) -> dict[str, Any]:
         """The generated agent's frame, plus its model requests' round trips through main.
 
         The model call itself is timed on main, where it is made; this is the

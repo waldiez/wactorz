@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent's stored state is brought up to the version its code expects.
 
 The version is kept in the state itself, under `_state_version`, so it moves

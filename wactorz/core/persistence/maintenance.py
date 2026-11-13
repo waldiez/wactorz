@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Housekeeping the storage owes itself, on a timer and off the event loop.
 
 Nothing on the server ran periodic work before this, which is why the WAL
@@ -19,11 +20,12 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
+from typing import Any
 
 from ..deferred_write import LARGE_STATE_BYTES
 from .stores import get_db
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How often the jobs run. Long, because none of this is urgent: the point is
 #: that it happens away from the loop and while the system is usually quiet, not
@@ -46,7 +48,7 @@ REPORTED_AGENTS = 3
 #: is not changing is not news -- but one that shrank and grew back is.
 _warned_kv: set[str] = set()
 
-_task: asyncio.Task | None = None
+_task: asyncio.Task[Any] | None = None
 _stopping: asyncio.Event | None = None
 
 

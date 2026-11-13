@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Main answering LLM calls, and reads of its history, for agents on other machines.
 
 An edge node holds no API key. An agent there publishes its request to
@@ -52,16 +53,17 @@ from ...core.mqtt import (
     session_kwargs,
 )
 from ...core.node_signing import request_signed_for
+from ...core.topics import NODES, main_topic, root_prefix
 from .bridge_limits import Lane
 from .history import HISTORY_TOPIC, answer_history
 
 if TYPE_CHECKING:
     from ...core.actor import ActorState
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The topic remote agents publish their requests to.
-REQUEST_TOPIC = "main/llm_request"
+REQUEST_TOPIC = main_topic("llm_request")
 
 #: How long to wait before reconnecting after the broker goes away.
 RECONNECT_DELAY_S = 5.0
@@ -81,7 +83,7 @@ ANSWERED_MEMORY = 10_000
 REPORTED_MEMORY = 1024
 
 #: The reply topics a node's requests use: its own namespace, then a random id.
-_REPLY_TOPIC = re.compile(r"nodes/(?P<node>[^/#+]+)/reply/[0-9a-f]+")
+_REPLY_TOPIC = re.compile(re.escape(root_prefix(NODES)) + r"(?P<node>[^/#+]+)/reply/[0-9a-f]+")
 
 #: What an unsigned request is told when main refuses it.
 REFUSED_UNSIGNED = "[LLM error: request not signed for this node — deploy the node again]"
@@ -140,14 +142,14 @@ class LLMBridge:
         #: node that sends many says so once rather than on every call. Newest
         #: last, and bounded -- see `REPORTED_MEMORY`.
         self._reported: OrderedDict[str, None] = OrderedDict()
-        self.calls = Lane(
+        self.calls: Lane = Lane(
             per_minute=BRIDGE_CALLS_PER_MINUTE,
             burst=BRIDGE_CALLS_PER_MINUTE,
             running_per_node=CALLS_RUNNING_PER_NODE,
             waiting_per_node=CALLS_WAITING_PER_NODE,
             running=CALLS_RUNNING,
         )
-        self.history = Lane(
+        self.history: Lane = Lane(
             per_minute=BRIDGE_HISTORY_PAGES_PER_MINUTE,
             burst=BRIDGE_HISTORY_PAGES_PER_MINUTE,
             running_per_node=HISTORY_RUNNING_PER_NODE,

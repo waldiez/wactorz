@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The fixture that keeps the developer's own settings out of the tests.
 
 Its sibling `test_no_ambient_broker.py` keeps tests off a real broker; this one

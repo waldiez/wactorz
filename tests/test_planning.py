@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for ``wactorz.agents.main.planning.PlanningMixin``.
 
 Covers the pure / cheaply-testable surface: pipeline-rule and pending-plan
@@ -13,9 +14,9 @@ Run with ``pytest``. Async methods are driven through ``asyncio.run``.
 
 import asyncio
 import re
-import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -26,45 +27,46 @@ from wactorz.agents.main.planning import (
     _strip_dryrun_bypass,
     starts_with_bypass,
 )
+from wactorz.core.paths import resolve_state_dir
 
 
-def run(coro):
+def run(coro) -> Any:
     return asyncio.run(coro)
 
 
 class FakeActor:
-    def __init__(self, name):
+    def __init__(self, name) -> None:
         self.name = name
 
 
 class FakeRegistry:
-    def __init__(self, names):
+    def __init__(self, names) -> None:
         self._actors = [FakeActor(n) for n in names]
 
-    def all_actors(self):
+    def all_actors(self) -> "list[FakeActor]":
         return list(self._actors)
 
 
 class PlanningHost(PlanningMixin):
-    def __init__(self, registry=None, facts=None):
+    def __init__(self, registry=None, facts=None) -> None:
         self.name = "main"
         self._store = {}
         self._registry = registry
         self._facts = facts or {}
-        self._persistence_dir = Path(tempfile.mkdtemp()) / "main"
+        self._persistence_dir = Path(resolve_state_dir()) / "main"
         self._result_futures = {}
 
-    def recall(self, key, default=None):
+    def recall(self, key, default=None) -> Any:
         return self._store.get(key, default)
 
-    def persist(self, key, value):
+    def persist(self, key, value) -> None:
         self._store[key] = value
 
-    def get_user_facts(self):
+    def get_user_facts(self) -> Any | dict[Any, Any]:
         return self._facts
 
 
-def host(**kw):
+def host(**kw) -> "PlanningHost":
     # Partial on purpose: the members these tests reach, not the whole host.
     return PlanningHost(**kw)  # pyright: ignore[reportAbstractUsage]
 
@@ -72,14 +74,14 @@ def host(**kw):
 # ── Pipeline-rule + pending-plan persistence ─────────────────────────────────
 
 
-def test_pipeline_rule_roundtrip():
+def test_pipeline_rule_roundtrip() -> None:
     h = host()
     h.save_pipeline_rule({"rule_id": "r1", "agents": ["a", "b"]})
     rules = h.get_pipeline_rules()
     assert "r1" in rules and rules["r1"]["agents"] == ["a", "b"]
 
 
-def test_pending_plan_crud():
+def test_pending_plan_crud() -> None:
     h = host()
     now = time.time()
     h.save_pending_plan({"plan_id": "p1", "task": "x", "status": "pending", "created_at": now})
@@ -88,7 +90,7 @@ def test_pending_plan_crud():
     assert h.get_pending_plans()["p1"]["status"] == "approved"
 
 
-def test_most_recent_pending_picks_latest():
+def test_most_recent_pending_picks_latest() -> None:
     h = host()
     now = time.time()
     h.save_pending_plan(
@@ -100,7 +102,7 @@ def test_most_recent_pending_picks_latest():
     assert plan["plan_id"] == "new"
 
 
-def test_most_recent_ignores_non_pending():
+def test_most_recent_ignores_non_pending() -> None:
     h = host()
     h.save_pending_plan(
         {"plan_id": "p", "task": "a", "status": "approved", "created_at": time.time()}
@@ -108,7 +110,7 @@ def test_most_recent_ignores_non_pending():
     assert h._most_recent_pending_plan() is None
 
 
-def test_pending_plan_expires_after_ttl():
+def test_pending_plan_expires_after_ttl() -> None:
     h = host()
     old = time.time() - (PlanningMixin.PLAN_TTL_S + 10)
     h.save_pending_plan({"plan_id": "stale", "task": "a", "status": "pending", "created_at": old})
@@ -121,68 +123,68 @@ def test_pending_plan_expires_after_ttl():
 
 
 @pytest.mark.parametrize("text", ["yes", "ok", "approve", "do it", "go ahead"])
-def test_looks_like_approval_true(text):
+def test_looks_like_approval_true(text) -> None:
     assert PlanningHost._looks_like_approval(text) is True
 
 
 @pytest.mark.parametrize("text", ["no", "cancel", "something totally unrelated here"])
-def test_looks_like_approval_false(text):
+def test_looks_like_approval_false(text) -> None:
     assert PlanningHost._looks_like_approval(text) is False
 
 
 @pytest.mark.parametrize("text", ["no", "cancel", "nope", "abort"])
-def test_looks_like_rejection_true(text):
+def test_looks_like_rejection_true(text) -> None:
     assert PlanningHost._looks_like_rejection(text) is True
 
 
-def test_looks_like_rejection_false():
+def test_looks_like_rejection_false() -> None:
     assert PlanningHost._looks_like_rejection("yes") is False
 
 
-def test_looks_like_correction_true():
+def test_looks_like_correction_true() -> None:
     assert PlanningHost._looks_like_correction("actually use celsius instead") is True
 
 
-def test_looks_like_correction_false():
+def test_looks_like_correction_false() -> None:
     assert PlanningHost._looks_like_correction("yes") is False
 
 
 # ── Dry-run gating ───────────────────────────────────────────────────────────
 
 
-def test_dryrun_bypass_marker():
+def test_dryrun_bypass_marker() -> None:
     assert host()._dryrun_enabled("pipeline! build the thing") is False
 
 
-def test_dryrun_default_on():
+def test_dryrun_default_on() -> None:
     assert host()._dryrun_enabled("build the thing") is True
 
 
-def test_dryrun_off_by_policy():
+def test_dryrun_off_by_policy() -> None:
     assert host(facts={"policy_dryrun": "off"})._dryrun_enabled("build the thing") is False
 
 
 # ── Planning heuristic (exercises _PLANNING_KEYWORDS) ────────────────────────
 
 
-def test_needs_planning_explicit():
+def test_needs_planning_explicit() -> None:
     assert run(host()._needs_planning("coordinate: weather then news")) is True
 
 
-def test_needs_planning_at_planner():
+def test_needs_planning_at_planner() -> None:
     assert run(host()._needs_planning("@planner please help")) is True
 
 
-def test_needs_planning_keyword_threshold():
+def test_needs_planning_keyword_threshold() -> None:
     # "coordinate" + "and then" + "summarize both" → 3 keyword hits
     assert run(host()._needs_planning("coordinate and then summarize both")) is True
 
 
-def test_needs_planning_plain_text():
+def test_needs_planning_plain_text() -> None:
     assert run(host()._needs_planning("what's the weather today")) is False
 
 
-def test_needs_planning_two_agent_mentions():
+def test_needs_planning_two_agent_mentions() -> None:
     h = host(registry=FakeRegistry(["weather-bot", "news-bot"]))
     assert run(h._needs_planning("use weather-bot and news-bot together")) is True
 
@@ -190,11 +192,11 @@ def test_needs_planning_two_agent_mentions():
 # ── Collision warning (exercises _SPAWN_INTENT_WORDS) ────────────────────────
 
 
-def test_collision_none_when_no_pending():
+def test_collision_none_when_no_pending() -> None:
     assert host()._warn_if_pending_plan_collision("create a sensor") is None
 
 
-def test_collision_warns_on_spawn_intent():
+def test_collision_warns_on_spawn_intent() -> None:
     h = host()
     h.save_pending_plan(
         {"plan_id": "p1", "task": "old task", "status": "pending", "created_at": time.time()}
@@ -203,7 +205,7 @@ def test_collision_warns_on_spawn_intent():
     assert msg is not None and "pending plan" in msg.lower()
 
 
-def test_collision_bypassed_by_marker():
+def test_collision_bypassed_by_marker() -> None:
     h = host()
     h.save_pending_plan(
         {"plan_id": "p1", "task": "old", "status": "pending", "created_at": time.time()}
@@ -214,7 +216,7 @@ def test_collision_bypassed_by_marker():
 # ── Proposal formatting ──────────────────────────────────────────────────────
 
 
-def test_format_plan_proposal():
+def test_format_plan_proposal() -> None:
     plan = {
         "plan_id": "p1",
         "task": "monitor cpu and alert",
@@ -235,7 +237,7 @@ def test_format_plan_proposal():
     assert "1 agent" in out
 
 
-def test_format_plan_proposal_numbers_every_agent_without_list_syntax():
+def test_format_plan_proposal_numbers_every_agent_without_list_syntax() -> None:
     """Each agent keeps its own number, and the number is never bare "N." at
     the start of a line — that is Markdown list syntax, and the purpose line
     that follows ends the list, so renderers restarted every agent at 1."""
@@ -263,7 +265,7 @@ def test_format_plan_proposal_numbers_every_agent_without_list_syntax():
     assert not re.search(r"^\s*\d+\.\s", out, re.MULTILINE)
 
 
-def test_format_plan_proposal_explains_ha_actuator_side_effects():
+def test_format_plan_proposal_explains_ha_actuator_side_effects() -> None:
     """An ha_actuator's actions, topics, and guards are spelled out from the
     spawn_config the actuator actually reads (actions / mqtt_topics /
     detection_filter / conditions) — never "calls HA: ? on ?"."""
@@ -314,7 +316,7 @@ def test_format_plan_proposal_explains_ha_actuator_side_effects():
     assert "?" not in out.split("**To proceed:**")[0]
 
 
-def test_format_plan_proposal_ha_actuator_without_actions_still_warns():
+def test_format_plan_proposal_ha_actuator_without_actions_still_warns() -> None:
     plan = {
         "plan_id": "p4",
         "task": "t",
@@ -399,7 +401,7 @@ class TestBypassMarkers:
         )
 
 
-def test_a_proposal_names_a_prompt_only_agent_as_llm():
+def test_a_proposal_names_a_prompt_only_agent_as_llm() -> None:
     plan = {
         "plan_id": "p1",
         "task": "forecast",

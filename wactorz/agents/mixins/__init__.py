@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Composable behaviour mixins for the agent classes.
 
 Each mixin bundles one concern (spawning, memory, …) and is mixed into an
@@ -11,16 +12,22 @@ from .spawning import (
     KeptHere,
     NotSpawned,
     PlacedOnNode,
+    SpawnConfig,
     SpawnMixin,
     SpawnPlaceholder,
     agent_type,
+    installed_packages,
+    spawn_actor_id,
 )
 
 __all__ = [
     "KeptHere",
     "NotSpawned",
     "PlacedOnNode",
+    "SpawnConfig",
     "SpawnMixin",
     "SpawnPlaceholder",
     "agent_type",
+    "installed_packages",
+    "spawn_actor_id",
 ]

@@ -1,14 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
 """Starting a node: ``wactorz-node --node <name>``, or ``wactorz --node <name>``.
 
-The node half of :mod:`wactorz.cli`. Two checks happen before anything connects,
-because both describe a node that can never work and both would otherwise show
-up as a runner that reconnects every three seconds for ever:
+The node half of :mod:`wactorz.cli`. Some checks happen before anything connects,
+because each describes a node that can never work and would otherwise show up as
+a runner that reconnects every three seconds for ever, or one nobody hears:
 
 - a node name that cannot be an MQTT topic level, which the broker refuses on
   every publish and every subscribe;
+- a namespace that cannot be one (`wactorz.core.topics.namespace_error`);
 - TLS turned on with a CA that cannot be loaded, which is not going to appear.
 
-Both exit 2 — the status the systemd unit is told not to restart on.
+Each exits 2 — the status the systemd unit is told not to restart on.
 """
 
 import argparse
@@ -22,11 +24,12 @@ import uuid
 from ..config import CONFIG, deploy_name_error
 from ..core.mqtt_tls import client_context, tls_enabled
 from ..core.state_lock import StateInUseError
+from ..core.topics import NAMESPACE_REFUSAL
 from ..monitoring.log_setup import setup_console_logging
 from . import local_setup
 from .runner import NodeRunner
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def node_name_from(args: argparse.Namespace) -> str:
@@ -83,6 +86,14 @@ def check_startable(node_name: str) -> None:
     problem = deploy_name_error(node_name)
     if problem:
         logger.error("[runner] Refusing to start: %s Rename the node and redeploy.", problem)
+        raise SystemExit(2)
+
+    if NAMESPACE_REFUSAL is not None:
+        logger.error(
+            "[runner] Refusing to start: %s. Deploy the node again, or correct "
+            "WACTORZ_NAMESPACE in ~/wactorz/.env.",
+            NAMESPACE_REFUSAL,
+        )
         raise SystemExit(2)
 
     tls = tls_problem()

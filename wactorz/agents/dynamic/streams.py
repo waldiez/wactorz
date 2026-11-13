@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Subscriptions, rolling windows, and the contracts an agent declares."""
 
 import asyncio
@@ -7,11 +8,15 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+from ...core import topic_bus
+from ...core.manifests import AgentManifest
 from ...core.mqtt import mqtt_client
+from ...core.topic_bus import StreamWindow, TopicContract, wired
 
 if TYPE_CHECKING:
     pass
 
+from ...core.topics import display_topic, wire_topic
 from .awaitable import AWAITABLE_NONE
 from .listener import hub_for
 
@@ -24,7 +29,12 @@ if TYPE_CHECKING:
 else:
     _Host = object
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
+
+
+def _subscribed(actor: Any) -> set[str]:
+    """The topics ``actor``'s program subscribes to now, each once."""
+    return {topic for topic, _callback in getattr(actor, "_subscribed_topics", {})}
 
 
 def _union(*groups: Any) -> list[str]:
@@ -80,12 +90,10 @@ def _register_with_topic_bus(api: Any, actor: Any, topic: str) -> None:
     delivery.
     """
     try:
-        from ...core.topic_bus import TopicContract, get_topic_bus
-
-        bus = get_topic_bus()
+        bus = topic_bus.get_topic_bus()
         if not bus:
             return
-        existing = bus.registry.get(api.name)
+        existing = bus.registry.get(api.name, api.actor_id, getattr(actor, "_node", None))
         if existing is None:
             bus.register_contract(
                 TopicContract(
@@ -126,6 +134,8 @@ class StreamsMixin(_Host):
         """
         if callback is None or not callable(callback):
             raise TypeError(CALLBACK_REQUIRED.format(topic=topic, got=type(callback).__name__))
+        # Before the duplicate check and the contract: one topic, however it was written.
+        topic = wire_topic(topic)
 
         # Validate callback accepts exactly one argument (the payload)
 
@@ -157,6 +167,7 @@ class StreamsMixin(_Host):
         if sub_key in actor._subscribed_topics:
             logger.debug("[%s] Already subscribed to %s — skipping duplicate", actor.name, topic)
             return AWAITABLE_NONE
+        is_new_topic = topic not in _subscribed(actor)
         actor._subscribed_topics[sub_key] = callback
 
         # One connection per actor carries every subscription, so this may or may
@@ -171,6 +182,11 @@ class StreamsMixin(_Host):
         # namespace's callbacks being reached.
 
         _register_with_topic_bus(self, actor, topic)
+        if is_new_topic:
+            # The manifest is how main and every other host learn what this agent
+            # reads, as a new publish is for what it writes: main mirrors it into
+            # its registry, and for an agent on a node it is the only route.
+            actor.run_detached(self._publish_manifest(), name="manifest")
 
         # Return an awaitable no-op so `await agent.subscribe(...)` doesn't crash.
         # LLMs frequently add `await` because setup() is async — this makes it safe.
@@ -186,7 +202,7 @@ class StreamsMixin(_Host):
         contract = getattr(actor, "_topic_contract", None) or getattr(
             actor, "_spawn_contract", None
         )
-        manifest = {
+        manifest: AgentManifest = {
             "name": self.name,
             "actor_id": self.actor_id,
             "node": getattr(actor, "_node", None),
@@ -198,8 +214,8 @@ class StreamsMixin(_Host):
             # before the first of them — so the planner can see a topic this
             # agent exists to produce before it has produced one.
             "publishes": _union(self._published_topics, contract.publishes if contract else []),
-            # TopicContract fields — populated via declare_contract()
-            "subscribes": contract.subscribes if contract else [],
+            # What the program subscribes to, and anything the contract names.
+            "subscribes": _union(_subscribed(actor), contract.subscribes if contract else []),
             "triggers_when": contract.triggers_when if contract else {},
             "produces_schema": contract.produces_schema if contract else {},
             "consumes_schema": contract.consumes_schema if contract else {},
@@ -217,6 +233,7 @@ class StreamsMixin(_Host):
             stats = await agent.mqtt_get('rpi-room/cpu')
             cpu = stats.get('cpu_percent') if stats else None
         """
+        topic = wire_topic(topic)
         actor = self._actor
         result = []
 
@@ -239,7 +256,9 @@ class StreamsMixin(_Host):
             logger.debug("[%s] mqtt_get(%s) timed out after %ss", self.name, topic, timeout)
         return result[0] if result else None
 
-    def window(self, topic: str, seconds: float = 300, max_size: int = 1000) -> Any:
+    def window(
+        self, topic: str, seconds: float = 300, max_size: int = 1000, *, event_time: bool = False
+    ) -> Any:
         """Create a sliding time window over an MQTT topic stream.
 
         IMPORTANT: window() is synchronous — do NOT use await.
@@ -263,8 +282,7 @@ class StreamsMixin(_Host):
                 if w.absent_for(60):
                     await agent.alert('Sensor stopped publishing!')
         """
-        from ...core.topic_bus import StreamWindow, get_topic_bus
-
+        topic = wire_topic(topic)
         # One window per topic per agent. Generated code calls this from a
         # process loop as readily as from setup, and a fresh window each tick
         # opens a broker connection each tick and reads an empty buffer every
@@ -275,11 +293,13 @@ class StreamsMixin(_Host):
 
         w = None
         try:
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus:
-                w = bus.make_window(topic, seconds=seconds, max_size=max_size)
+                w = bus.make_window(
+                    topic, seconds=seconds, max_size=max_size, event_time=event_time
+                )
             else:
-                w = StreamWindow(topic, seconds=seconds, max_size=max_size)
+                w = StreamWindow(topic, seconds=seconds, max_size=max_size, event_time=event_time)
                 w.start(self._actor._mqtt_broker, self._actor._mqtt_port)
         except Exception:
             logger.exception("[%s] agent.window() failed - using a local window", self.name)
@@ -362,8 +382,9 @@ class StreamsMixin(_Host):
             publishes = [publishes]
         if isinstance(subscribes, str):
             subscribes = [subscribes]
-
-        from ...core.topic_bus import TopicContract, get_topic_bus
+        # Held as they travel, so a bare topic and its namespaced form are one.
+        publishes = wired(publishes)
+        subscribes = wired(subscribes)
 
         # Each call adds to what is already known rather than replacing it, from
         # two sources: what the spawn config declared before any code ran, and
@@ -389,7 +410,7 @@ class StreamsMixin(_Host):
             actor_id=self.actor_id,
             node=getattr(self._actor, "_node", None),
         )
-        bus = get_topic_bus()
+        bus = topic_bus.get_topic_bus()
         if bus:
             bus.register_contract(contract)
         # Also include in manifest so remote agents and planner can see it
@@ -406,14 +427,12 @@ class StreamsMixin(_Host):
             for o in opps:
                 print(f"Can receive data from {o['producer']} via {o['topic']}")
         """
-        from ...core.topic_bus import get_topic_bus
-
-        bus = get_topic_bus()
+        bus = topic_bus.get_topic_bus()
         if not bus:
             return []
         pairs = bus.registry.find_wiring_opportunities()
         return [
-            {"producer": p.name, "consumer": c.name, "topic": t}
+            {"producer": p.name, "consumer": c.name, "topic": display_topic(t)}
             for p, c, t in pairs
             if p.name == self.name or c.name == self.name
         ]

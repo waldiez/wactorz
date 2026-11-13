@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`LLMAgent._handle_task` must always answer the caller.
 
 A task arrives with `_reply_to` / `_task_id` so the sender's `send_to()` future
@@ -8,6 +9,7 @@ went wrong, because the failure was logged on the callee's side.
 
 import tempfile
 import unittest
+from typing import Any, NoReturn
 from unittest.mock import AsyncMock, MagicMock
 
 from wactorz.core.actor import Message, MessageType
@@ -16,14 +18,14 @@ from wactorz.core.actor import Message, MessageType
 class _Boom:
     """A provider whose failure is *not* a RuntimeError."""
 
-    def __init__(self, exc: Exception):
+    def __init__(self, exc: Exception) -> None:
         self._exc = exc
 
-    async def complete(self, messages=None, system=None, **_kw):
+    async def complete(self, messages=None, system=None, **_kw) -> NoReturn:
         raise self._exc
 
 
-def _make_agent(llm=None):
+def _make_agent(llm=None) -> Any:
     from wactorz.agents.llm_agent import LLMAgent
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -42,7 +44,7 @@ def _task(**extra) -> Message:
     return Message(type=MessageType.TASK, sender_id="caller-1", payload=payload)
 
 
-def _sent_results(agent) -> list[dict]:
+def _sent_results(agent) -> list[dict[str, Any]]:
     # Compared by value, not identity: another test in the suite causes
     # `wactorz.core.actor` to be loaded twice, so this module's MessageType can
     # be a different class object than the agent's. `MessageType` subclasses
@@ -51,7 +53,7 @@ def _sent_results(agent) -> list[dict]:
 
 
 class HandleTaskAlwaysRepliesTest(unittest.IsolatedAsyncioTestCase):
-    async def test_replies_when_the_provider_raises_a_non_runtime_error(self):
+    async def test_replies_when_the_provider_raises_a_non_runtime_error(self) -> None:
         agent = _make_agent(_Boom(ValueError("model exploded")))
 
         await agent._handle_task(_task())
@@ -61,7 +63,7 @@ class HandleTaskAlwaysRepliesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0]["_task_id"], "t-42", "future cannot resolve without the id")
         self.assertIn("model exploded", results[0]["text"])
 
-    async def test_replies_when_no_provider_is_configured(self):
+    async def test_replies_when_no_provider_is_configured(self) -> None:
         agent = _make_agent(llm=None)
 
         await agent._handle_task(_task())
@@ -70,23 +72,25 @@ class HandleTaskAlwaysRepliesTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(results, "a misconfigured provider silently hung the caller")
         self.assertEqual(results[0]["_task_id"], "t-42")
 
-    async def test_a_timeout_is_reported_rather_than_swallowed(self):
+    async def test_a_timeout_is_reported_rather_than_swallowed(self) -> None:
         agent = _make_agent(_Boom(TimeoutError("provider timed out")))
 
         await agent._handle_task(_task())
 
         self.assertTrue(_sent_results(agent))
 
-    async def test_failure_reply_still_counts_the_task_as_failed(self):
+    async def test_failure_reply_still_counts_the_task_as_failed(self) -> None:
         agent = _make_agent(_Boom(ValueError("nope")))
 
         await agent._handle_task(_task())
 
         self.assertEqual(agent.metrics.tasks_failed, 1)
 
-    async def test_success_still_replies_normally(self):
+    async def test_success_still_replies_normally(self) -> None:
         class _Ok:
-            async def complete(self, messages=None, system=None, **_kw):
+            async def complete(
+                self, messages=None, system=None, **_kw
+            ) -> tuple[str, dict[str, Any]]:
                 return "the answer", {"input_tokens": 1, "output_tokens": 1, "cost_usd": 0.0}
 
         agent = _make_agent(_Ok())
@@ -97,7 +101,7 @@ class HandleTaskAlwaysRepliesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0]["text"], "the answer")
         self.assertEqual(results[0]["_task_id"], "t-42")
 
-    async def test_no_reply_target_means_no_send(self):
+    async def test_no_reply_target_means_no_send(self) -> None:
         """Fire-and-forget tasks must not gain a phantom reply."""
         agent = _make_agent(_Boom(ValueError("nope")))
         msg = Message(type=MessageType.TASK, sender_id="", payload={"text": "x"})

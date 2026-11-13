@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The subscription hub of a generated program: one connection, repaired callbacks.
 
 The connection, the bindings and the per-topic queues are the shared hub in
@@ -20,7 +21,7 @@ from ...core.mqtt import agent_client_id, mqtt_client
 from ...core.subscriptions import Binding, is_durable_actor, safe_invoke
 from ...core.subscriptions import SubscriptionHub as SharedSubscriptionHub
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 __all__ = [
     "CB_ERROR_REPORT_INTERVAL",

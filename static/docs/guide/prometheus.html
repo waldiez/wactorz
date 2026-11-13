@@ -294,6 +294,10 @@
 <td>Time from a chat message reaching the server to its reply being complete. A turn the person stops is not counted</td>
 </tr>
 <tr>
+<td><code>wactorz_chat_log_rows_dropped_total</code></td>
+<td>Chat turns shown on the page but not kept in the chat log, because its writer had more queued than it holds</td>
+</tr>
+<tr>
 <td><code>wactorz_agent_task_duration_seconds{agent,outcome}</code></td>
 <td>Time a generated agent's <code>handle_task</code> took, by how it ended: <code>completed</code>, <code>failed</code> or <code>timed_out</code></td>
 </tr>
@@ -316,6 +320,30 @@
 <tr>
 <td><code>wactorz_llm_spend_limit_usd{period}</code></td>
 <td>The spend limit for the period; absent when none is set. At it, model requests pause until the period ends or the limit is raised</td>
+</tr>
+<tr>
+<td><code>wactorz_model_score{model,side,metric}</code></td>
+<td>Each side of a model's shadow trial, <code>active</code> and <code>shadow</code>, on the figure the promotion policy compares (<code>f1</code>, <code>macro_f1</code>, <code>mae</code>, or the policy's), from the labels so far; set at every check of the trial and dropped when it ends</td>
+</tr>
+<tr>
+<td><code>wactorz_model_shadow_agreement{model}</code></td>
+<td>The share of a trial's pairs both sides answered alike</td>
+</tr>
+<tr>
+<td><code>wactorz_model_drift{model,test,column}</code></td>
+<td>A drift test's statistic on a column of the model's readings at the <code>drift</code> agent's last check: PSI, KS's <code>D</code>, or how many changes ADWIN found in the scores (<code>docs/design/drift.md</code>)</td>
+</tr>
+<tr>
+<td><code>wactorz_model_drift_alarm{model,test,column}</code></td>
+<td><code>1</code> while that test is over its threshold on that column, so an alert rule needs no threshold of its own</td>
+</tr>
+<tr>
+<td><code>wactorz_model_train_seconds{model}</code></td>
+<td>How long the last training run of the model took</td>
+</tr>
+<tr>
+<td><code>wactorz_model_train_runs_total{model,outcome}</code></td>
+<td>Training runs by how they ended: <code>ok</code> or <code>failed</code></td>
 </tr>
 </tbody>
 </table>

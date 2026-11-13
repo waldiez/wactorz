@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The planner's prompt templates and the fields they require.
 
 These render at runtime inside code the suite does not otherwise reach, so a

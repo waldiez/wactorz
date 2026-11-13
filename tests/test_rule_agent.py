@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A rule acts when a message on its trigger topic satisfies its conditions.
 
 The glue of a pipeline without a program per rule: conditions on the payload,
@@ -70,7 +71,7 @@ class TestConditions:
             ("gte", 1, {"score": "high"}, False),
         ],
     )
-    def test_operators(self, op: str, value: Any, payload: dict, expected: bool) -> None:
+    def test_operators(self, op: str, value: Any, payload: dict[str, Any], expected: bool) -> None:
         field = next(iter(payload))
         condition = RuleCondition.from_dict({"field": field, "op": op, "value": value})
 
@@ -99,16 +100,18 @@ class TestConfig:
             RuleConfig.from_dict({"triggers": "a/b"})
 
     @pytest.mark.parametrize(
-        "raw",
+        ("raw", "why"),
         [
-            {"type": "publish"},
-            {"type": "task"},
-            {"type": "webhook", "url": "ftp://x"},
-            {"type": "email"},
+            ({"type": "publish"}, "topic"),
+            ({"type": "task"}, "agent"),
+            ({"type": "webhook", "url": "ftp://x"}, "url"),
+            ({"type": "email"}, "unknown action"),
+            # A field that belongs to another kind does not complete this one.
+            ({"type": "publish", "agent": "notify"}, "topic"),
         ],
     )
-    def test_an_incomplete_action_is_refused(self, raw: dict) -> None:
-        with pytest.raises(ValueError):
+    def test_an_incomplete_action_is_refused(self, raw: dict[str, Any], why: str) -> None:
+        with pytest.raises(ValueError, match=why):
             RuleAction.from_dict(raw)
 
     def test_round_trip(self) -> None:
@@ -134,6 +137,38 @@ class TestConfig:
 
         assert body["text"] == "score 12.5 on {where}"
         assert body["trigger"] == {"score": 12.5}
+
+    def test_a_value_that_is_one_placeholder_is_the_triggers_value_as_it_is(self) -> None:
+        action = RuleAction.from_dict(
+            {
+                "type": "task",
+                "agent": "trainer",
+                "payload": {
+                    "split": {"kind": "time_split", "at": "{ts}"},
+                    "observation": "{observation}",
+                    "reference": "{reference}",
+                    "tests": ["{test}", "psi on {column}"],
+                    "missing": "{nobody}",
+                    "reason": "drift: {test} on {column}",
+                },
+            }
+        )
+        trigger = {
+            "ts": 1760000000.0,
+            "observation": "abc",
+            "reference": {"since": 1.0, "until": 2.0},
+            "test": "psi",
+            "column": "ax",
+        }
+
+        body = action.body(trigger)
+
+        assert body["split"] == {"kind": "time_split", "at": 1760000000.0}
+        assert body["observation"] == "abc"
+        assert body["reference"] == {"since": 1.0, "until": 2.0}
+        assert body["tests"] == ["psi", "psi on ax"]
+        assert body["missing"] == "{nobody}"
+        assert body["reason"] == "drift: psi on ax"
 
 
 class TestPlaceholders:
@@ -200,6 +235,19 @@ class TestEvaluation:
         assert not await rule.evaluate({"score": 2})
 
         assert sum(1 for t, _ in published if t == "alerts/imu") == 1
+
+    async def test_the_cooldown_counts_the_triggers_own_time(
+        self, tmp_path: Path, published: list[tuple[str, Any]]
+    ) -> None:
+        rule = _rule(tmp_path, cooldown_seconds=3600)
+        t0 = 1_760_000_000.0
+
+        assert await rule.evaluate({"score": 1, "ts": t0})
+        assert not await rule.evaluate({"score": 2, "ts": t0 + 600})
+        assert not await rule.evaluate({"score": 3, "timestamp": t0 - 60})
+        assert await rule.evaluate({"score": 4, "ts": t0 + 3600})
+
+        assert sum(1 for t, _ in published if t == "alerts/imu") == 2
 
     async def test_a_task_action_reaches_the_named_agent(
         self, tmp_path: Path, published: list[tuple[str, Any]]
@@ -290,6 +338,7 @@ class TestAskingTheOperator:
             "user": "42",
             "timeout": 600,
             "topic": "labels/pump",
+            "context": "Score {score}.",
         }
         action = RuleAction.from_dict(raw)
         assert action.options == ("yes", "no")
@@ -320,9 +369,12 @@ class TestAskingTheOperator:
                 "chat channel",
             ),
             ({"type": "ask_operator", "text": "x", "options": ["a"], "timeout": -1}, "timeout"),
+            # With more than one thing wrong, the first in reading order is named.
+            ({"type": "ask_operator", "text": " "}, "text"),
+            ({"type": "ask_operator", "text": "x", "options": ["a", "a"], "timeout": -1}, "twice"),
         ],
     )
-    def test_an_incomplete_question_is_refused(self, raw: dict, why: str) -> None:
+    def test_an_incomplete_question_is_refused(self, raw: dict[str, Any], why: str) -> None:
         with pytest.raises(ValueError, match=why):
             RuleAction.from_dict(raw)
 
@@ -351,6 +403,7 @@ class TestAskingTheOperator:
                     "channel": "telegram",
                     "user": "42",
                     "topic": "labels/pump",
+                    "context": "Score {score} on {name}.",
                 }
             ],
         )
@@ -372,6 +425,7 @@ class TestAskingTheOperator:
                 "channel": "telegram",
                 "user": "42",
                 "timeout": None,
+                "context": "Score 9 on P3.",
             }
         ]
         assert (

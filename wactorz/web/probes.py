@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Liveness and readiness probes, shared by the monitor and the REST interface.
 
 Two different questions, answered at different paths because acting on them

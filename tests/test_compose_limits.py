@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The compose stacks cap what each container can take, and publish to this host only.
 
 Without a ceiling, a leak or a runaway agent ends with the host out of memory or
@@ -13,6 +14,7 @@ purpose is listed here.
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -40,7 +42,7 @@ OPEN_TO_THE_NETWORK = {("compose.yaml", "mosquitto", "8883")}
 _VARIABLE = re.compile(r"\$\{(\w+):-([^}]*)\}")
 
 
-def _services(name: str) -> dict[str, dict]:
+def _services(name: str) -> dict[str, dict[str, Any]]:
     # BaseLoader keeps every scalar as written, so `${NAME:-default}` is compared
     # as text whether or not it is quoted.
     compose = yaml.load((ROOT / name).read_text(encoding="utf-8"), Loader=yaml.BaseLoader)

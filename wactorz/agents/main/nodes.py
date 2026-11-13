@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What main knows about remote nodes, and the questions it answers about them.
 
 A node reports itself by heartbeat: who it is, which agents it is running, and
@@ -19,12 +20,15 @@ import logging
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any
+from typing import Any, cast
 
 from ..._version import __version__
-from ...config import NODE_SIGNING
+from ...config import CONFIG, MODEL_CODE_NODE, NODE_SIGNING
+from ...core import topic_bus
 from ...core.actor import derive_actor_id
 from ...core.compatibility import compatible
+from ...core.identity import given_actor_id
+from ...core.manifests import NodeManifest
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -35,11 +39,22 @@ from ...core.mqtt import (
     user_properties,
 )
 from ...core.node_publications import Stamp, admit, signed_stamp
+from ...core.topic_bus import TopicContract
+from ...core.topics import (
+    NAMESPACE,
+    NODES,
+    every_namespace,
+    namespace_of,
+    node_topic,
+    own_topic_parts,
+)
 from .hosts import NodeHost
+from .installs import HEALTH_TOPIC, OtherInstalls
 from .manifests import ManifestRegistry
+from .spawn_registry import SpawnRegistry
 from .voices import speaks_for
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long to wait before reconnecting after the broker goes away.
 RECONNECT_DELAY_S = 5.0
@@ -148,13 +163,15 @@ def _unsigned_notice(node_name: str) -> str:
     return f"unsigned-node:{node_name}"
 
 
-def remote_actor_id(agent_name: str) -> str:
-    """The actor id a remote agent has, derived from its name.
+def remote_actor_id(agent_name: str, node: str, spawn_registry: SpawnRegistry) -> str:
+    """The actor id the agent ``agent_name`` on ``node`` runs under: the one its spawn registry entry keeps.
 
-    Deterministic so main and the node arrive at the same id without either
-    telling the other — the node builds it the same way for `_RemoteAgent`.
+    A node's heartbeat names its agents but not their ids. An agent main has no
+    entry for was not spawned by main, and runs under its name's derived id, as
+    every agent did before ids were kept.
     """
-    return derive_actor_id(agent_name)
+    entry = spawn_registry.at(agent_name, node) or {}
+    return given_actor_id(entry.get("actor_id")) or derive_actor_id(agent_name)
 
 
 class NodeManager:
@@ -169,10 +186,14 @@ class NodeManager:
         self, host: NodeHost | None = None, manifests: ManifestRegistry | None = None
     ) -> None:
         self.host = host
+        #: The shape of each entry: see `wactorz.core.heartbeats.NodeHeartbeat`'s
+        #: docstring for how it differs from the wire heartbeat.
         self.known: dict[str, dict[str, Any]] = {}
         #: Consulted before filling a gap: a manifest, when one has arrived, is
         #: better than anything a spawn config can say.
-        self.manifest_registry = manifests if manifests is not None else ManifestRegistry(host)
+        self.manifest_registry: ManifestRegistry = (
+            manifests if manifests is not None else ManifestRegistry(host)
+        )
         #: (node, agent) -> consecutive heartbeats that agent has been missing.
         self.agent_misses: dict[tuple[str, str], int] = {}
         #: Nodes a deploy is restarting right now. Their silence and their empty
@@ -185,12 +206,18 @@ class NodeManager:
         #: from `known` and not dropped with it: a node forgotten for going
         #: quiet does not send its manifest again when it comes back -- the
         #: broker delivers a retained message on subscribing, not on reconnects.
-        self.node_manifests: dict[str, dict[str, Any]] = {}
+        self.node_manifests: dict[str, NodeManifest] = {}
         #: node -> run id -> the count of the newest signed heartbeat from that run,
         #: so each heartbeat is taken once. See `wactorz.core.node_publications`.
         self.heartbeat_counts: dict[str, OrderedDict[str, int]] = {}
         #: Nodes already said in chat to be sending unsigned heartbeats.
         self.unsigned_reported: set[str] = set()
+        #: Nodes already said in chat to run agents under ids other than theirs.
+        self.ids_reported: set[str] = set()
+        #: (namespace, node) pairs already said in chat to be on another namespace.
+        self.namespaces_reported: set[tuple[str, str]] = set()
+        #: Another install heard on this one's topics, from its health.
+        self.installs: OtherInstalls = OtherInstalls(host)
         #: Told of every heartbeat taken, as main took it: the dashboard shows a
         #: node from this, never from the broker, where anyone may publish one.
         self.watchers: list[HeartbeatWatcher] = []
@@ -360,12 +387,20 @@ class NodeManager:
                     # them at QoS 0 for the same reason; asking for more here
                     # would only be misleading, since delivery is the lower of
                     # the two.
-                    await client.subscribe("nodes/+/heartbeat", qos=0)
-                    await client.subscribe("nodes/+/migrate_result", qos=1)
-                    await client.subscribe("nodes/+/manifest", qos=1)
+                    # Under every namespace, this one's included, so that a node on
+                    # the wrong one is heard of rather than missing in silence.
+                    for heartbeats in every_namespace(NODES, "+", "heartbeat"):
+                        await client.subscribe(heartbeats, qos=0)
+                    # Main's own health, from its monitor: another install's tells it apart.
+                    await client.subscribe(HEALTH_TOPIC, qos=0)
+                    await client.subscribe(node_topic("+", "migrate_result"), qos=1)
+                    await client.subscribe(node_topic("+", "manifest"), qos=1)
                     logger.info("[main] Subscribed to node heartbeats.")
                     last_error = None
                     async for message in client.messages:
+                        if str(message.topic) == HEALTH_TOPIC:
+                            self.installs.receive(message.payload)
+                            continue
                         await self.receive_node_message(
                             str(message.topic), message.payload, user_properties(message)
                         )
@@ -398,10 +433,16 @@ class NodeManager:
         node's signature; None for a message that did not come off the broker,
         which has nothing to check.
         """
+        if topic.endswith("/heartbeat"):
+            sent_under = namespace_of(topic, NODES)
+            if sent_under is not None and sent_under[0] != NAMESPACE:
+                # Heard only to say so: never taken as the node's word.
+                self._say_other_namespace(*sent_under)
+                return
         if topic.endswith("/manifest") and not payload:
             # The retained manifest cleared: the node was removed.
-            parts = topic.split("/")
-            if len(parts) == 3:
+            parts = own_topic_parts(topic)
+            if parts is not None and len(parts) == 3 and parts[0] == NODES:
                 self.node_manifests.pop(parts[1], None)
             return
         try:
@@ -410,8 +451,8 @@ class NodeManager:
             return
         if not isinstance(data, dict):
             return
-        parts = topic.split("/")
-        if len(parts) < 3:
+        parts = own_topic_parts(topic)
+        if parts is None or len(parts) < 3 or parts[0] != NODES:
             return
         await self._route(parts[1], topic, payload or b"", properties, data)
 
@@ -436,7 +477,7 @@ class NodeManager:
         if topic.endswith("/migrate_result"):
             self.report_migration(data)
         elif topic.endswith("/manifest"):
-            self.receive_manifest(node_name, data)
+            self.receive_manifest(node_name, cast("NodeManifest", data))
 
     def _heartbeat_signed(
         self, node_name: str, topic: str, payload: bytes, properties: Mapping[str, str] | None
@@ -471,20 +512,17 @@ class NodeManager:
         """Whether a message from ``node_name`` may speak for ``agent_name``: see `voices`."""
         return self.host is None or speaks_for(self.host, node_name, agent_name)
 
-    def node_for(self, agent_name: str) -> str:
-        """The node a task for ``agent_name`` goes to, or "" when none has it.
+    def nodes_for(self, agent_name: str) -> list[str]:
+        """Every node a task for ``agent_name`` could go to; more than one makes the name ambiguous.
 
         One whose latest heartbeat lists the agent and that may speak for it:
         a node listing an agent main places elsewhere is not sent its tasks.
         """
-        return next(
-            (
-                node
-                for node, info in self.known.items()
-                if agent_name in info.get("agents", []) and self.speaks_for(node, agent_name)
-            ),
-            "",
-        )
+        return [
+            node
+            for node, info in self.known.items()
+            if agent_name in info.get("agents", []) and self.speaks_for(node, agent_name)
+        ]
 
     def refuses_tasks(self, node_name: str) -> str | None:
         """Why no task should go to ``node_name``, when its replies would be refused anyway.
@@ -502,7 +540,7 @@ class NodeManager:
             f"from it (WACTORZ_NODE_SIGNING=enforce). Deploy it again: /deploy {node_name}"
         )
 
-    def receive_manifest(self, node_name: str, data: dict[str, Any]) -> None:
+    def receive_manifest(self, node_name: str, data: NodeManifest) -> None:
         """Take what a node says its machine is.
 
         Kept as it arrived, for the readers that know the fields. One without a
@@ -514,6 +552,42 @@ class NodeManager:
             logger.warning("[main] Ignoring a manifest from node %r with no version.", node_name)
             return
         self.node_manifests[node_name] = data
+        self._say_ids_not_honoured(node_name, data)
+
+    def _say_ids_not_honoured(self, node_name: str, manifest: NodeManifest) -> None:
+        """Say in chat, once per node, which agents it runs under another id than theirs.
+
+        Main sends an agent with an id of its own only to a node that says it
+        honours one, or to a node whose manifest has not arrived yet, as at a
+        restart. A node from before ids were kept, sent one in that window, runs
+        it under the id derived from its name, so its chat history and retained
+        records are not where main keeps them. The manifest is when main can tell.
+        """
+        host = self.host
+        if host is None or manifest.get("actor_ids") is True or node_name in self.ids_reported:
+            return
+        stranded = sorted(
+            cfg["name"]
+            for cfg in host._get_spawn_registry().on_node(node_name)
+            if cfg.get("actor_id") != derive_actor_id(cfg["name"])
+        )
+        if not stranded:
+            return
+        self.ids_reported.add(node_name)
+        listed = ", ".join(f"'{name}'" for name in stranded)
+        logger.warning("[main] Node %r runs %s under ids other than theirs", node_name, listed)
+        host._queue_notification(
+            {
+                "severity": "warning",
+                "about": f"ids-not-honoured:{node_name}",
+                "message": (
+                    f"Node '{node_name}' runs {listed} under an id derived from the name rather "
+                    f"than the one main keeps, so their chat history and records are kept apart. "
+                    f"It was deployed before agents kept their ids. Deploy it again: "
+                    f"/deploy {node_name}"
+                ),
+            }
+        )
 
     def targets_of(self, node_name: str) -> list[str]:
         """The library agents `node_name` says it can build, by import path.
@@ -546,12 +620,37 @@ class NodeManager:
         manifest = self.node_manifests.get(node_name) or {}
         return manifest.get("code_bundles") is True
 
+    def takes_tasks_by_node(self, node_name: str) -> bool | None:
+        """Whether `node_name` takes a task on its own topic, ``agents/at/<node>/<name>/task``.
+
+        From its manifest; a node from a release before that takes tasks only by
+        name. None while no manifest has arrived, as for `takes_actor_ids`.
+        """
+        manifest = self.node_manifests.get(node_name)
+        if manifest is None:
+            return None
+        return manifest.get("tasks_by_node") is True
+
+    def takes_actor_ids(self, node_name: str) -> bool | None:
+        """Whether `node_name` runs an agent under the id its spawn names.
+
+        From its manifest, which says so; a node from a release before ids
+        derives an id from the agent's name. None while no manifest has
+        arrived, which is not the same as no: at a restart, main restores its
+        agents before every node's retained manifest has reached it.
+        """
+        manifest = self.node_manifests.get(node_name)
+        if manifest is None:
+            return None
+        return manifest.get("actor_ids") is True
+
     def forget(self, node_name: str) -> None:
         """Forget a node altogether, as removing it does: its heartbeat and its machine."""
         self.known.pop(node_name, None)
         self.node_manifests.pop(node_name, None)
         self.heartbeat_counts.pop(node_name, None)
         self.unsigned_reported.discard(node_name)
+        self.ids_reported.discard(node_name)
 
     async def receive_heartbeat(
         self, node_name: str, data: dict[str, Any], *, signed: bool = True
@@ -572,7 +671,7 @@ class NodeManager:
             if NODE_SIGNING == "enforce":
                 self._take_unsigned(node_name, data, before)
                 await self._tell_watchers(
-                    node_name, {**data, "agents": self.known[node_name]["agents"]}
+                    node_name, {**data, "agents": self.known[node_name].get("agents", [])}
                 )
                 return
         if signed:
@@ -613,7 +712,7 @@ class NodeManager:
             await host.settle_withdrawals(node_name, set(agents))
             host.node_reported(node_name)
         self._bootstrap_contracts(node_name, agents)
-        self._touch_monitor(agents)
+        self._touch_monitor(node_name, agents)
         await self.follow_signing(node_name, self.known[node_name], before)
         self.follow_restarts(node_name, self.known[node_name], before)
         await self._tell_watchers(node_name, data)
@@ -654,6 +753,41 @@ class NodeManager:
             }
         )
         self.known[node_name] = record
+
+    def _say_other_namespace(self, namespace: str, node_name: str) -> None:
+        """Say in chat, once per node and namespace, that one of this install's nodes is on another.
+
+        Its heartbeats arrive under a namespace that is not this install's, so
+        nothing else it says reaches main. Only a node this install deploys or
+        places agents on is said: another install's nodes on the same broker are
+        what a namespace is for, and are logged at debug. Best effort: a broker's
+        access list may keep such a node's heartbeats from main altogether.
+        """
+        host = self.host
+        if host is None or (namespace, node_name) in self.namespaces_reported:
+            return
+        ours = {target.name for target in CONFIG.deploy_targets} | {MODEL_CODE_NODE}
+        ours |= {str(cfg.get("node")) for cfg in host._get_spawn_registry() if cfg.get("node")}
+        if node_name not in ours:
+            logger.debug(
+                "[main] Heard node %r on namespace %r, not this install's", node_name, namespace
+            )
+            return
+        self.namespaces_reported.add((namespace, node_name))
+        theirs = f"namespace '{namespace}'" if namespace else "no namespace"
+        mine = f"namespace '{NAMESPACE}'" if NAMESPACE else "no namespace"
+        logger.warning("[main] Node %r is on %s; this install is on %s", node_name, theirs, mine)
+        host._queue_notification(
+            {
+                "severity": "warning",
+                "about": f"other-namespace:{node_name}",
+                "message": (
+                    f"Node '{node_name}' is on {theirs}, and this install is on {mine}, so "
+                    f"main hears nothing else from it. It was deployed before the namespace "
+                    f"changed. Deploy it again: /deploy {node_name}"
+                ),
+            }
+        )
 
     def _say_unsigned(self, node_name: str) -> None:
         """Say in chat, once per node, that its heartbeats are unsigned and what main does about it."""
@@ -808,15 +942,15 @@ class NodeManager:
         appeared yet is never started on — a freshly spawned one is absent
         because its first heartbeat is still coming, not because it died. An
         agent the registry now places elsewhere has migrated, and is not this
-        node's to lose.
+        node's to lose. One kept stopped is absent because it was stopped, and
+        its entry is what starts it again.
         """
         host = self.host
         if host is None or node_name in self.redeploying:
             return []
         to_prune: list[str] = []
-        for agent_name, cfg in list(host._get_spawn_registry().items()):
-            if (cfg.get("node", "") or "").strip() != node_name:
-                continue
+        for cfg in host._get_spawn_registry().running_on(node_name):
+            agent_name = cfg["name"]
             key = (node_name, agent_name)
             if agent_name in current:
                 self.agent_misses.pop(key, None)
@@ -846,7 +980,7 @@ class NodeManager:
                 agent_name,
                 node_name,
             )
-            host._remove_from_spawn_registry(agent_name)
+            host._remove_from_spawn_registry(agent_name, node_name)
             # The node's retained desired_state is what it reconciles against on
             # its next reboot. Dropping the spawn entry without rewriting it
             # leaves the instruction to start this agent in place, so the node
@@ -867,29 +1001,25 @@ class NodeManager:
         have been true, so it is used where there is nothing better and never
         over a manifest-derived contract.
         """
-        from ...core.topic_bus import TopicContract, get_topic_bus
-
         host = self.host
         if host is None:
             return
         try:
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if not bus:
                 return
             spawn_registry = host._get_spawn_registry()
             for name in agents:
-                if bus.registry.get(name) is not None:
+                if bus.registry.at(name, node_name) is not None:
                     continue
                 if name in self.manifest_registry.manifests:
                     continue
-                cfg = spawn_registry.get(name)
+                cfg = spawn_registry.at(name, node_name)
                 if not cfg:
                     continue
                 if not (cfg.get("publishes") or cfg.get("subscribes")):
                     continue
-                contract = TopicContract.from_spawn_config(
-                    {**cfg, "node": node_name, "actor_id": remote_actor_id(name)}
-                )
+                contract = TopicContract.from_spawn_config({**cfg, "node": node_name})
                 bus.register_contract(contract)
                 logger.debug(
                     "[main] Bootstrapped TopicContract for %r from spawn config "
@@ -899,7 +1029,7 @@ class NodeManager:
         except Exception as exc:
             logger.debug("[main] TopicContract bootstrap failed: %s", exc)
 
-    def _touch_monitor(self, agents: list[str]) -> None:
+    def _touch_monitor(self, node_name: str, agents: list[str]) -> None:
         """Keep the monitor's heartbeat tracker current for remote agents.
 
         Without this the monitor raises a silence alert for every remote agent,
@@ -912,8 +1042,9 @@ class NodeManager:
         if not monitor or not hasattr(monitor, "_last_seen"):
             return
         now = time.time()
+        spawn_registry = host._get_spawn_registry()
         for name in agents:
-            monitor._last_seen[remote_actor_id(name)] = now
+            monitor._last_seen[remote_actor_id(name, node_name, spawn_registry)] = now
 
     def report_migration(self, data: dict[str, Any]) -> None:
         """Turn a node's failed migration into a notification.
@@ -990,10 +1121,11 @@ class NodeManager:
             )
             # Find all agents that belong to this node according to the
             # spawn registry (the heartbeat's last-known agent list may
-            # be stale).
-            lost = [n for n, cfg in reg.items() if cfg.get("node", "").strip() == node_name]
+            # be stale). An agent kept stopped is not running there to be
+            # lost: its entry stays, to be started when the node is back.
+            lost = [cfg["name"] for cfg in reg.running_on(node_name)]
             for agent_name in lost:
-                host._remove_from_spawn_registry(agent_name)
+                host._remove_from_spawn_registry(agent_name, node_name)
                 # As in _prune_vanished: the retained desired_state has
                 # to lose the agent too, or the node resurrects it on
                 # its next reconcile into a main that has forgotten it.
@@ -1001,7 +1133,7 @@ class NodeManager:
                 # Queued in the node's session while it is away, behind
                 # anything already waiting there, so on its return it
                 # stops this agent rather than starting a withdrawn spawn.
-                await host._mqtt_publish(f"nodes/{node_name}/stop", {"name": agent_name}, qos=1)
+                await host._mqtt_publish(node_topic(node_name, "stop"), {"name": agent_name}, qos=1)
                 await host._clear_agent_manifest(agent_name)
                 host._record_agent_deletion(
                     agent_name,

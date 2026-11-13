@@ -1,4 +1,5 @@
-"""Agents on the node: started there, moved home and out again, and asking the model.
+# SPDX-License-Identifier: Apache-2.0
+"""Agents on the node: started there, stopped and started, moved home and out again, and asking the model.
 
 The agent that is moved counts what it is sent and keeps the count, so each
 answer says whether its memory came with it. Moved home, it must leave nothing
@@ -49,6 +50,11 @@ def _on_the_server(app: backend.Backend) -> set[str]:
 SETTLED_FOR_S = 35.0
 
 
+#: Longer than main waits before taking an agent its node no longer reports for
+#: one that crashed.
+STOPPED_FOR_S = 50.0
+
+
 def _placed_and_kept(dashboard: browser.Dashboard, agent: str, row: str) -> None:
     """``agent``'s card stays, and the nodes panel lists it under ``row`` alone.
 
@@ -73,6 +79,8 @@ def _placed_and_kept(dashboard: browser.Dashboard, agent: str, row: str) -> None
     )
     seen = dashboard.card_comings_and_goings(agent)
     assert "removed" not in seen, seen
+    # The card says where it runs too, as the panel does.
+    assert dashboard.card_node(agent) == ("" if row == "local" else f"on {row}")
 
 
 def test_main_starts_an_agent_on_the_node(
@@ -100,6 +108,49 @@ def test_it_answers_from_there(dashboard: browser.Dashboard) -> None:
     dashboard.say("one", to="counter")
 
     dashboard.expect("counter", "counted 1")
+
+
+def test_stopped_from_its_card_it_is_kept_stopped(
+    dashboard: browser.Dashboard, app: backend.Backend
+) -> None:
+    dashboard.press("counter", "stop")
+
+    waiting.until(
+        lambda: dashboard.card_state("counter") == "stopped", what="the card to say stopped"
+    )
+    waiting.until(
+        lambda: "counter" not in _on_the_node(app),
+        what="the node to have stopped it",
+        interval=NODE_POLL_S,
+    )
+    # Heartbeat after heartbeat without it: it is one that was stopped, not one
+    # that crashed, so its card stays and nothing starts it again.
+    waiting.holds_for(
+        lambda: dashboard.card_state("counter") == "stopped" and "counter" not in _on_the_node(app),
+        what="counter staying stopped, on its card and on the node",
+        window=STOPPED_FOR_S,
+        interval=1,
+    )
+    # Starting it is the way back, and it is offered.
+    assert "Start" in dashboard.card_actions("counter")
+
+
+def test_started_from_its_card_it_runs_on_the_node_again(
+    dashboard: browser.Dashboard, app: backend.Backend
+) -> None:
+    dashboard.press("counter", "start")
+
+    waiting.until(
+        lambda: "counter" in _on_the_node(app),
+        what="the node to be running 'counter' again",
+        interval=NODE_POLL_S,
+    )
+    waiting.becomes_and_stays(
+        lambda: dashboard.card_state("counter") == "running", what="the card to say running"
+    )
+    assert "counter" not in _on_the_server(app)
+    # What it counted before the stop is asked for once it has moved home, below.
+    _placed_and_kept(dashboard, "counter", NODE_NAME)
 
 
 def test_moved_home_it_remembers(dashboard: browser.Dashboard, app: backend.Backend) -> None:

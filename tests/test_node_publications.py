@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A node signs what it publishes, and main checks it against the node it expects.
 
 Every node may write the topics agents share, so without this a message on a

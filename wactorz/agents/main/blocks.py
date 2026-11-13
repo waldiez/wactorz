@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Keep the model's action blocks out of a reply while it streams.
 
 Main's model acts by writing ``<spawn>``, ``<delete>`` and ``<delegate>``

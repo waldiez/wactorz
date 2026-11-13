@@ -729,7 +729,7 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
         # which checks isinstance, so a mock resolves to None and n1 — which is
         # only reachable through the spawn registry — never gets a desired_state
         # publish. `recall` already answers None for an unset key.
-        main = MainActor(llm_provider=None, name="main", persistence_dir=tempfile.mkdtemp())
+        main = MainActor(llm_provider=None, name="main")
         main.protected = True
         main._get_spawn_registry = lambda: SpawnRegistry.from_names({"agentX": {"node": "n1"}})  # type: ignore[method-assign]
 
@@ -781,7 +781,7 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
         # `find_main_actor`, which checks isinstance, so a mock resolves to None
         # and the node-purge sweep under test never runs. An empty one already
         # answers `_get_spawn_registry()` with {} and `recall()` with None.
-        main = MainActor(llm_provider=None, name="main", persistence_dir=tempfile.mkdtemp())
+        main = MainActor(llm_provider=None, name="main")
         main.protected = True
         main.actor_id = "main-id"
         spawned = MagicMock()

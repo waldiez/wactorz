@@ -7,7 +7,6 @@ run whatever that path reached.
 """
 
 import asyncio
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -19,6 +18,7 @@ from wactorz.agents.llm_agent import LLMProvider
 from wactorz.agents.mixins.spawning import SpawnMixin
 from wactorz.agents.rule_agent import RuleAgent
 from wactorz.core.actor import ActorState
+from wactorz.core.paths import resolve_state_dir
 
 if TYPE_CHECKING:
     from wactorz.core.registry import ActorRegistry
@@ -46,7 +46,7 @@ class _Host(SpawnMixin):
         self.llm = cast(LLMProvider, object())
         self._registry = cast("ActorRegistry", _Registry())
         self._result_futures: dict[str, asyncio.Future[Any]] = {}
-        self._persistence_dir = Path(tempfile.mkdtemp()) / "main"
+        self._persistence_dir = Path(resolve_state_dir()) / "main"
         self.spawn_calls: list[tuple[Any, dict[str, Any]]] = []
         self.registered: list[dict[str, Any]] = []
         self.state = ActorState.RUNNING

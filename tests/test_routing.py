@@ -6,7 +6,6 @@ LLMAgent host. No broker or real agents required.
 """
 
 import asyncio
-import tempfile
 import types
 from pathlib import Path
 from typing import Any
@@ -14,6 +13,7 @@ from typing import Any
 import pytest
 
 from wactorz.agents.main.routing import RoutingMixin
+from wactorz.core.paths import resolve_state_dir
 
 
 def run(coro) -> Any:
@@ -48,7 +48,7 @@ class RoutingHost(RoutingMixin):
         self.llm = llm
         self._registry = registry
         self._result_futures = {}
-        self._persistence_dir = Path(tempfile.mkdtemp()) / "main"
+        self._persistence_dir = Path(resolve_state_dir()) / "main"
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cost_usd = 0.0

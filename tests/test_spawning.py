@@ -13,7 +13,6 @@ Run with ``pytest`` (or ``make test-py``). Async mixin methods are driven throug
 import asyncio
 import json
 import logging
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, NoReturn, cast
@@ -30,6 +29,7 @@ from wactorz.agents.mixins import spawning
 from wactorz.agents.mixins.spawning import SpawnMixin, SpawnPlaceholder
 from wactorz.core.actor import ActorState, ReplyError
 from wactorz.core.packages import APPROVAL_TIMEOUT_S
+from wactorz.core.paths import resolve_state_dir
 from wactorz.core.persistence import PickleStore, WactorzDB
 from wactorz.core.pip import PIP_TIMEOUT_S
 
@@ -98,7 +98,7 @@ class _BaseHost(SpawnMixin):
         self._registry = registry
         self.registry: FakeRegistry = registry
         self._result_futures = {}
-        self._persistence_dir = Path(tempfile.mkdtemp()) / name  # .parent is the base
+        self._persistence_dir = Path(resolve_state_dir()) / name  # .parent is the base
         self.spawn_calls = []  # (cls, kwargs)
         self.sent = []  # installer payloads
         self.published = []  # mqtt dashboard echoes

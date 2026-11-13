@@ -14,7 +14,6 @@ Run with ``pytest``. Async methods are driven through ``asyncio.run``.
 
 import asyncio
 import re
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -28,6 +27,7 @@ from wactorz.agents.main.planning import (
     _strip_dryrun_bypass,
     starts_with_bypass,
 )
+from wactorz.core.paths import resolve_state_dir
 
 
 def run(coro) -> Any:
@@ -53,7 +53,7 @@ class PlanningHost(PlanningMixin):
         self._store = {}
         self._registry = registry
         self._facts = facts or {}
-        self._persistence_dir = Path(tempfile.mkdtemp()) / "main"
+        self._persistence_dir = Path(resolve_state_dir()) / "main"
         self._result_futures = {}
 
     def recall(self, key, default=None) -> Any:

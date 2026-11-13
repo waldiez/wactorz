@@ -1310,6 +1310,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def _keep_stopped(self, actor_id: str, stopped: bool) -> None:
         self.spawns._keep_stopped(actor_id, stopped)
 
+    def keep_local_stop(self, actor_id: str, stopped: bool) -> None:
+        """Remember that one of main's own agents was stopped on purpose, or started again."""
+        self.spawns.keep_local_stop(actor_id, stopped)
+
     async def stop_agent_on_node(
         self, name: str, node: str, actor_id: str | None = None
     ) -> Outcome:

@@ -1235,8 +1235,13 @@ class Migration:
             return f"Agent '{found.name}' is already on '{found.node or 'local'}'."
         kept = (found.config or {}).get("actor_id")
         if self.host is not None and self.host._get_spawn_registry().is_stopped(kept):
-            # Its node hands over a running agent's state; a stopped one is not
-            # there to hand anything over.
+            # Where it runs hands over a running agent's state; a stopped one is
+            # not there to hand anything over.
+            if not found.node:
+                return (
+                    f"'{found.name}' is stopped on main. Start it first "
+                    f"(/start {found.name}), then move it."
+                )
             return (
                 f"'{found.name}' is stopped on '{found.node}'. Start it there first "
                 f"(/start {found.name}@{found.node}), then move it."

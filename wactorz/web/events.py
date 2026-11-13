@@ -43,6 +43,8 @@ DELETE_AGENT_FRAME = "delete_agent"
 #: no heartbeat or status yet. Every other state is one the agent reported (or a
 #: command it accepted), so "running" keeps meaning ready, reachable over MQTT.
 STARTING = "starting"
+#: What an agent stopped on purpose reports, and what it is listed as.
+STOPPED = "stopped"
 
 
 def _evict_stalest() -> None:
@@ -137,6 +139,24 @@ def record_heartbeat(agent_id: str, data: Any) -> None:
             ag["node"] = data["node"]
         else:
             ag.pop("node", None)
+
+
+def list_stopped_here() -> None:
+    """Give an entry to each actor of this process that is stopped and has none.
+
+    An agent put back stopped when the process starts never runs, so it sends no
+    heartbeat, and a heartbeat is what opens an entry: without one it would be
+    missing from every snapshot. What it would report is read from the actor
+    itself, in the shape a heartbeat has.
+    """
+    if runtime.registry is None:
+        return
+    for actor in runtime.registry.all_actors():
+        if (
+            getattr(getattr(actor, "state", None), "value", None) == STOPPED
+            and actor.actor_id not in runtime.state["agents"]
+        ):
+            record_heartbeat(actor.actor_id, actor._build_heartbeat())
 
 
 def rebuild_from_registry(registry: Any) -> int:
@@ -588,6 +608,7 @@ def snapshot(include_totals: bool = True) -> dict[str, Any]:
         }
     for nd in runtime.state["nodes"].values():
         nd["online"] = node_online(nd.get("last_seen", 0))
+    list_stopped_here()
 
     if not include_totals:
         return {

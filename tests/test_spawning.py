@@ -54,6 +54,8 @@ class FakeActor:
         self.name = name
         self.actor_id = f"id-{name}"
         self.stopped = False
+        # What a spawn hands back runs, unless it was put back stopped.
+        self.state = ActorState.RUNNING
 
     async def stop(self) -> None:
         self.stopped = True
@@ -681,14 +683,9 @@ def test_the_wait_outlasts_every_pip_run_the_installer_may_make(monkeypatch, mai
 # ── Flags / wiring ───────────────────────────────────────────────────────────
 
 
-def test_topiccontract_registered(monkeypatch, main_host) -> None:
-    recorded = []
-
-    class _RecorderBus:
-        def register_contract(self, contract) -> None:
-            recorded.append(contract)
-
-    monkeypatch.setattr("wactorz.core.topic_bus.get_topic_bus", lambda: _RecorderBus())
+def test_a_config_that_names_topics_hands_the_agent_its_contract(main_host) -> None:
+    # The agent puts it on the bus each time it starts, and is built again from
+    # the same arguments when the supervisor restarts it.
     run(
         main_host._spawn_local_from_config(
             {
@@ -700,17 +697,17 @@ def test_topiccontract_registered(monkeypatch, main_host) -> None:
             }
         )
     )
-    assert len(recorded) == 1
+
+    _cls, kwargs = main_host.spawn_calls[0]
+    assert kwargs["spawn_contract"].name == "pub"
+    assert kwargs["spawn_contract"].publishes == ["sensors/cpu"]
 
 
-def test_topiccontract_skipped_without_pubsub(monkeypatch, main_host) -> None:
-    recorded = []
-    monkeypatch.setattr(
-        "wactorz.core.topic_bus.get_topic_bus",
-        lambda: type("B", (), {"register_contract": lambda self, c: recorded.append(c)})(),
-    )
+def test_a_config_that_names_no_topics_hands_it_none(main_host) -> None:
     run(main_host._spawn_local_from_config({"name": "nopub", "type": "dynamic", "code": "x"}))
-    assert recorded == []
+
+    _cls, kwargs = main_host.spawn_calls[0]
+    assert kwargs["spawn_contract"] is None
 
 
 # ── Registry & timezone hooks (main vs peer) ─────────────────────────────────

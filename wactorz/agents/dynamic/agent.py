@@ -19,6 +19,7 @@ The `agent` parameter gives access to:
 """
 
 import asyncio
+import dataclasses
 import inspect
 import logging
 import re
@@ -139,6 +140,7 @@ class DynamicAgent(Actor):
         trusted: bool = False,  # True = catalog agent, skip safety validator
         task_timeout_s: float | None = None,  # recipe's own handle_task() limit
         artifacts: Mapping[str, Mapping[str, Any]] | None = None,  # see `AgentAPI.artifact_path`
+        spawn_contract: topic_bus.TopicContract | None = None,  # what its spawn config declared
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -161,6 +163,11 @@ class DynamicAgent(Actor):
         self.output_schema: dict[str, Any] = output_schema or {}
         self._llm_provider = llm_provider
         self._trusted = trusted  # catalog agents bypass safety checks
+        #: The topics this agent's spawn config declared, from whoever spawned
+        #: it. Put on the bus at each start, since a stop takes an agent's
+        #: contracts off it; and given at construction, so that an agent the
+        #: supervisor builds again, from what the first was built from, has it.
+        self.spawn_contract = spawn_contract
 
         # Compiled functions — populated in on_start
         self._fn_setup = None
@@ -290,6 +297,7 @@ class DynamicAgent(Actor):
             return
 
         self._start_program()
+        self._declare_spawn_contract()
 
         # Publish manifest immediately so main's registry knows this agent exists
         # even if it never calls publish() (pure handle_task agents, etc.)
@@ -468,6 +476,23 @@ class DynamicAgent(Actor):
             )
         except Exception as exc:
             logger.debug("[%s] Final metrics publish failed: %s", self.name, exc)
+
+    def _declare_spawn_contract(self) -> None:
+        """Put on the bus what this agent's spawn declared, if it declared anything.
+
+        Under the id this agent runs with, which its spawn config need not name.
+        """
+        bus = topic_bus.get_topic_bus()
+        if self.spawn_contract is None or not bus:
+            return
+        contract = dataclasses.replace(self.spawn_contract, actor_id=self.actor_id)
+        bus.register_contract(contract)
+        logger.info(
+            "[%s] Declared the topics its spawn named: pub=%s sub=%s",
+            self.name,
+            contract.publishes,
+            contract.subscribes,
+        )
 
     def _unregister_from_bus(self) -> None:
         """Drop this agent's contracts so stale ones do not accumulate."""

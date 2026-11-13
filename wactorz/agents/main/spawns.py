@@ -24,7 +24,7 @@ import uuid
 from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
-from ...core.actor import ReplyError, ask_through, derive_actor_id
+from ...core.actor import ActorState, ReplyError, ask_through, born_stopped, derive_actor_id
 from ...core.addresses import MAIN_NODE, Address, agent_name_error
 from ...core.artifacts import ArtifactError
 from ...core.bundles import BundleError, bundle_for
@@ -391,15 +391,29 @@ class SpawnService:
         )
 
     def _keep_stopped(self, actor_id: str, stopped: bool) -> None:
-        """Keep the agent ``actor_id`` on a node as stopped, or as one that should run again.
+        """Keep the agent ``actor_id`` as stopped, or as one that should run again.
 
         A stopped agent keeps its entry and is left out of everything that
         starts agents or tidies away those that are gone: its node's desired
-        state, the restore at startup, and the removals that follow a node no
-        longer reporting it.
+        state, the restore at startup, which puts one of main's own back stopped,
+        and the removals that follow a node no longer reporting it.
         """
         reg = self._get_spawn_registry().with_stopped(actor_id, stopped)
         self.host.persist(STOPPED_AGENTS_KEY, reg.stopped_form())
+
+    def keep_local_stop(self, actor_id: str, stopped: bool) -> None:
+        """Remember that the agent ``actor_id``, running here, was stopped or started again.
+
+        By its id, and only for an entry main keeps as its own: the name may be
+        kept on a node as well, and that agent's stop is its node's to carry out
+        (`stop_start`). An actor main did not spawn has no entry, and is started
+        by whatever built it.
+        """
+        reg = self._get_spawn_registry()
+        entry = reg.by_id(actor_id)
+        if entry is None or placed_on(entry) or reg.is_stopped(actor_id) == stopped:
+            return
+        self._keep_stopped(actor_id, stopped)
 
     def _registered_actor_id(self, name: str, node: str | None = None) -> str | None:
         """The id the registry keeps for ``name`` -- on ``node``, or its only entry -- or None."""
@@ -450,9 +464,12 @@ class SpawnService:
             # A new entry under another agent's id would overwrite that agent's:
             # a second agent of the name, with no id of its own yet, gets one.
             actor_id = str(uuid.uuid4())
-        if reg.is_stopped(actor_id) and not placed_on(config):
-            # Stopped is something an agent on a node is: one saved as main's own
-            # has been brought here, and runs.
+        stopped_here = running is not None and running.state == ActorState.STOPPED
+        if reg.is_stopped(actor_id) and not placed_on(config) and not stopped_here:
+            # Saved as main's own with nothing of that name stopped here: it was
+            # spawned again, or brought here from the node it was stopped on, and
+            # runs. One that is stopped here stays so: its config was rewritten,
+            # which starts nothing.
             reg = reg.with_stopped(actor_id, False)
             self.host.persist(STOPPED_AGENTS_KEY, reg.stopped_form())
         reg = reg.with_entry({**without_transient_keys(config), "actor_id": actor_id})
@@ -529,8 +546,28 @@ class SpawnService:
         await self._spawn_from_config(config, save=False, from_registry=True)
         logger.info("[%s] Restored: %s", self.host.name, name)
 
+    async def _restore_stopped(self, config: dict[str, Any]) -> None:
+        """Put one of main's own agents back as it was left: built, listed, and not started.
+
+        So that it has a card and `/start` reaches it, as before the restart.
+        Never saves, for the reason `_restore_one` gives.
+        """
+        name = config["name"]
+        if self.host._registry and self.host._registry.find_by_name(name):
+            return
+        try:
+            with born_stopped():
+                await self._spawn_from_config(
+                    current_recipe_config(config), save=False, from_registry=True
+                )
+        except Exception:
+            # One agent that cannot be built must not strand the rest.
+            logger.exception("[%s] Failed to put back %s, stopped", self.host.name, name)
+            return
+        logger.info("[%s] Put back, stopped: %s", self.host.name, name)
+
     async def _restore_spawned_agents(self) -> None:
-        """Put back everything the registry says should be running."""
+        """Put back everything the registry keeps: running, or stopped as it was left."""
         registry = self._get_spawn_registry()
         if not registry:
             return
@@ -547,10 +584,14 @@ class SpawnService:
                 skipped,
             )
 
-        # An agent stopped on a node stays stopped: it is started when asked.
+        # A stopped agent stays stopped: it is started when asked. One on a node
+        # is left to its node; one of main's own is put back here, not running.
         stopped = [str(address_of(e)) for e in registry if registry.is_stopped(e["actor_id"])]
         if stopped:
             logger.info("[%s] Left stopped, as they were: %s", self.host.name, stopped)
+        for config in here:
+            if registry.is_stopped(config["actor_id"]) and config["name"] not in supervised:
+                await self._restore_stopped(config)
         pending = [
             e
             for e in registry

@@ -534,6 +534,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **An agent stopped on the server itself stays stopped when the server restarts.** A stop from the dashboard, the
+  API, `/agents stop` or the agent's commands topic lasted only until the next start, which brought the agent back
+  running; only a stop on a node was remembered. Main now remembers it for the agents it spawned, and at its next
+  start puts such an agent back as it was left: listed as stopped, with its state kept and nothing of it run, until
+  `/start <name>` or the Start button, which also puts it back under supervision. Rewriting a stopped agent's
+  config keeps it stopped; spawning it again, or moving it in from a node, runs it. A stopped agent is not moved:
+  `/migrate` says it is stopped on main and how to start it. An agent your own application passes to
+  `wactorz.run(agents=[...])` or `wactorz.serve` is not one main spawned, and starts with the application as before.
+  A generated agent's declared topics, which a stop takes out of the Wiring view and the planner's sight, are put
+  back by every start, a restart after a crash included; before, only a fresh spawn declared them.
+
 - **Deleting an agent that has only just started really deletes it.** An agent of the server's own process shows on
   the dashboard from the moment it is registered, a few seconds before its first heartbeat. Deleted in that time,
   from its card or with `DELETE /api/actors/{id}`, it was answered "stopping" and went on running: its card came

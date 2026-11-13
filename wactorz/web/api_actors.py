@@ -220,6 +220,9 @@ async def actors_handler(request: web.Request) -> Response:
         # live state the loop owns.
         stored = await asyncio.to_thread(cost.final_costs)
         result = []
+        # A stopped actor with no entry yet gets one, so that it is listed as
+        # stopped and not as starting.
+        events.list_stopped_here()
         for actor in runtime.registry.all_actors():
             if runtime.is_deleted(actor.actor_id):
                 continue

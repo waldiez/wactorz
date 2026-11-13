@@ -16,7 +16,8 @@ import sys
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -487,6 +488,29 @@ def declared_topics(value: Any) -> tuple[str, ...]:
     if isinstance(value, str):
         return (value,) if value else ()
     return tuple(str(topic) for topic in value or () if topic)
+
+
+#: Whether `Actor.spawn` leaves the child it builds stopped: see `born_stopped`.
+_BORN_STOPPED: ContextVar[bool] = ContextVar("born_stopped", default=False)
+
+
+@contextlib.contextmanager
+def born_stopped() -> Iterator[None]:
+    """Within this block, `Actor.spawn` builds its child and does not start it.
+
+    For putting back an agent that was stopped on purpose when the process last
+    ran. The child is registered and known to the supervisor, in the state a
+    stop leaves an actor in, so it is listed and can be started; ``on_start``
+    and ``on_stop`` are not called, and nothing of it runs. A context variable
+    rather than an argument, since a spawn from a config goes through a helper
+    per kind of agent, and through a task of its own when packages are
+    installed first: a task started inside the block keeps the setting.
+    """
+    token = _BORN_STOPPED.set(True)
+    try:
+        yield
+    finally:
+        _BORN_STOPPED.reset(token)
 
 
 class Actor(ABC):
@@ -1113,6 +1137,20 @@ class Actor(ABC):
             if sup is not None:
                 sup.resupervise(self.name, self)
 
+    def _remember_stop(self, stopped: bool) -> None:
+        """Have main remember that this actor was stopped on purpose, or started again.
+
+        What makes a stop outlast a restart of the process: main puts back the
+        agents it spawned when it starts, and one it remembers as stopped is put
+        back stopped. Said once the stop or the start has happened, so one that
+        fails leaves what main remembers as it was. Main keeps it for the agents
+        it spawned, by id; for any other actor this does nothing.
+        """
+        main = self._registry.find_by_name("main") if self._registry else None
+        remember = getattr(main, "keep_local_stop", None)
+        if remember is not None:
+            remember(self.actor_id, stopped)
+
     async def apply_command(self, command: str) -> bool:
         """Run a lifecycle command on this actor. Returns whether it took effect.
 
@@ -1150,9 +1188,11 @@ class Actor(ABC):
                     await self.stop()
                 raise
             self._resume_supervision()
+            self._remember_stop(False)
         elif command == "stop":
             self._release_from_supervision()
             await self.stop()
+            self._remember_stop(True)
         elif command == "delete":
             self._leave_supervision()
             await self.delete_own_traces()
@@ -1389,19 +1429,13 @@ class Actor(ABC):
         if self._registry:
             await self._registry.register(child)
 
-        # Start the child. Registered already, so a start that fails or is
-        # cancelled must take it back out: nothing else holds it to stop, and
-        # supervision has not adopted it yet.
-        try:
-            await child.start()
-        except BaseException:
-            # Shielded, so a second cancellation cannot cut the cleanup short;
-            # it is still passed on once the cleanup is done.
-            try:
-                await asyncio.shield(self._discard_child(child))
-            except asyncio.CancelledError:
-                raise asyncio.CancelledError from None
-            raise
+        stopped = _BORN_STOPPED.get()
+        if stopped:
+            # Put back as it was left: registered, so it has a card and can be
+            # started, with nothing of it running and neither hook called.
+            child.state = ActorState.STOPPED
+        else:
+            await self._start_child(child)
 
         # ── Erlang/OTP: register child under Supervisor so it's never an orphan ──
         # We reach into the registry to find the ActorSystem's supervisor.
@@ -1456,6 +1490,10 @@ class Actor(ABC):
                         restart_window=60.0,
                         restart_delay=2.0,
                     )
+                    if stopped:
+                        # Known to the supervisor and not watched, as after a
+                        # deliberate stop: a start is what supervises it again.
+                        supervisor.release(child.name)
                     logger.info(
                         "[%s] Child '%s' auto-registered under Supervisor.", self.name, child.name
                     )
@@ -1483,6 +1521,23 @@ class Actor(ABC):
         )
         logger.info("[%s] Spawned: %s (%s)", self.name, child.name, child.actor_id[:8])
         return child
+
+    async def _start_child(self, child: Actor) -> None:
+        """Start ``child``, which is registered already, or take it back out.
+
+        A start that fails or is cancelled leaves nothing else holding the child
+        to stop it, and supervision has not adopted it yet.
+        """
+        try:
+            await child.start()
+        except BaseException:
+            # Shielded, so a second cancellation cannot cut the cleanup short;
+            # it is still passed on once the cleanup is done.
+            try:
+                await asyncio.shield(self._discard_child(child))
+            except asyncio.CancelledError:
+                raise asyncio.CancelledError from None
+            raise
 
     # ─── Persistence ──────────────────────────────────────────────────────────
 

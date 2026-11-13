@@ -40,7 +40,6 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
-from ...core import topic_bus
 from ...core.actor import Actor, ActorState, ReplyError, ask_through, derive_actor_id
 from ...core.addresses import MAIN_NODE, agent_name_error
 from ...core.artifacts import ArtifactError, ArtifactStore, pinned_in
@@ -280,6 +279,21 @@ if TYPE_CHECKING:
     _Host = SpawnHost
 else:
     _Host = object
+
+
+def _declared_contract(config: dict[str, Any]) -> TopicContract | None:
+    """The contract ``config`` declares, or None for one that names no topics.
+
+    One whose topics cannot be read as a contract declares nothing either: the
+    agent is still spawned, and is wired by what it says of itself.
+    """
+    if not (config.get("publishes") or config.get("subscribes")):
+        return None
+    try:
+        return TopicContract.from_spawn_config(config)
+    except Exception as exc:
+        logger.debug("TopicContract of %r skipped: %s", config.get("name"), exc)
+        return None
 
 
 def _name_problem(name: str, config: dict[str, Any], existing: bool) -> str | None:
@@ -800,8 +814,9 @@ class SpawnMixin(_Host):
     async def _do_spawn_dynamic(self, config: dict[str, Any], name: str, code: str) -> Actor | None:
         """Construct and start the DynamicAgent. Applies migrated state first,
         passes the ``trusted`` flag (catalog agents skip the safety validator),
-        and registers a TopicContract when the config declares pub/sub topics so
-        the agent is eligible for auto-wiring on the TopicBus.
+        and hands it the TopicContract of a config that declares pub/sub topics,
+        which the agent puts on the TopicBus each time it starts, so that it is
+        eligible for auto-wiring while it runs.
         """
         if config.get("require_install_success") is True and (replaced := pending_restart()):
             await self._report_install_problem(
@@ -816,7 +831,7 @@ class SpawnMixin(_Host):
 
         from ..dynamic import DynamicAgent
 
-        actor = await self.spawn(
+        return await self.spawn(
             DynamicAgent,
             actor_id=config.get("actor_id"),
             name=name,
@@ -830,25 +845,8 @@ class SpawnMixin(_Host):
             trusted=bool(config.get("trusted", False)),
             artifacts=artifacts,
             task_timeout_s=config.get("task_timeout_s"),
+            spawn_contract=_declared_contract(config),
         )
-
-        if actor is not None and (config.get("publishes") or config.get("subscribes")):
-            try:
-                contract = TopicContract.from_spawn_config({**config, "actor_id": actor.actor_id})
-                bus = topic_bus.get_topic_bus()
-                if bus:
-                    bus.register_contract(contract)
-                    logger.info(
-                        "[%s] Registered TopicContract for '%s': pub=%s sub=%s",
-                        self.name,
-                        name,
-                        contract.publishes,
-                        contract.subscribes,
-                    )
-            except Exception as e:
-                logger.debug("[%s] TopicContract registration skipped: %s", self.name, e)
-
-        return actor
 
     # ── Package install ────────────────────────────────────────────────────
 

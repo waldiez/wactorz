@@ -228,6 +228,9 @@ class _Registry:
     def find_by_name(self, name: str) -> _Actor | None:
         return next((a for a in self._actors if a.name == name), None)
 
+    def all_actors(self) -> list[_Actor]:
+        return list(self._actors)
+
 
 class _Main:
     def __init__(self, fail: bool = False, kept: tuple[dict[str, Any], ...] = ()) -> None:

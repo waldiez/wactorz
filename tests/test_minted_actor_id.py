@@ -23,7 +23,14 @@ from wactorz.agents.main.nodes import NodeManager, remote_actor_id
 from wactorz.agents.main.spawn_registry import NAME_KEYED_REGISTRY_KEY, SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService, id_on_node, ids_refused
 from wactorz.agents.mixins import SpawnMixin
-from wactorz.core.actor import Actor, ActorMetrics, Message, build_actor, derive_actor_id
+from wactorz.core.actor import (
+    Actor,
+    ActorMetrics,
+    ActorState,
+    Message,
+    build_actor,
+    derive_actor_id,
+)
 from wactorz.core.addresses import Address
 from wactorz.core.identity import given_actor_id
 from wactorz.core.manifests import NodeManifest
@@ -55,7 +62,10 @@ class _Running:
     """The live actors main can see, by name."""
 
     def __init__(self, **ids: str) -> None:
-        self._actors = {name: SimpleNamespace(name=name, actor_id=i) for name, i in ids.items()}
+        self._actors = {
+            name: SimpleNamespace(name=name, actor_id=i, state=ActorState.RUNNING)
+            for name, i in ids.items()
+        }
 
     def find_by_name(self, name: str) -> Any:
         return self._actors.get(name)
@@ -197,7 +207,7 @@ class TestTheIdASpawnHereRunsUnder:
 
         async def _spawn_llm(config: dict[str, Any], name: str) -> Any:
             built.append(config)
-            return SimpleNamespace(name=name, actor_id=config["actor_id"])
+            return SimpleNamespace(name=name, actor_id=config["actor_id"], state=ActorState.RUNNING)
 
         setattr(main, "_spawn_llm_agent", _spawn_llm)
 

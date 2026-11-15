@@ -7,7 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- **New agents introduce themselves at first startup.** Catalogue spawn replies describe the agent and show examples or a pointer to its help. Generated agents share their description and available examples in chat, including after a package install or on an edge node.
+- **New agents introduce themselves at first startup.** Catalogue and generated agents post a short description and available examples in their own chat. Catalogue agents without examples point to their help.
 
 ### Changed
 

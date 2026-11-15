@@ -35,7 +35,7 @@ from ...core.packages import (
     allowed_by_env,
     unlisted,
 )
-from ...core.spawn_introduction import announce_spawn_introduction, spawn_introduction
+from ...core.spawn_introduction import spawn_introduction
 from ...core.topics import agent_topic, node_topic, topic_name_error
 from ...plugins import MODULE_TYPE, for_target, is_module_config
 from ..catalog_agent import current_recipe_config
@@ -705,9 +705,6 @@ class SpawnService:
             await asyncio.sleep(CATALOGUE_SETTLE_S)
             spawned = registry.find_by_name(recipe)
             if spawned:
-                message = result.get("message")
-                if isinstance(message, str):
-                    await announce_spawn_introduction(spawned, message)
                 return spawned
         logger.warning(
             "[%s] Catalog spawn of %r failed (%s); falling back to LLM code",

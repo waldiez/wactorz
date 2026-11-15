@@ -34,12 +34,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .. import plugins
-from ..core.actor import Actor, ActorState, Message, MessageType, ReplyError
+from ..core.actor import Actor, Message, MessageType, ReplyError
 from ..core.addresses import Address
 from ..core.manifests import AgentManifest
 from ..core.paths import resolve_state_dir
 from ..core.pip import missing_requirements, pending_restart
-from ..core.spawn_introduction import spawn_introduction
+from ..core.spawn_introduction import announce_spawn_introduction, spawn_introduction
 from ..core.topics import agent_topic
 from .dependency_install import InstallOutcome, install_for_agent
 from .dynamic import DynamicAgent
@@ -84,21 +84,6 @@ def _chat_message_with_beta_warning(message: str, beta_warning: str) -> str:
     if not beta_warning:
         return message
     return f"{message}\n\nWarning: {beta_warning}"
-
-
-def _spawn_reply(
-    actor: Actor, name: str, recipe: dict[str, Any], beta_warning: str, *, first_start: bool
-) -> str:
-    """Report an explicit catalogue spawn and introduce a new running agent."""
-    message = _chat_message_with_beta_warning(f"'{name}' spawned and running", beta_warning)
-    if not first_start or actor.state != ActorState.RUNNING:
-        return message
-    intro = spawn_introduction(
-        recipe.get("description"),
-        recipe.get("examples"),
-        help_text=f"For setup and commands, try `@catalog info {name}`.",
-    )
-    return f"{message}\n\n{intro}"
 
 
 # Words that opt a `list` request into showing the (hidden-by-default) beta agents.
@@ -1168,19 +1153,13 @@ class CatalogAgent(Actor):
                         if options:
                             save_config["options"] = dict(options)
                         main._save_to_spawn_registry({**save_config, **placing.saved})
-                    msg = _spawn_reply(
+                    return await self._finish_spawn(
                         actor,
                         resolved,
                         recipe,
                         beta_warning,
                         first_start=placing.moved_from is None,
                     )
-                    logger.info("[%s] %s", self.name, msg)
-                    await self._mqtt_publish(
-                        agent_topic(self.actor_id, "logs"),
-                        {"type": "log", "message": msg, "timestamp": time.time()},
-                    )
-                    return {"ok": True, "message": msg, "agent": resolved}
                 return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
 
             if recipe.get("require_install_success") is not True:
@@ -1343,14 +1322,33 @@ class CatalogAgent(Actor):
         if main:
             # Mark as trusted so it bypasses safety validator on restore
             main._save_to_spawn_registry({**recipe, "trusted": True, **placing.saved})
-        msg = _spawn_reply(
+        return await self._finish_spawn(
             actor, name, recipe, beta_warning, first_start=placing.moved_from is None
         )
+
+    async def _finish_spawn(
+        self,
+        actor: Actor,
+        name: str,
+        recipe: dict[str, Any],
+        beta_warning: str,
+        *,
+        first_start: bool,
+    ) -> dict[str, Any]:
+        """Confirm the catalogue spawn and let the new agent introduce itself in chat."""
+        msg = _chat_message_with_beta_warning(f"'{name}' spawned and running", beta_warning)
         logger.info("[%s] %s", self.name, msg)
         await self._mqtt_publish(
             agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": msg, "timestamp": time.time()},
         )
+        if first_start:
+            intro = spawn_introduction(
+                recipe.get("description"),
+                recipe.get("examples"),
+                help_text=f"For setup and commands, try `@catalog info {name}`.",
+            )
+            await announce_spawn_introduction(actor, intro)
         return {"ok": True, "message": msg, "agent": name}
 
     # Public API ─────────────────────────────────────────────────────────────

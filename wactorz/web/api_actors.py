@@ -258,19 +258,20 @@ async def actor_handler(request: web.Request) -> Response:
     if ag is None:
         return web.json_response({"error": "actor not found"}, status=404)
     payload = _actor_payload(ag)
-    introduction = _actor_introduction(actor_id)
+    introduction = await _actor_introduction(actor_id)
     if introduction:
         payload["introduction"] = introduction
     return web.json_response(payload)
 
 
-def _actor_introduction(actor_id: str) -> str:
+async def _actor_introduction(actor_id: str) -> str:
     """Describe this actor using its saved configuration or its live manifest."""
     registry = runtime.registry
     if registry is None:
         return ""
     main = find_main_actor(registry)
-    config = (main._get_spawn_registry().by_id(actor_id) if main is not None else None) or {}
+    saved = await asyncio.to_thread(main._get_spawn_registry) if main is not None else None
+    config = (saved.by_id(actor_id) if saved is not None else None) or {}
     actor = registry.get(actor_id)
     manifest = getattr(actor, "_published_manifest", None) or {}
     recipe = {}

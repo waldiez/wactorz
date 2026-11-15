@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.0
+
+- Changed: **redeploy your edge nodes** after updating. Main and a node must run the same release series, so the add-on sends a node new agents or migrations only once it is deployed again with `/deploy <node>`. Each node needs Python 3.11 or later; the add-on itself already runs a newer Python and needs nothing.
+- Changed: an installed package's agents, pipelines and extensions load only when the package is named in the `extensions` option (`*` loads everything installed, as before). A node reads its own list from `extensions` on its deploy target, at its next `/deploy`.
+- Changed: a wrong API key sent in a header is throttled like one on the sign-in page, and the right key from that address is refused while the lockout lasts, so update scripts that hold an old key.
+- Added: the model loop. Readings are recorded with the time they happened, a model is trained, judged against labels you give by answering its questions, tried in the shadow of the version served, and promoted by its policy. The Models tab shows it.
+- Added: two agents may share a name on different hosts, addressed as `name@node` in chat, on the dashboard and in every command.
+- Added: a Wiring tab that shows which agent publishes what and who reads it, and an Inbox for every question an agent is waiting on you for.
+- Added: the `namespace` option, so two installs can share one broker.
+- Fixed: an agent stopped on the add-on stays stopped across a restart, and an agent on a node can be stopped and started again.
+- Fixed: the dashboard no longer waits forever on a server that stopped answering, and uploads, resets and the chat log no longer hold every agent while they use the disk.
+
 ## 0.7.2
 
 - Changed: **redeploy your edge nodes.** Each node now signs what it publishes, and the add-on takes a node's replies, manifests and heartbeats only from the node they belong to. Until a node is deployed again with `/deploy <node>` it stays online but is sent no tasks, spawns or migrations, and the chat says it needs deploying.

@@ -5,18 +5,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-- **Reachy remains opt-in.** Its SDK is updated to 1.12.0 with upstream's secure Starlette requirements. General Greek entity-selection changes are deferred. Trusted recipe code refresh is opt-in and refuses dependency migrations until a fresh approved catalogue spawn.
+## [0.8.0] - 2026-11-15
 
-- Reachy installation uses an opt-in strict recipe policy; other agents keep their existing best-effort startup and package approval controls.
+Wactorz 0.8.0 closes the loop on models: readings are recorded with the time they happened, a model is trained, judged against labels and tried in the shadow of the one served, and a policy decides when it takes over. Two agents may now share a name on different hosts, addressed as `name@node`, and the dashboard gains a Wiring view, an Inbox and tabs that installed packages add. It requires Python 3.11 or later.
+
+### Highlights
+
+- **The model loop, end to end.** Readings are recorded as Parquet with their event time, and labelled from an operator's answers in a provenance graph. A model is trained inside the loop, judged against the labels, run as a shadow beside the version served, and promoted by its policy; drift on its readings can trigger retraining. The Models tab shows it all.
+- **`name@node` addressing.** An agent keeps an id across restarts and moves, two hosts may each run an agent of the same name, and chat, the dashboard and every command take the full address.
+- **See and answer what the agents are doing.** A Wiring tab (and `GET /api/wiring`) draws who publishes what and who reads it; an Inbox lists every question an agent is waiting on you for.
+- **Packages extend the dashboard.** An installed package can add a tab with its own icon and settings, and it loads only when named in `WACTORZ_EXTENSIONS`.
+- **For code that uses Wactorz.** The package is typed (`py.typed`), `wactorz.client` talks to a running server (provisional), and `WACTORZ_NAMESPACE` lets two installs share one broker.
+- **Reachy Mini, still opt-in,** moves to SDK 1.12.0, with built-in help, clearer voice setup messages, and steadier audio and motors.
+- **Installing on 0.8.** The guide has a Windows page, Installation has an Upgrading section, and the Windows start script works again.
+- **Fixes** for stopping and restarting agents, file serving on Windows, routes and recording that waited on the disk, and many dashboard details.
 
 ### Before you upgrade
 
 - **Wactorz now requires Python 3.11 or later; Python 3.10 is no longer supported.** Python 3.10 reached its end of life in October 2026. On 3.10, upgrade Python before you upgrade Wactorz: pip will not install this release there. Main and every edge node need 3.11 or later; the Docker images and Home Assistant add-ons already use a newer Python and need nothing. This also retires the Pillow 12.3 and filelock 4.0 advisories that had no fix on 3.10, so every locked install takes Pillow 13 and filelock 4.2.
 - **opentelemetry-api 1.45.2** in the locked installs, which fixes slow parsing of a crafted `traceparent` header (GHSA-mf5v-w3w3-f6cg). It comes with the Anthropic SDK and the Reachy extra.
 - **Redeploy every edge node** with `/deploy <node>`. Main and a node must run the same release series, so until a node is deployed again main sends it no new agents or migrations. Each node needs Python 3.11 or later too.
-- **Packages that register agents, pipelines or extensions through entry points load only when named** in `WACTORZ_EXTENSIONS` (`*` loads everything installed, as before); see *Installed packages load only when named* below.
+- **Packages that register agents, pipelines or extensions through entry points load only when named** in `WACTORZ_EXTENSIONS` (`*` loads everything installed, as before). A node reads its own list from `DEPLOY_<NODE>_EXTENSIONS` on main; under Home Assistant, set the `extensions` option. The full changelog's *Installed packages load only when named* has the details.
+- **A wrong API key in a header is now throttled** like one on the sign-in form, and the right key from that address is refused while the lockout lasts, so update scripts that hold an old key.
 
 ### Changed
+
+- **Reachy remains opt-in.** Its SDK is updated to 1.12.0 with upstream's secure Starlette requirements. General Greek entity-selection changes are deferred. Trusted recipe code refresh is opt-in and refuses dependency migrations until a fresh approved catalogue spawn.
+
+- Reachy installation uses an opt-in strict recipe policy; other agents keep their existing best-effort startup and package approval controls.
 
 - **The documentation covers installing and upgrading on 0.8.** The guide has a Windows page (Docker Compose, the Docker Hub image, pip, and frontend development), and Installation has an Upgrading section. The broker command it gives for a pip install now works with Mosquitto 2, published on loopback only. The Quickstart page's instructions for the Windows start script are consolidated into the Windows page, as its *Start script* section, and the separate page is gone.
 
@@ -2294,7 +2310,11 @@ Wactorz 0.6.1 is about staying up: agents and nodes now come through restarts, r
 - Docker Compose stacks (dev and production)
 - `pyproject.toml` with optional dependency groups
 
-[Unreleased]: https://github.com/waldiez/wactorz/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/waldiez/wactorz/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/waldiez/wactorz/compare/v0.7.2...v0.8.0
+[0.7.2]: https://github.com/waldiez/wactorz/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/waldiez/wactorz/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/waldiez/wactorz/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/waldiez/wactorz/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/waldiez/wactorz/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/waldiez/wactorz/compare/v0.5.2...v0.5.3

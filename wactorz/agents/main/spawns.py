@@ -35,6 +35,7 @@ from ...core.packages import (
     allowed_by_env,
     unlisted,
 )
+from ...core.spawn_introduction import announce_spawn_introduction, spawn_introduction
 from ...core.topics import agent_topic, node_topic, topic_name_error
 from ...plugins import MODULE_TYPE, for_target, is_module_config
 from ..catalog_agent import current_recipe_config
@@ -704,6 +705,9 @@ class SpawnService:
             await asyncio.sleep(CATALOGUE_SETTLE_S)
             spawned = registry.find_by_name(recipe)
             if spawned:
+                message = result.get("message")
+                if isinstance(message, str):
+                    await announce_spawn_introduction(spawned, message)
                 return spawned
         logger.warning(
             "[%s] Catalog spawn of %r failed (%s); falling back to LLM code",
@@ -1149,12 +1153,10 @@ class SpawnService:
             await self._refuse_remote_spawn(config, node, f"{problem}.")
             return False
         name = str(config.get("name", "remote-agent"))
-        actor_id = id_on_node(
-            name,
-            self._kept_actor_id(name, node, alongside=bool(config.get("alongside"))),
-            self.host._node_takes_actor_ids(node),
-        )
+        kept_id = self._kept_actor_id(name, node, alongside=bool(config.get("alongside")))
+        actor_id = id_on_node(name, kept_id, self.host._node_takes_actor_ids(node))
         config = {**config, "actor_id": actor_id}
+        config.pop("_spawn_intro", None)
         wire_config = self._inject_llm_bridge_code(config)
         name = wire_config.get("name", "remote-agent")
 
@@ -1179,7 +1181,21 @@ class SpawnService:
         # last part is Mosquitto queueing per client in order and the runner
         # draining one message at a time -- MQTT only promises ordering within a
         # single topic, so it is the deployment that makes it true, not the spec.
-        await self.host._mqtt_publish(node_topic(node, "spawn"), wire_config, retain=False, qos=1)
+        command = wire_config
+        if (
+            save
+            and not restoring
+            and not kept
+            and kept_id is None
+            and not config.get("replace")
+            and "_initial_state" not in config
+            and agent_type(config) in {"dynamic", "llm"}
+            and (intro := spawn_introduction(config.get("description"), config.get("examples")))
+        ):
+            # Send the introduction only on this command. A node that restores
+            # its desired state later has nothing new to announce.
+            command = {**wire_config, "_spawn_intro": intro}
+        await self.host._mqtt_publish(node_topic(node, "spawn"), command, retain=False, qos=1)
         if self._get_spawn_registry().is_stopped(actor_id):
             # Sent to run, by whatever asked: it is no longer one kept stopped.
             # Before the desired state, which lists what is not stopped: should

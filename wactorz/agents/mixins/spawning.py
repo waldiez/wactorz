@@ -47,6 +47,7 @@ from ...core.packages import APPROVAL_TIMEOUT_S
 from ...core.paths import agent_state_dir, resolve_state_dir
 from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
 from ...core.pip import PIP_TIMEOUT_S, install_wait_s, missing_requirements, pending_restart
+from ...core.spawn_introduction import announce_spawn_introduction, spawn_introduction
 from ...core.state_codec import decode_state
 from ...core.topic_bus import TopicContract
 from ...core.topics import agent_topic, topic_name_error
@@ -105,7 +106,7 @@ class SpawnConfig(TypedDict, total=False):
 
     Common to every kind:
         name, type, node, actor_id, replace, alongside, trusted, artifacts,
-        install, minimum_python, require_install_success, description,
+        install, minimum_python, require_install_success, description, examples,
         input_schema, output_schema, _initial_state, host, capabilities,
         max_restarts, restart_delay
     dynamic (and the `llm` bridge code synthesized for one spawned remotely):
@@ -140,6 +141,7 @@ class SpawnConfig(TypedDict, total=False):
     minimum_python: list[int]
     require_install_success: bool
     description: str
+    examples: list[str]
     input_schema: dict[str, str]
     output_schema: dict[str, str]
     poll_interval: float
@@ -455,6 +457,16 @@ class SpawnMixin(_Host):
 
         if actor is not None and register:
             self._register_spawn(config)
+            if (
+                isinstance(actor, Actor)
+                and not from_registry
+                and not config.get("replace")
+                and "_initial_state" not in config
+                and kind in {"dynamic", "llm"}
+            ):
+                await announce_spawn_introduction(
+                    actor, spawn_introduction(config.get("description"), config.get("examples"))
+                )
 
         return actor
 
@@ -797,6 +809,15 @@ class SpawnMixin(_Host):
             actor = await self._do_spawn_dynamic(config, name, code)
             if actor is not None:
                 self._register_spawn(config)
+                if (
+                    registered
+                    and not restoring
+                    and not config.get("replace")
+                    and "_initial_state" not in config
+                ):
+                    await announce_spawn_introduction(
+                        actor, spawn_introduction(config.get("description"), config.get("examples"))
+                    )
                 if publish is not None:
                     await publish(
                         agent_topic(self.actor_id, "logs"),

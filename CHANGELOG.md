@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **New agents introduce themselves at first startup.** Catalogue spawn replies describe the agent and show examples or a pointer to its help. Generated agents share their description and available examples in chat, including after a package install or on an edge node.
+
 ### Changed
 
 - **The Docker Hub guide names the image's version tags as they are published**: `waldiez/wactorz:v0.8.0` and `:v0.8.0-ultra`, with the `v`. It wrote them as `:<version>`, which reads as `:0.8.0`, a tag that does not exist.

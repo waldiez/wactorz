@@ -39,7 +39,7 @@ from wactorz.agents.main.hosts import SpawnHost
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.agents.mixins import KeptHere, NotSpawned, spawning
 from wactorz.catalogue_agents.weather_agent import WeatherAgent
-from wactorz.core.actor import Message, MessageType
+from wactorz.core.actor import ActorState, Message, MessageType
 from wactorz.core.addresses import Address
 from wactorz.core.identity import derive_actor_id
 
@@ -55,6 +55,7 @@ class _Actor:
     def __init__(self, name: str) -> None:
         self.name = name
         self.actor_id = f"id-{name}"
+        self.state = ActorState.RUNNING
 
 
 class _Installer(_Actor):
@@ -166,8 +167,8 @@ def main_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Main:
 class _Spawner:
     """Replaces `Actor.spawn`, recording what would have been started."""
 
-    def __init__(self, result: Any = "spawned", error: Exception | None = None) -> None:
-        self.result = result
+    def __init__(self, result: Any = ..., error: Exception | None = None) -> None:
+        self.result = _Actor("spawned") if result is ... else result
         self.error = error
         self.calls: list[tuple[type, dict[str, Any]]] = []
 
@@ -602,11 +603,15 @@ class TestNativeSpawn:
 
         result = await catalog._action_spawn("weather", {})
 
-        assert result == {
-            "ok": True,
-            "message": "'weather-agent' spawned and running",
-            "agent": "weather-agent",
-        }
+        assert result["ok"] is True
+        assert result["agent"] == "weather-agent"
+        assert result["message"].startswith("'weather-agent' spawned and running")
+        assert "current conditions, forecast, and history" in result["message"]
+        assert "@weather-agent What's the weather in Athens?" in result["message"]
+        assert (
+            "@weather-agent What's the forecast for Athens for the next three days?"
+            in result["message"]
+        )
         ((cls, kwargs),) = spawner.calls
         assert cls is WeatherAgent
         assert kwargs == {
@@ -987,6 +992,8 @@ class TestDynamicSpawn:
         assert len(spawner.calls) == 1
         assert len(told) == 1
         assert "'reachy-mini' spawned and running" in told[0]
+        assert "Controls a Reachy Mini" in told[0]
+        assert "@reachy-mini health" in told[0]
 
     async def test_an_agent_that_appeared_during_the_install_is_not_spawned_twice(
         self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch

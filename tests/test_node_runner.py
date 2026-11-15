@@ -112,6 +112,16 @@ class TestSpawning:
 
         assert runner.get("collector") is first
 
+    async def test_a_fresh_spawn_introduction_is_sent_once(self, runner: RecordingRunner) -> None:
+        config = {"name": "collector", "code": CODE, "_spawn_intro": "Collects readings."}
+
+        await runner.spawn_agent(config)
+        await runner.spawn_agent(config)
+
+        (payload,) = [payload for topic, payload, _ in runner.published if topic.endswith("/chat")]
+        assert json.loads(payload)["content"] == "Collects readings."
+        assert "_spawn_intro" not in runner._configs["collector"]
+
     async def test_replace_starts_a_fresh_one(self, runner: RecordingRunner) -> None:
         await runner.spawn_agent({"name": "collector", "code": CODE})
         first = runner.get("collector")

@@ -55,7 +55,7 @@ NAME_KEYED_REGISTRY_KEY = "_spawned_agents"
 #:
 #: `alongside` asks for a second agent of a name that runs elsewhere; once
 #: there is one, it says nothing about it.
-TRANSIENT_CONFIG_KEYS = frozenset({"_initial_state", "alongside"})
+TRANSIENT_CONFIG_KEYS = frozenset({"_initial_state", "_spawn_intro", "alongside"})
 
 
 def without_transient_keys(config: dict[str, Any]) -> dict[str, Any]:

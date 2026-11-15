@@ -34,11 +34,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .. import plugins
-from ..core.actor import Actor, Message, MessageType, ReplyError
+from ..core.actor import Actor, ActorState, Message, MessageType, ReplyError
 from ..core.addresses import Address
 from ..core.manifests import AgentManifest
 from ..core.paths import resolve_state_dir
 from ..core.pip import missing_requirements, pending_restart
+from ..core.spawn_introduction import spawn_introduction
 from ..core.topics import agent_topic
 from .dependency_install import InstallOutcome, install_for_agent
 from .dynamic import DynamicAgent
@@ -83,6 +84,21 @@ def _chat_message_with_beta_warning(message: str, beta_warning: str) -> str:
     if not beta_warning:
         return message
     return f"{message}\n\nWarning: {beta_warning}"
+
+
+def _spawn_reply(
+    actor: Actor, name: str, recipe: dict[str, Any], beta_warning: str, *, first_start: bool
+) -> str:
+    """Report an explicit catalogue spawn and introduce a new running agent."""
+    message = _chat_message_with_beta_warning(f"'{name}' spawned and running", beta_warning)
+    if not first_start or actor.state != ActorState.RUNNING:
+        return message
+    intro = spawn_introduction(
+        recipe.get("description"),
+        recipe.get("examples"),
+        help_text=f"For setup and commands, try `@catalog info {name}`.",
+    )
+    return f"{message}\n\n{intro}"
 
 
 # Words that opt a `list` request into showing the (hidden-by-default) beta agents.
@@ -216,6 +232,10 @@ def _build_native_catalog() -> dict[str, Any]:
             "type": "native",
             "factory": WeatherAgent,
             "description": "Natural-language weather: current conditions, forecast, and history via Open-Meteo. No API key required.",
+            "examples": [
+                "@weather-agent What's the weather in Athens?",
+                "@weather-agent What's the forecast for Athens for the next three days?",
+            ],
             "capabilities": ["weather.current", "weather.forecast", "weather.history"],
             "input_schema": {
                 "action": "current | forecast | history | set-default",
@@ -573,6 +593,7 @@ def _build_catalog() -> dict[str, Any]:
                 "speech, opt-in voice conversation, gestures, and optional "
                 "Home Assistant actions."
             ),
+            "examples": ["@reachy-mini health", "@reachy-mini help"],
             "docs": (
                 "Setup:\n"
                 "0. Run Wactorz on Windows or macOS for everything; on Linux (Python "
@@ -1147,8 +1168,12 @@ class CatalogAgent(Actor):
                         if options:
                             save_config["options"] = dict(options)
                         main._save_to_spawn_registry({**save_config, **placing.saved})
-                    msg = _chat_message_with_beta_warning(
-                        f"'{resolved}' spawned and running", beta_warning
+                    msg = _spawn_reply(
+                        actor,
+                        resolved,
+                        recipe,
+                        beta_warning,
+                        first_start=placing.moved_from is None,
                     )
                     logger.info("[%s] %s", self.name, msg)
                     await self._mqtt_publish(
@@ -1318,7 +1343,9 @@ class CatalogAgent(Actor):
         if main:
             # Mark as trusted so it bypasses safety validator on restore
             main._save_to_spawn_registry({**recipe, "trusted": True, **placing.saved})
-        msg = _chat_message_with_beta_warning(f"'{name}' spawned and running", beta_warning)
+        msg = _spawn_reply(
+            actor, name, recipe, beta_warning, first_start=placing.moved_from is None
+        )
         logger.info("[%s] %s", self.name, msg)
         await self._mqtt_publish(
             agent_topic(self.actor_id, "logs"),

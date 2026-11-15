@@ -1,59 +1,50 @@
 # Wactorz on Windows
 
 This guide covers x86-64 and ARM64 Windows machines, including Snapdragon X,
-Surface Pro X, and Copilot+ PCs.
+Surface Pro X and Copilot+ PCs.
 
 ---
 
 ## Which option fits you?
 
-| Option | Docker needed | Node.js needed | Best for |
-|---|---|---|---|
-| **A - Docker Compose** | yes | no | Full local stack from a repo clone |
-| **B - Docker Hub image** | yes | no | Fastest run without building locally |
-| **C - Frontend dev mode** | yes | yes | Dashboard development with mock agents |
+| Option | Needs | Best for |
+|---|---|---|
+| **A - Docker Compose** | Git, Docker Desktop | The full stack from a repository clone: broker, Wactorz, Prometheus |
+| **Start script** | Git, Docker Desktop, Python 3.11 or later | One command from a repository clone, with Wactorz running natively |
+| **B - Docker Hub image** | Docker Desktop | Running Wactorz without cloning anything |
+| **C - pip install** | Python 3.11 or later, Docker Desktop for the broker | Running Wactorz natively, or using it as a library |
+| **D - Frontend development** | Git, Docker Desktop, Python 3.11 or later, Bun | Working on the dashboard |
 
-Start with Option A if you are working from the repository. Use Option B if you
-only want to run Wactorz. Use Option C when you are editing the frontend.
+Start with Option A if you want everything running from the repository, or the
+[start script](#start-script) to have one command set it up and run it. Use
+Option B if you only want to run Wactorz. Use Option C to install the package into
+a Python environment of your own, and Option D when you are editing the dashboard.
 
 ---
 
 ## Prerequisites
 
-### Install Windows Terminal
+Install only what your option needs. Each line runs in PowerShell or Windows
+Terminal.
 
 ```powershell
 winget install Microsoft.WindowsTerminal
-```
-
-### Install Git
-
-```powershell
 winget install Git.Git
-```
-
-Git for Windows includes Git Bash, which is useful for shell scripts and Unix-like
-commands.
-
-### Install Docker Desktop
-
-```powershell
 winget install Docker.DockerDesktop
+winget install Python.Python.3.13      # Options C and D
+winget install Oven-sh.Bun             # Option D
 ```
 
-After install, open Docker Desktop and wait for the engine to start.
+After Docker Desktop is installed, open it and wait for the engine to start.
 
-ARM64 Windows can run `linux/arm64` containers natively and `linux/amd64`
-containers through emulation. Prefer the published multi-arch images when they
-are available.
+Wactorz needs **Python 3.11 or later**. Check which one you have with
+`py --version`, and see every installed version with `py --list`. Python 3.10 and
+earlier cannot install current releases: pip reports
+`requires a different Python`.
 
-### Install Node.js for frontend development
-
-```powershell
-winget install OpenJS.NodeJS.LTS
-```
-
-Node.js is only needed for Option C.
+ARM64 Windows runs `linux/arm64` containers natively and `linux/amd64` containers
+through emulation. The published Wactorz images are multi-arch, so Docker picks the
+native one.
 
 ---
 
@@ -62,13 +53,22 @@ Node.js is only needed for Option C.
 ```powershell
 git clone https://github.com/waldiez/wactorz
 cd wactorz
-copy .env.template .env
+Copy-Item .env.template .env
 notepad .env
 ```
 
-Set `LLM_API_KEY` for cloud providers, or configure Ollama in `.env`.
+Set at least these values in `.env`:
 
-Start the Python stack:
+```dotenv
+MQTT_PASSWORD=choose-a-long-random-password
+LLM_PROVIDER=anthropic
+LLM_API_KEY=your-key-here
+```
+
+The broker refuses to start without `MQTT_PASSWORD`. To use a local model instead
+of a cloud provider, set `LLM_PROVIDER=ollama` (see [Installation](development.md)).
+
+Start the stack:
 
 ```powershell
 docker compose --profile python up -d
@@ -80,62 +80,164 @@ Open:
 - REST API: http://localhost:8000
 - Prometheus: http://localhost:9090
 
-Stop the stack:
+Follow the logs with `docker compose logs -f wactorz-python`, and stop the stack
+with:
 
 ```powershell
-docker compose down
+docker compose --profile python down
 ```
 
-To include the bundled Home Assistant dev container:
+To include the bundled Home Assistant development container, use
+`--profile full` instead of `--profile python`.
+
+To update, pull the repository and rebuild:
 
 ```powershell
-docker compose --profile full up -d
+git pull
+docker compose --profile python up -d --build
 ```
+
+---
+
+## Start script
+
+`scripts\start.bat` starts Wactorz from a repository checkout without Docker
+Compose running Wactorz itself: the broker runs in Docker, and Wactorz runs on
+Windows in the checkout's own virtual environment.
+
+Install, once:
+
+```powershell
+winget install Python.Python.3.13      # Python 3.11 or later
+winget install Git.Git
+winget install Docker.DockerDesktop    # then open it and wait for the engine
+```
+
+Then get the code and start:
+
+```powershell
+git clone https://github.com/waldiez/wactorz
+cd wactorz
+scripts\start.bat
+```
+
+Or double-click `scripts\start.bat` in Explorer. It only runs the `start.ps1`
+next to it, so keep the two together in the checkout.
+
+On every run the launcher:
+
+1. uses the checkout it is in, as it is (`-Update` runs `git pull --ff-only` first);
+2. finds Python 3.11 or later, or reuses the checkout's `.venv`. A `.venv` made with
+   an older Python is left alone: delete it and run the launcher again;
+3. creates `.env` from `.env.template` if there is none, and leaves an existing one
+   as it is;
+4. asks for `MQTT_PASSWORD` if it is empty: press Enter to generate one, which is
+   saved in `.env` and not shown, or `E` to set your own in Notepad;
+5. opens `.env` in Notepad if your `LLM_PROVIDER` needs an API key and none is set.
+   The default, `anthropic`, takes `ANTHROPIC_API_KEY` or `LLM_API_KEY`;
+   `LLM_PROVIDER=ollama` needs no key;
+6. starts the authenticated MQTT broker (`docker compose up -d --wait mosquitto`);
+7. installs Wactorz into `.venv`, again only when `pyproject.toml` changes;
+8. launches Wactorz and prints the dashboard address, http://localhost:8888 by
+   default (`MONITOR_PORT` changes it).
+
+Options, passed to `start.bat` or `start.ps1`:
+
+```powershell
+scripts\start.bat -Update      # git pull --ff-only, then start
+scripts\start.bat -NoPrompt    # never ask or open Notepad; stop with an error instead
+```
+
+`WACTORZ_PYTHON` names the `python.exe` to make `.venv` with, and any other
+arguments are passed on to `wactorz`. When something is missing (Python 3.11,
+Docker's engine, `MQTT_PASSWORD`, a key), the launcher stops and says what to do;
+run `scripts\start.bat` from a terminal to read the message if the window closes.
 
 ---
 
 ## Option B - Docker Hub image
 
-Use the Docker Hub quickstart when you do not need a repo clone:
-
-[Quickstart: Docker Hub](dockerhub.md)
-
-This is the simplest option for trying Wactorz on Windows.
+Use the Docker Hub guide when you do not need a repository clone:
+[Docker Hub](dockerhub.md). It is the simplest way to try Wactorz on Windows.
 
 ---
 
-## Option C - Frontend dev mode
+## Option C - pip install
 
-The mock stack publishes realistic MQTT activity so you can develop the dashboard
-without a live LLM key or Home Assistant instance.
-
-Terminal 1:
+Make a virtual environment with Python 3.11 or later, and install Wactorz into it:
 
 ```powershell
-docker compose -f compose.dev.yaml up -d
+py -3.13 -m venv $env:USERPROFILE\wactorz-venv
+& "$env:USERPROFILE\wactorz-venv\Scripts\python.exe" -m pip install "wactorz[all]"
 ```
 
-Terminal 2:
+Calling the environment's own `python.exe` avoids PowerShell's script execution
+policy, which can block `Activate.ps1`.
+
+Wactorz needs an MQTT broker. For one on this machine only, run Mosquitto in
+Docker with its no-authentication configuration, published on loopback:
+
+```powershell
+docker run -d --name mosquitto -p 127.0.0.1:1883:1883 eclipse-mosquitto:2.1.2-alpine mosquitto -c /mosquitto-no-auth.conf
+```
+
+Then start Wactorz, with your provider's key in the environment or in a `.env`
+file in the folder you start it from:
+
+```powershell
+$env:LLM_API_KEY = "your-key-here"
+& "$env:USERPROFILE\wactorz-venv\Scripts\wactorz.exe"
+```
+
+Open the dashboard at http://localhost:8888. A broker without authentication is
+only safe while it is published on `127.0.0.1`; before you connect other machines
+to it, set up accounts as described in [Security](security.md).
+
+To upgrade, run the same `pip install` with `--upgrade`.
+
+---
+
+## Option D - Frontend development
+
+The development stack runs the broker and the backend in containers, with the
+development credentials (`wactorz` / `wactorz-dev`) already filled in:
+
+```powershell
+git clone https://github.com/waldiez/wactorz
+cd wactorz
+Copy-Item .env.template .env
+notepad .env       # set LLM_API_KEY
+docker compose -f compose.dev.yaml --profile app up -d
+```
+
+Then start Vite with hot reload:
 
 ```powershell
 cd frontend
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
-Open http://localhost:3000.
+Open http://localhost:3000. Vite sends API and WebSocket calls to the backend on
+port 8888.
 
-To stop the mock stack:
+Stop the stack with:
 
 ```powershell
-docker compose -f compose.dev.yaml down
+docker compose -f compose.dev.yaml --profile app down
 ```
+
+Without `--profile app`, `compose.dev.yaml` starts only the broker. Use that to run
+the backend from the repository on the host instead, which needs Python 3.11 or
+later and `pip install -e ".[all]"`. The Makefile's `make dev-full` does this, and
+needs Git Bash or WSL2 (see below).
 
 ---
 
-## Running Shell Scripts on Windows
+## Running shell scripts and make on Windows
 
-Use Git Bash or WSL2 for repository scripts that expect a Unix shell.
+The repository's `run.sh` and the Makefile expect a Unix shell. Use Git Bash or
+WSL2 for them.
 
 Git Bash:
 
@@ -151,16 +253,16 @@ cd /mnt/c/Users/<your-name>/wactorz
 ./run.sh
 ```
 
-PowerShell can run Docker and npm commands directly, but it does not execute
+PowerShell runs Docker, Python and Bun commands directly, but it does not execute
 `.sh` scripts without a shell.
 
 ---
 
-## SSH Keys for Remote Nodes
+## SSH keys for remote nodes
 
 Deploying an edge node with `/deploy` connects over SSH, and key auth is
-preferred over a password. Windows 10 and 11 include OpenSSH Client, so generate
-a dedicated key:
+preferred over a password. Windows 10 and 11 include the OpenSSH client, so
+generate a dedicated key:
 
 ```powershell
 ssh-keygen -t ed25519 -C "wactorz-deploy" -f "$env:USERPROFILE\.ssh\wactorz_deploy" -N '""'
@@ -182,13 +284,14 @@ DEPLOY_RPI_KITCHEN_KEY=~/.ssh/wactorz_deploy
 DEPLOY_RPI_KITCHEN_BROKER=192.168.1.10
 ```
 
-See [Remote nodes](remote-nodes.md) for the rest of the setup.
+The node needs Python 3.11 or later too. See [Remote nodes](remote-nodes.md) for
+the rest of the setup.
 
 ---
 
-## Environment Variable Gotchas
+## Environment variable gotchas
 
-Save `.env` as UTF-8 without BOM. VS Code and modern Notepad are usually fine.
+Save `.env` as UTF-8 without BOM. VS Code and current Notepad do this by default.
 
 Use forward slashes or escaped backslashes for paths:
 
@@ -210,6 +313,16 @@ line-ending indicator in the status bar and choose `LF`.
 
 ## Troubleshooting
 
+### `requires a different Python`
+
+pip is running under Python 3.10 or earlier. Install Python 3.11 or later, then
+make the virtual environment again with it (`py -3.13 -m venv ...`).
+
+### `set MQTT_PASSWORD in .env`
+
+Docker Compose stops before starting the broker because `MQTT_PASSWORD` is empty.
+Set it in `.env` and run the command again.
+
 ### `docker: command not found` in Git Bash
 
 Docker Desktop may be available in PowerShell but not Git Bash. Run Docker
@@ -222,65 +335,50 @@ export PATH="$PATH:/c/Program Files/Docker/Docker/resources/bin"
 ### Docker Desktop is not running
 
 Open Docker Desktop from the Start menu and wait for the engine to start. Then
-rerun the Docker command.
+run the Docker command again.
 
 ### Port already in use
 
-Change the host port in `.env` or stop the process using that port. For example:
+Change the port in `.env`, or stop the process using it. For the dashboard:
 
 ```env
-DASHBOARD_EXTERNAL_PORT=8080
+MONITOR_PORT=8080
 ```
 
-Then open http://localhost:8080.
+Then open http://localhost:8080. `REST_EXTERNAL_PORT`, `PROMETHEUS_EXTERNAL_PORT`
+and `MQTT_EXTERNAL_PORT` move the other published ports.
 
 ### `MQTT_HOST` connection refused
 
-For Docker Compose, use the service name inside the Docker network:
-
-```env
-MQTT_HOST=mosquitto
-```
-
-For a local Python process talking to a broker published on the host, use:
+Inside Docker Compose, Wactorz reaches the broker by its service name, which the
+compose file sets for you. For Wactorz running on the host, against a broker
+published on the host, use:
 
 ```env
 MQTT_HOST=localhost
 ```
 
-Check the broker container:
-
-```powershell
-docker compose ps
-```
+Check the broker container with `docker compose ps`.
 
 ### ARM64 image issues
 
-If Docker reports an architecture error, update Docker Desktop and make sure it
-can run emulated Linux containers. Prefer published multi-arch images where
-possible.
+If Docker reports an architecture error, update Docker Desktop and make sure it can
+run emulated Linux containers.
 
 ---
 
-## Recommended ARM64 Windows Setup
+## Recommended ARM64 Windows setup
 
 ```powershell
-winget install Git.Git Microsoft.WindowsTerminal OpenJS.NodeJS.LTS Docker.DockerDesktop
+winget install Git.Git Microsoft.WindowsTerminal Docker.DockerDesktop Python.Python.3.13 Oven-sh.Bun
 wsl --install
 
 git clone https://github.com/waldiez/wactorz
 cd wactorz
-copy .env.template .env
-notepad .env
+Copy-Item .env.template .env
+notepad .env       # set MQTT_PASSWORD and LLM_API_KEY
 
 docker compose --profile python up -d
 ```
 
-For frontend work:
-
-```powershell
-docker compose -f compose.dev.yaml up -d
-cd frontend
-npm install
-npm run dev
-```
+For frontend work, continue with [Option D](#option-d-frontend-development).

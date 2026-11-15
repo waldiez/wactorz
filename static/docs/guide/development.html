@@ -118,6 +118,7 @@
       <summary class="sidebar-label">Guide</summary>
       <a href="../guide/development.html" class="active">Installation</a>
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
+      <a href="../guide/windows.html" class="">Windows</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
       <a href="../guide/library.html" class="">Library</a>
@@ -147,11 +148,17 @@
   </aside>
   <main class="content">
 <h1 id="installation">Installation</h1>
-<p>Wactorz requires Python 3.11+ and a running MQTT broker (Mosquitto). The <code>wactorz</code> command starts the actor system and the web dashboard — start Mosquitto first with <code>docker compose up -d</code>.</p>
+<p>Wactorz requires Python 3.11 or later and a running MQTT broker (Mosquitto). The <code>wactorz</code> command starts the actor system and the web dashboard. On Windows, see also <a href="../guide/windows.html">Windows</a>.</p>
+<p>Check your Python first:</p>
+<div class="highlight"><pre><span></span><code>python3<span class="w"> </span>--version<span class="w">   </span><span class="c1"># Windows: py --version</span>
+</code></pre></div>
+
+<p>Python 3.10 and earlier cannot install current releases: pip stops with <code>requires a different Python</code>. Install a newer Python and make the virtual environment again with it.</p>
 <hr />
 <h2 id="install">Install</h2>
 <h4 id="from-pypi">From PyPI</h4>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>wactorz<span class="o">[</span>all<span class="o">]</span>
+<div class="highlight"><pre><span></span><code>python3<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span>.venv
+.venv/bin/pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"wactorz[all]"</span><span class="w">    </span><span class="c1"># Windows: .venv\Scripts\pip</span>
 </code></pre></div>
 
 <h4 id="latest-from-github">Latest from GitHub</h4>
@@ -248,14 +255,15 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </blockquote>
 <hr />
 <h2 id="quick-start">Quick start</h2>
-<div class="highlight"><pre><span></span><code><span class="c1"># 1. Create a .env file with your LLM key (see Configuration below)</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># 1. Create a .env file with your LLM key (see Configuration below).</span>
+<span class="c1">#    From a clone, start from the template; otherwise create .env yourself.</span>
 cp<span class="w"> </span>.env.template<span class="w"> </span>.env
 <span class="c1"># edit .env and set LLM_API_KEY (or whichever provider you use)</span>
 
-<span class="c1"># 2. Get/run MQTT broker (if you don't have already) and open port 1883</span>
-docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>mosquitto<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span>:1883<span class="w"> </span>eclipse-mosquitto
+<span class="c1"># 2. Run an MQTT broker for this machine only, if you do not have one</span>
+docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>mosquitto<span class="w"> </span>-p<span class="w"> </span><span class="m">127</span>.0.0.1:1883:1883<span class="w"> </span>eclipse-mosquitto:2.1.2-alpine<span class="w"> </span>mosquitto<span class="w"> </span>-c<span class="w"> </span>/mosquitto-no-auth.conf
 
-<span class="c1"># 3. Start Wactorz</span>
+<span class="c1"># 3. Start Wactorz, from the folder that holds .env</span>
 wactorz
 
 <span class="c1"># 4. Open the web dashboard</span>
@@ -263,6 +271,7 @@ wactorz
 </code></pre></div>
 
 <p>That's it. The CLI interface starts in your terminal and the web dashboard opens at <code>localhost:8888</code>. Both can be used simultaneously.</p>
+<p>The broker in step 2 accepts anyone who can reach it, so it is published on <code>127.0.0.1</code> only. Before nodes or other machines connect to it, give it accounts: the Docker Compose stack below does, with <code>MQTT_USERNAME</code> and <code>MQTT_PASSWORD</code>, and <a href="../guide/security.html">Security</a> covers the rest.</p>
 <h4 id="switch-interface-or-provider">Switch interface or provider</h4>
 <div class="highlight"><pre><span></span><code><span class="c1"># Use Gemini instead of Claude</span>
 wactorz<span class="w"> </span>--llm<span class="w"> </span>gemini<span class="w"> </span>--gemini-model<span class="w"> </span>gemini-2.5-flash
@@ -274,6 +283,33 @@ wactorz<span class="w"> </span>--interface<span class="w"> </span>discord<span c
 wactorz<span class="w"> </span>--reload
 </code></pre></div>
 
+<hr />
+<h2 id="upgrading">Upgrading</h2>
+<p>Upgrade the way you installed:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># From PyPI</span>
+.venv/bin/pip<span class="w"> </span>install<span class="w"> </span>--upgrade<span class="w"> </span><span class="s2">"wactorz[all]"</span>
+
+<span class="c1"># From source</span>
+git<span class="w"> </span>pull
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">".[all]"</span>
+
+<span class="c1"># Docker Compose from the repository</span>
+git<span class="w"> </span>pull
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
+
+<span class="c1"># Docker Hub image</span>
+docker<span class="w"> </span>compose<span class="w"> </span>pull
+docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+
+<p>The Home Assistant add-on updates from its page in Home Assistant.</p>
+<p>Main and its edge nodes must run the same release series (the same major and minor number), so after an upgrade that changes the minor number, run <code>/deploy &lt;node&gt;</code> for every node. Until then main refuses to send them new agents. See <a href="../guide/remote-nodes.html">Remote nodes</a>.</p>
+<p>Read the <strong>Before you upgrade</strong> section of the <a href="https://github.com/waldiez/wactorz/blob/main/CHANGELOG.md">changelog</a> for the release you are moving to. For 0.8:</p>
+<ul>
+<li><strong>Python 3.11 or later</strong>, on main and on every node. Upgrade Python before you upgrade Wactorz.</li>
+<li><strong>Packages that register agents, pipelines or extensions through entry points load only when named</strong> in <code>WACTORZ_EXTENSIONS</code> (<code>*</code> loads everything installed, as before). A node reads its own list from <code>DEPLOY_&lt;NODE&gt;_EXTENSIONS</code> on main; under Home Assistant, set the add-on's <code>extensions</code> option.</li>
+<li><strong>Redeploy every node</strong> with <code>/deploy &lt;node&gt;</code>, as above.</li>
+</ul>
 <hr />
 <h2 id="configuration">Configuration</h2>
 <p>Wactorz reads configuration from a <code>.env</code> file in the working directory. All values can also be passed as environment variables.</p>
@@ -330,9 +366,11 @@ MQTT_PASSWORD=
 
 <hr />
 <h2 id="running-mosquitto-via-docker">Running Mosquitto via Docker</h2>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>mosquitto<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span>:1883<span class="w"> </span>eclipse-mosquitto
+<p>For a broker on this machine only:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>mosquitto<span class="w"> </span>-p<span class="w"> </span><span class="m">127</span>.0.0.1:1883:1883<span class="w"> </span>eclipse-mosquitto:2.1.2-alpine<span class="w"> </span>mosquitto<span class="w"> </span>-c<span class="w"> </span>/mosquitto-no-auth.conf
 </code></pre></div>
 
+<p>Mosquitto 2 accepts no connections from outside its container unless it is given a configuration, which is what <code>/mosquitto-no-auth.conf</code> (shipped in the image) does. That configuration allows anonymous clients, so keep it on <code>127.0.0.1</code>. For a broker with accounts, use the repository's Docker Compose stack (<code>docker compose up -d</code> starts the broker alone), which needs <code>MQTT_PASSWORD</code> set in <code>.env</code>.</p>
 <blockquote>
 <p><strong>Note (Docker Desktop on Windows/Mac):</strong> When services run inside Docker and need to reach the broker on the host, use <code>host.docker.internal</code> as the broker hostname instead of <code>localhost</code>.</p>
 </blockquote>
@@ -402,9 +440,10 @@ ha_list_entities, ha_get_state, ha_call_service
 <li>A <code>.env</code> file copied from <code>.env.template</code> with your secrets filled in</li>
 </ul>
 <div class="highlight"><pre><span></span><code>cp<span class="w"> </span>.env.template<span class="w"> </span>.env
-<span class="c1"># edit .env and set LLM_API_KEY, etc.</span>
+<span class="c1"># edit .env and set MQTT_PASSWORD and LLM_API_KEY</span>
 </code></pre></div>
 
+<p>The broker carries agent commands and spawned code, so it refuses to start without <code>MQTT_PASSWORD</code>.</p>
 <h3 id="production-stack-profiles">Production stack (profiles)</h3>
 <p>The main <code>compose.yaml</code> uses profiles so you only start what you need:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Python agents + MQTT</span>
@@ -433,12 +472,12 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 </tr>
 <tr>
 <td><code>python</code></td>
-<td>+ wactorz-python</td>
-<td>+ :8000, :8888</td>
+<td>+ wactorz-python, the code sandbox, Prometheus, Alertmanager</td>
+<td>+ :8000, :8888, :9090, :9093</td>
 </tr>
 <tr>
 <td><code>full</code></td>
-<td>+ wactorz-python, homeassistant</td>
+<td>+ wactorz-python, the code sandbox, homeassistant</td>
 <td>+ :8000, :8888, :8123</td>
 </tr>
 </tbody>
@@ -449,19 +488,20 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <tr>
 <th>Service</th>
 <th>URL</th>
-<th>Credentials</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>Web UI</td>
 <td>http://localhost:8888</td>
-<td>—</td>
 </tr>
 <tr>
 <td>REST API</td>
 <td>http://localhost:8000</td>
-<td>—</td>
+</tr>
+<tr>
+<td>Prometheus (<code>python</code> profile)</td>
+<td>http://localhost:9090</td>
 </tr>
 </tbody>
 </table>
@@ -483,15 +523,18 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 </code></pre></div>
 
 <h3 id="development-stack">Development stack</h3>
-<p>For local development, <code>compose.dev.yaml</code> starts MQTT + the Python app together with a single command:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Start everything</span>
-docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
+<p>For local development, <code>compose.dev.yaml</code> uses development credentials (<code>wactorz</code> / <code>wactorz-dev</code>), so it needs no <code>MQTT_PASSWORD</code>. On its own it starts only the broker, for a backend run on the host (<code>make dev-full</code>); the <code>app</code> profile adds the backend in a container:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Broker only</span>
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d
+
+<span class="c1"># Broker + backend, rebuilt from the checkout</span>
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>--profile<span class="w"> </span>app<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
 
 <span class="c1"># View logs</span>
 docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>wactorz
 
 <span class="c1"># Stop everything</span>
-docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>down
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>--profile<span class="w"> </span>app<span class="w"> </span>down
 </code></pre></div>
 
 <p>Services started:</p>
@@ -505,14 +548,14 @@ docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> 
 </thead>
 <tbody>
 <tr>
-<td><code>wactorz-app</code></td>
-<td>:8000, :8888</td>
-<td>Python agent system (REST API + Web UI)</td>
-</tr>
-<tr>
 <td><code>wactorz-dev-mosquitto</code></td>
 <td>:1883</td>
 <td>MQTT broker (TCP)</td>
+</tr>
+<tr>
+<td><code>wactorz-app</code> (<code>app</code> profile)</td>
+<td>:8000, :8888</td>
+<td>Python agent system (REST API + Web UI)</td>
 </tr>
 </tbody>
 </table>

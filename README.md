@@ -266,7 +266,8 @@ rather than opening a public issue.
 
 | Start here | For |
 |---|---|
-| [Quickstart](https://github.com/waldiez/wactorz/blob/main/docs/quickstart.md) | First run and Windows setup |
+| [Installation](https://docs.waldiez.io/wactorz/guide/development.html) | Install with pip, configure, upgrade |
+| [Windows](https://docs.waldiez.io/wactorz/guide/windows.html) | Windows and ARM64 setup |
 | [Docker Hub](https://docs.waldiez.io/wactorz/guide/dockerhub.html) | Run from Docker without cloning the repo |
 | [Architecture](https://docs.waldiez.io/wactorz/guide/architecture.html) | Actor system, supervision, MQTT flow |
 | [Agents](https://docs.waldiez.io/wactorz/guide/agents.html) | Built-in agents, recipes, and dynamic agents |
@@ -277,7 +278,7 @@ rather than opening a public issue.
 | [API reference](https://github.com/waldiez/wactorz/blob/main/docs/api.md) | REST endpoints and payloads |
 | [Deployment](https://docs.waldiez.io/wactorz/guide/deployment.html) | Docker, Home Assistant add-on, environment setup |
 | [Prometheus](https://docs.waldiez.io/wactorz/guide/prometheus.html) | Metrics and monitoring |
-| [Security](https://github.com/waldiez/wactorz/blob/main/docs/security.md) | Auth, exposure, broker credentials, threat model |
+| [Security](https://docs.waldiez.io/wactorz/guide/security.html) | Auth, exposure, broker credentials, threat model |
 | [Evaluation harness](https://github.com/waldiez/wactorz/blob/main/docs/evaluation.md) | Compare models per LLM call site |
 | [Technical reference](https://github.com/waldiez/wactorz/blob/main/docs/reference.md) | Deeper internals |
 

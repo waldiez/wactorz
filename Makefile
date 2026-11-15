@@ -3,7 +3,7 @@
         up down logs shell mqtt-certs \
         run test test-py test-py-tracked typecheck-tracked python-path test-frontend coverage coverage-py coverage-frontend ci \
         e2e e2e-setup e2e-clean \
-        install install-py install-docs install-dev install-frontend docs-serve docs-build publish
+        install install-py install-docs install-dev install-frontend docs-serve docs-build docs-check publish
 
 # ── Windows shell setup ──────────────────────────────────────────────────────
 # Recipes below use POSIX shell syntax (grep/awk/mkdir -p/rm -rf/source/trap/
@@ -459,6 +459,9 @@ docs-serve: ## Build docs + serve locally on :8001
 
 docs-build: ## Build full docs site (markdown→HTML + typedoc) into static/docs/
 	$(PYTHON) -W ignore::UserWarning:pdoc scripts/build_docs.py --full
+
+docs-check: ## Check that static/docs matches a clean build of docs/ (what CI runs)
+	$(PYTHON) scripts/build_docs.py --check
 
 publish: ## Build wheel + sdist and upload to PyPI (requires twine + API token)
 	$(PYTHON) scripts/build.py --upload

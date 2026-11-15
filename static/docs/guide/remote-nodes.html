@@ -118,6 +118,7 @@
       <summary class="sidebar-label">Guide</summary>
       <a href="../guide/development.html" class="">Installation</a>
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
+      <a href="../guide/windows.html" class="">Windows</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
       <a href="../guide/library.html" class="">Library</a>
@@ -173,6 +174,7 @@
 <hr />
 <h2 id="setup-on-the-edge-device">Setup on the edge device</h2>
 <h4 id="1-install-wactorz">1. Install Wactorz</h4>
+<p>The device needs Python 3.11 or later (<code>python3 --version</code>). Raspberry Pi OS Bookworm and Ubuntu 24.04 ship one; Raspberry Pi OS Bullseye and Ubuntu 22.04 ship an older Python, on which pip refuses to install Wactorz, so install a newer one first or move to a newer OS. <code>/deploy</code> uses the device's <code>python3</code>, so the same applies to a node deployed from main.</p>
 <div class="highlight"><pre><span></span><code>python3<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span>~/wactorz/venv
 ~/wactorz/venv/bin/pip<span class="w"> </span>install<span class="w"> </span>wactorz
 </code></pre></div>

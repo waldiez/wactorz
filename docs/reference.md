@@ -18,14 +18,14 @@ _Technical Reference & Developer Guide_
 9. [Reactive Pipelines](#9-reactive-pipelines)
 10. [TopicBus — Reactive Pub/Sub Coordination](#10-topicbus--reactive-pubsub-coordination)
 11. [Code Safety & Validation](#11-code-safety--validation)
-12. [LLM Cost Tracking](#10-llm-cost-tracking)
-13. [Interfaces](#11-interfaces)
-14. [MQTT Topic Reference](#12-mqtt-topic-reference)
-15. [Built-in Specialist Agents](#13-built-in-specialist-agents)
-16. [Catalog Agent — Pre-built Recipe Library](#14-catalog-agent--pre-built-recipe-library)
-17. [Remote Nodes & Edge Deployment](#15-remote-nodes--edge-deployment)
-18. [Installation & Configuration](#16-installation--configuration)
-19. [Troubleshooting](#17-troubleshooting)
+12. [LLM Cost Tracking](#12-llm-cost-tracking)
+13. [Interfaces](#13-interfaces)
+14. [MQTT Topic Reference](#14-mqtt-topic-reference)
+15. [Built-in Specialist Agents](#15-built-in-specialist-agents)
+16. [Catalog Agent — Pre-built Recipe Library](#16-catalog-agent--pre-built-recipe-library)
+17. [Remote Nodes & Edge Deployment](#17-remote-nodes--edge-deployment)
+18. [Installation & Configuration](#18-installation--configuration)
+19. [Troubleshooting](#19-troubleshooting)
 20. [File Structure](#appendix-file-structure)
 
 ---
@@ -291,12 +291,6 @@ async def handle_task(agent, payload):
 
 Wactorz has a four-layer error handling system. Errors are first-class events, not just log lines.
 
-## UPDATE: Section 6 — Health Monitoring & Error Recovery
- 
-Replace the existing "Layer 1" content with this expanded version that includes the self-healing layers:
- 
----
- 
 ### Layer 1 — DynamicAgent: 5-Layer Self-Healing
  
 See [Section 11 — Code Safety & Validation](#11-code-safety--validation) for the full breakdown. In summary:
@@ -1338,42 +1332,44 @@ Each takes `node_name` or `host`. Only main may ask for any of them: another age
 
 ## 18. Installation & Configuration
 
+The [installation guide](development.md) is the full version of this section, with upgrading, and [Windows](windows.md) covers Windows.
+
 ### Quick Start
+
+Wactorz needs Python 3.11 or later.
 
 ```bash
 git clone https://github.com/waldiez/wactorz
 cd wactorz
-python -m venv myenv
+python3 -m venv .venv
 
 # Windows
-myenv\Scripts\activate
+.venv\Scripts\activate
 # Mac/Linux
-source myenv/bin/activate
+source .venv/bin/activate
 
 pip install -e ".[all]"
 
-# Set your LLM key
-export ANTHROPIC_API_KEY=sk-ant-...
+# Set your LLM key (or set it in .env, copied from .env.template)
+export LLM_API_KEY=sk-ant-...
 
 # Optional: Home Assistant
 export HA_URL=http://homeassistant.local:8123
 export HA_TOKEN=your_long_lived_token
 
 # Start
-python -m wactorz
+wactorz
 ```
 
 ### MQTT Broker
 
-Wactorz requires an MQTT broker. The simplest option is Mosquitto running locally:
+Wactorz requires an MQTT broker. For one on this machine only, run Mosquitto in Docker with the configuration its image ships for that:
 
 ```bash
-# Windows (after installing Mosquitto)
-mosquitto -v
-
-# Docker
-docker run -it -p 1883:1883 eclipse-mosquitto
+docker run -d --name mosquitto -p 127.0.0.1:1883:1883 eclipse-mosquitto:2.1.2-alpine mosquitto -c /mosquitto-no-auth.conf
 ```
+
+It accepts anonymous clients, so keep it on `127.0.0.1`. The repository's Docker Compose stack runs a broker with accounts instead (`docker compose up -d`, with `MQTT_PASSWORD` set in `.env`).
 
 By default Wactorz connects to `localhost:1883`. Override with `--mqtt-broker` and `--mqtt-port`.
 

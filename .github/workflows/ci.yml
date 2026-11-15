@@ -185,20 +185,13 @@ jobs:
       # static/docs is committed and shipped in the wheel, so a change under
       # docs/ without a rebuild releases documentation for the previous version
       # — the same failure the static/app check below covers for the frontend.
-      # Markdown pages only: the build leaves api/js and api/python alone unless
-      # asked for them, so this needs no typedoc or pdoc and costs under a
-      # second. docs.yml builds those two for the published site.
-      - name: Build docs
-        run: python scripts/build_docs.py
-
-      - name: static/docs matches the documentation source
-        run: |
-          if [ -n "$(git status --porcelain -- static/docs)" ]; then
-            echo "::error::static/docs is stale. Run 'make docs-build' and commit static/docs."
-            git status --porcelain -- static/docs
-            exit 1
-          fi
-          echo "static/docs is up to date."
+      # The check renders the Markdown site into an empty directory and compares
+      # it with static/docs file by file, so a page that is stale, missing, or
+      # left behind by one the sources no longer build all fail it. Markdown pages
+      # only: api/js and api/python come from typedoc and pdoc, which docs.yml
+      # runs for the published site, and are kept out of the repository.
+      - name: static/docs matches a clean build of docs/
+        run: python scripts/build_docs.py --check
 
   test-pip:
     # The lockfile is for development and CI. People install Wactorz with pip,

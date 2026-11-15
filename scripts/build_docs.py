@@ -7,6 +7,7 @@ the landing page (Chakra Petch + JetBrains Mono, #05080e background).
 
 Usage:
     python3 scripts/build_docs.py               # build → static/docs/
+    python3 scripts/build_docs.py --check       # does static/docs match a clean build?
     python3 scripts/build_docs.py --serve       # build + serve on :8001
     python3 scripts/build_docs.py --serve 8002  # custom port
     python3 scripts/build_docs.py --reload      # serve + watch docs/ for changes
@@ -14,12 +15,14 @@ Usage:
 
 import argparse
 import http.server
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
@@ -59,6 +62,7 @@ NAV = [
         [
             ("Installation", "development.md"),
             ("Docker Hub", "dockerhub.md"),
+            ("Windows", "windows.md"),
             ("Architecture", "architecture.md"),
             ("Agents", "agents.md"),
             ("Library", "library.md"),
@@ -374,7 +378,18 @@ def write_favicon(site_dir: Path, public: Path = ROOT / "frontend" / "public") -
     favicon.write_bytes(_PLACEHOLDER_ICO)
 
 
-def build(site_dir: Path = SITE) -> None:
+def _write(path: Path, text: str) -> None:
+    """Write `text` with LF line endings, so a build on Windows matches one on Linux."""
+    with path.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
+
+def render(site_dir: Path) -> None:
+    """Write the Markdown pages, landing page and assets into `site_dir`.
+
+    Writes into whatever is there and removes nothing, so it is meant for an
+    empty directory: `build` renders into a temporary one and mirrors the result.
+    """
     _ensure_markdown()
 
     site_dir.mkdir(parents=True, exist_ok=True)
@@ -393,8 +408,8 @@ def build(site_dir: Path = SITE) -> None:
         text = landing.read_text(encoding="utf-8")
         # Stage word preserved, not assumed — see sync_versions.update_docs_landing.
         text = re.sub(r"v\d+\.\d+\.\d+ · (\w+)", lambda m: f"v{version} · {m.group(1)}", text)
-        (site_dir / "index.html").write_text(text, encoding="utf-8")
-        print(f"  landing  → static/docs/index.html  (v{version})")
+        _write(site_dir / "index.html", text)
+        print(f"  landing  → index.html  (v{version})")
 
     # Write versions.json with the current release
 
@@ -402,8 +417,8 @@ def build(site_dir: Path = SITE) -> None:
         {"version": "latest", "title": "latest", "aliases": ["stable"]},
         {"version": version, "title": version},
     ]
-    (site_dir / "versions.json").write_text(json.dumps(versions, indent=2) + "\n", encoding="utf-8")
-    print(f"  versions → static/docs/versions.json  (v{version})")
+    _write(site_dir / "versions.json", json.dumps(versions, indent=2) + "\n")
+    print(f"  versions → versions.json  (v{version})")
 
     # Render each markdown page into its subdir
     first_per_subdir: dict[str, str] = {}
@@ -425,17 +440,77 @@ def build(site_dir: Path = SITE) -> None:
 
         html = TEMPLATE.format(title=title, sidebar=sidebar, body=body, root=root)
         out = out_dir / _md_to_html_path(md_name)
-        out.write_text(html, encoding="utf-8")
-        print(f"  {md_name:<30} → static/docs/{subdir}/{out.name}")
+        _write(out, html)
+        print(f"  {md_name:<30} → {subdir}/{out.name}")
 
     # index.html redirect for each subdir → first page
     for subdir, first_md in first_per_subdir.items():
         idx = site_dir / subdir / "index.html"
         first_html = _md_to_html_path(first_md)
-        idx.write_text(_redirect(f"./{first_html}"))
-        print(f"  index    → static/docs/{subdir}/index.html → {first_html}")
+        _write(idx, _redirect(f"./{first_html}"))
+        print(f"  index    → {subdir}/index.html → {first_html}")
 
+
+#: The API reference's folder. `--full` writes it and `.gitignore` keeps it out of
+#: the repository, so the Markdown build neither writes, removes nor compares it.
+API_DIR = "api"
+
+
+def _tree(root: Path) -> dict[str, bytes]:
+    """Every file under `root` but the API reference, by its POSIX path, with its bytes."""
+    if not root.is_dir():
+        return {}
+    return {
+        p.relative_to(root).as_posix(): p.read_bytes()
+        for p in root.rglob("*")
+        if p.is_file() and p.relative_to(root).parts[0] != API_DIR
+    }
+
+
+def compare(clean: Path, site_dir: Path) -> tuple[list[str], list[str], list[str]]:
+    """What `site_dir` lacks, has beyond, and has different from the clean build in `clean`."""
+    want, have = _tree(clean), _tree(site_dir)
+    missing = sorted(want.keys() - have.keys())
+    extra = sorted(have.keys() - want.keys())
+    changed = sorted(name for name in want.keys() & have.keys() if want[name] != have[name])
+    return missing, extra, changed
+
+
+def _mirror(clean: Path, site_dir: Path) -> None:
+    """Make `site_dir` match `clean`, leaving the API reference alone."""
+    missing, extra, changed = compare(clean, site_dir)
+    for name in missing + changed:
+        target = site_dir / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(clean / name, target)
+    for name in extra:
+        (site_dir / name).unlink()
+        print(f"  removed  {name}")
+    # Folders the clean build no longer has, deepest first.
+    for folder in sorted((p for p in site_dir.rglob("*") if p.is_dir()), reverse=True):
+        if folder.relative_to(site_dir).parts[0] != API_DIR and not any(folder.iterdir()):
+            folder.rmdir()
+
+
+def build(site_dir: Path = SITE) -> None:
+    """Build the Markdown site into `site_dir`, removing what a clean build would not write."""
+    with tempfile.TemporaryDirectory(prefix="wactorz-docs-") as tmp:
+        render(Path(tmp))
+        site_dir.mkdir(parents=True, exist_ok=True)
+        _mirror(Path(tmp), site_dir)
     print(f"\n✓  site built → {site_dir}")
+
+
+def check(site_dir: Path = SITE) -> list[str]:
+    """How `site_dir` differs from a clean build of the sources, one line each; empty when it matches."""
+    with tempfile.TemporaryDirectory(prefix="wactorz-docs-") as tmp:
+        render(Path(tmp))
+        missing, extra, changed = compare(Path(tmp), site_dir)
+    return (
+        [f"missing  {name}" for name in missing]
+        + [f"extra    {name}" for name in extra]
+        + [f"stale    {name}" for name in changed]
+    )
 
 
 # ── JS/TS docs ─────────────────────────────────────────────────────────────────
@@ -677,9 +752,31 @@ if __name__ == "__main__":
     )
     parser.add_argument("--full", action="store_true", help="also build typedoc and pydoc")
     parser.add_argument(
+        "--check",
+        action="store_true",
+        help="compare static/docs with a clean build, writing nothing; exit 1 if they differ",
+    )
+    parser.add_argument(
         "--reload", action="store_true", help="watch docs/ and rebuild on changes (implies --serve)"
     )
     args = parser.parse_args()
+
+    # The build prints arrows; a Windows console's default code page has none.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8")
+
+    if args.check:
+        problems = check()
+        if problems:
+            print()
+            print("static/docs does not match a clean build of docs/:")
+            for line in problems:
+                print(f"  {line}")
+            print("Run 'make docs-build' and commit static/docs.")
+            sys.exit(1)
+        print()
+        print("static/docs matches a clean build.")
+        sys.exit(0)
 
     if args.reload:
         args.serve = args.serve or 8001

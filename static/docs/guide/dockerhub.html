@@ -118,6 +118,7 @@
       <summary class="sidebar-label">Guide</summary>
       <a href="../guide/development.html" class="">Installation</a>
       <a href="../guide/dockerhub.html" class="active">Docker Hub</a>
+      <a href="../guide/windows.html" class="">Windows</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
       <a href="../guide/library.html" class="">Library</a>
@@ -154,8 +155,8 @@
 <hr />
 <ul>
 <li><a href="#which-image">Which image</a></li>
-<li><a href="#option-a--terminal--compose-recommended">Option A — Terminal + Compose (recommended)</a></li>
-<li><a href="#option-b--docker-desktop--terminal">Option B — Docker Desktop + Terminal</a></li>
+<li><a href="#option-a-terminal-and-compose-recommended">Option A: Terminal and Compose (recommended)</a></li>
+<li><a href="#option-b-docker-desktop-and-terminal">Option B: Docker Desktop and Terminal</a></li>
 </ul>
 <hr />
 <h2 id="which-image">Which image</h2>
@@ -199,7 +200,7 @@ code stays Apache-2.0 either way, and the default image has no such component.</
 <p>The corresponding source is the source of this release at <a href="https://github.com/waldiez/wactorz">https://github.com/waldiez/wactorz</a> (its tag, with the Dockerfile that builds the image) and Ultralytics' own at <a href="https://github.com/ultralytics/ultralytics">https://github.com/ultralytics/ultralytics</a>. Every package in an image is listed with its licence in
 <code>/app/THIRD_PARTY.txt</code>.</p>
 <hr />
-<h2 id="option-a-terminal-compose-recommended">Option A — Terminal + Compose (recommended)</h2>
+<h2 id="option-a-terminal-and-compose-recommended">Option A: Terminal and Compose (recommended)</h2>
 <p>Works in any terminal, including the built-in terminal inside Docker Desktop.</p>
 <h3 id="1-create-a-project-folder">1. Create a project folder</h3>
 <div class="highlight"><pre><span></span><code>mkdir<span class="w"> </span>wactorz
@@ -339,7 +340,7 @@ is what then keeps it yours.</p>
 </table>
 <p>To stop: <code>docker compose down</code></p>
 <hr />
-<h2 id="option-b-docker-desktop-terminal">Option B — Docker Desktop + Terminal</h2>
+<h2 id="option-b-docker-desktop-and-terminal">Option B: Docker Desktop and Terminal</h2>
 <p>The same setup with <code>docker run</code>, in PowerShell.</p>
 <h3 id="step-1-create-a-project-folder">Step 1 — Create a project folder</h3>
 <p>Use a new folder so the <code>.env</code> and <code>mosquitto.conf</code> paths are easy to copy into Docker commands:</p>

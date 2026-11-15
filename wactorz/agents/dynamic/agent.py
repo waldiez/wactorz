@@ -904,7 +904,9 @@ class DynamicAgent(Actor):
                 # Before the state changes, so the Supervisor never sees one
                 # without the other: a restart in this process imports from the
                 # same environment and fails the same way.
-                self.restart_futile = (
+                # Typed as the base declares it: inferred here, as `str`, it would read
+                # to a type checker as a narrower attribute redeclared by this class.
+                self.restart_futile: str | None = (
                     f"the Python module '{last_error.name or last_error}' is not installed"
                 )
             # ── Erlang/OTP: mark FAILED so Supervisor's watch_loop can see us ──

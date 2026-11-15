@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The Docker Hub guide names the image's version tags as they are published**: `waldiez/wactorz:v0.8.0` and `:v0.8.0-ultra`, with the `v`. It wrote them as `:<version>`, which reads as `:0.8.0`, a tag that does not exist.
+
 ## [0.8.0] - 2026-11-15
 
 Wactorz 0.8.0 closes the loop on models: readings are recorded with the time they happened, a model is trained, judged against labels and tried in the shadow of the one served, and a policy decides when it takes over. Two agents may now share a name on different hosts, addressed as `name@node`, and the dashboard gains a Wiring view, an Inbox and tabs that installed packages add. It requires Python 3.11 or later.

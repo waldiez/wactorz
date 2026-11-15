@@ -374,9 +374,36 @@ describe("DashboardChat — view construction", () => {
         expect(hdr.querySelector(".af-chat-pane-state")!.textContent).toBe("running");
     });
 
-    it("shows the empty state when the open thread has no messages", () => {
+    it("introduces the agent before there are any messages", () => {
         mount(host);
-        expect(thread(host).querySelector(".af-chat-empty")).not.toBeNull();
+        expect(thread(host).firstElementChild?.textContent).toContain("Meet @main");
+        expect(thread(host).querySelector(".af-chat-empty")).toBeNull();
+    });
+
+    it("shows the agent's description before its history and still shows it on reopening", async () => {
+        const weather = agent("weather-agent");
+        host.agents.set(weather.id, weather);
+        const chat = mount(host);
+        const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async input => {
+            const path = String(input);
+            const value = path.endsWith("/api/actors/weather-agent")
+                ? { introduction: "I give local forecasts.\n\nTry asking about Athens." }
+                : [{ id: 1, ts: 1, role: "assistant", content: "Some conversation history" }];
+            return new Response(JSON.stringify(value));
+        });
+        try {
+            chat.setTarget(weather.id);
+            await drained();
+            const conversation = thread(host);
+            expect(conversation.firstElementChild?.textContent).toContain("I give local forecasts.");
+            expect(conversation.textContent).toContain("Some conversation history");
+            chat.setTarget("main");
+            chat.setTarget(weather.id);
+            expect(conversation.firstElementChild?.textContent).toContain("Try asking about Athens.");
+            expect(conversation.querySelectorAll(".af-chat-introduction")).toHaveLength(1);
+        } finally {
+            fetch.mockRestore();
+        }
     });
 });
 
@@ -742,7 +769,8 @@ describe("DashboardChat — sending & live events", () => {
             }),
         );
         document.dispatchEvent(new CustomEvent("af-reset-chat", { detail: { agent: null } }));
-        expect(thread(host).querySelector(".af-chat-empty")).not.toBeNull();
+        expect(thread(host).firstElementChild?.textContent).toContain("Meet @main");
+        expect(thread(host).querySelector(".af-chat-msg")).toBeNull();
     });
 
     it("unwire() stops the controller reacting to events", () => {
@@ -1132,7 +1160,8 @@ describe("DashboardChat — history & misc state", () => {
         await dc.loadHistory("main");
         expect(thread(host).textContent).toContain("from history");
         await dc.loadHistory("main"); // already loaded → no second fetch
-        expect(fetch).toHaveBeenCalledTimes(1);
+        const historyRequests = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/api/chats?"));
+        expect(historyRequests).toHaveLength(1);
     });
 
     it("clearAll drops messages and lets history reload", async () => {
@@ -1141,10 +1170,11 @@ describe("DashboardChat — history & misc state", () => {
             json: async () => [{ id: 1, ts: 1_700_000_000, role: "assistant", content: "h" }],
         })) as unknown as typeof fetch;
         const dc = mount(host);
-        await dc.loadHistory("main"); // 1 fetch (chat_log non-empty → no fallback)
+        await dc.loadHistory("main");
         dc.clearAll();
         await dc.loadHistory("main"); // history-loaded set cleared → fetches again
-        expect(fetch).toHaveBeenCalledTimes(2);
+        const historyRequests = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/api/chats?"));
+        expect(historyRequests).toHaveLength(2);
     });
 
     it("loadHistory retries after a failed fetch instead of caching it as loaded", async () => {

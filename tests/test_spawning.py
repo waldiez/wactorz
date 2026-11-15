@@ -16,14 +16,12 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, NoReturn, cast
-from unittest.mock import AsyncMock
 
 import pytest
 
 from tests.waiting import until
 from wactorz.agents.catalog_agent import _build_native_catalog, get_native_factory
 from wactorz.agents.dependency_install import outcome_from_result
-from wactorz.agents.dynamic import DynamicAgent
 from wactorz.agents.llm_agent import LLMProvider
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.spawns import SpawnService
@@ -221,33 +219,6 @@ def test_route_dynamic(main_host) -> None:
     cls, kw = main_host.spawn_calls[-1]
     assert cls.__name__ == "DynamicAgent"
     assert kw["name"] == "cpu"
-
-
-def test_a_generated_agent_is_introduced_only_on_first_spawn(
-    main_host, tmp_path, monkeypatch
-) -> None:
-    config = {
-        "name": "counter",
-        "code": "async def process(agent): pass",
-        "description": "Counts incoming events.",
-        "examples": [" ", "Show today's count", "Show yesterday's count", "One too many"],
-    }
-    agent = DynamicAgent(config["code"], name="counter", persistence_dir=str(tmp_path))
-    agent.state = ActorState.RUNNING
-    notify = AsyncMock()
-    monkeypatch.setattr(agent, "notify_user", notify)
-    spawn = AsyncMock(return_value=agent)
-    monkeypatch.setattr(main_host, "_do_spawn_dynamic", spawn)
-
-    assert run(main_host._spawn_local_from_config(config)) is agent
-    assert (
-        run(main_host._spawn_local_from_config(config, register=False, from_registry=True)) is agent
-    )
-
-    assert spawn.await_count == 2
-    notify.assert_awaited_once_with(
-        "Counts incoming events.\n\nTry:\n- Show today's count\n- Show yesterday's count"
-    )
 
 
 def test_route_llm_explicit(main_host) -> None:

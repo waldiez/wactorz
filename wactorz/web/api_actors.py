@@ -13,7 +13,10 @@ from typing import Any
 from aiohttp import web
 from aiohttp.web import Response
 
+from ..agents.catalog_agent import CatalogAgent
+from ..agents.lookup import find_main_actor
 from ..core.actor import forbidden
+from ..core.spawn_introduction import spawn_introduction
 from . import chat, cost, events, lifecycle, runtime, ws
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -254,7 +257,36 @@ async def actor_handler(request: web.Request) -> Response:
     ag = runtime.state["agents"].get(actor_id)
     if ag is None:
         return web.json_response({"error": "actor not found"}, status=404)
-    return web.json_response(_actor_payload(ag))
+    payload = _actor_payload(ag)
+    introduction = _actor_introduction(actor_id)
+    if introduction:
+        payload["introduction"] = introduction
+    return web.json_response(payload)
+
+
+def _actor_introduction(actor_id: str) -> str:
+    """Describe this actor using its saved configuration or its live manifest."""
+    registry = runtime.registry
+    if registry is None:
+        return ""
+    main = find_main_actor(registry)
+    config = (main._get_spawn_registry().by_id(actor_id) if main is not None else None) or {}
+    actor = registry.get(actor_id)
+    manifest = getattr(actor, "_published_manifest", None) or {}
+    recipe = {}
+    help_text = ""
+    if config.get("trusted"):
+        catalog = registry.find_by_name("catalog")
+        if isinstance(catalog, CatalogAgent):
+            name = str(config.get("name", ""))
+            recipe = catalog.get_recipe(name) or {}
+            if recipe:
+                help_text = f"For setup and commands, send info {name} to @catalog."
+    return spawn_introduction(
+        config.get("description") or manifest.get("description") or recipe.get("description"),
+        config.get("examples") or recipe.get("examples"),
+        help_text=help_text,
+    )
 
 
 def _stored_history(actor_id: str) -> list[Any]:

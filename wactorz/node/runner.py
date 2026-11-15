@@ -73,7 +73,6 @@ from ..core.paths import agent_state_dir
 from ..core.pip import install_command, install_destination, is_installable_name
 from ..core.registry import ActorRegistry, Supervisor
 from ..core.sd_notify import watchdog_loop
-from ..core.spawn_introduction import announce_spawn_introduction
 from ..core.state_lock import StateLock
 from ..core.state_snapshot import why_it_cannot_travel
 from ..core.topics import (
@@ -309,9 +308,6 @@ class NodeRunner:
             self._starting.discard(name)
 
     async def _spawn_now(self, name: str, config: dict[str, Any]) -> None:
-        introduction = config.get("_spawn_intro")
-        if "_spawn_intro" in config:
-            config = {key: value for key, value in config.items() if key != "_spawn_intro"}
         logger.info("[runner] Spawning agent '%s'...", name)
         if self.hosted(name) is not None:
             if config.get("replace", False):
@@ -420,8 +416,6 @@ class NodeRunner:
                 "timestamp": time.time(),
             },
         )
-        if isinstance(introduction, str):
-            await announce_spawn_introduction(agent, introduction)
 
         # A migration is waiting on this. The ack says the *process started*,
         # nothing more: a heartbeat or a manifest would conflate arrival with

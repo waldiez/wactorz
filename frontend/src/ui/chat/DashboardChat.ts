@@ -12,7 +12,12 @@ import { canOpenThread, messageableNames } from "../overview/agentState";
 import { renderChatSidebar } from "./chatSidebar";
 import { buildChatPane, buildChatSidebar, renderPaneHeader } from "./chatLayout";
 import { renderTargetSelect } from "./targetSelect";
-import { buildChatMessageEl, buildChatChoicesState, buildChatEmptyState } from "./chatThread";
+import {
+    buildChatMessageEl,
+    buildChatChoicesState,
+    buildChatEmptyState,
+    buildChatIntroduction,
+} from "./chatThread";
 import { buildIobar as buildChatIobar, nameRecipient } from "./chatIobar";
 import { fetchChatHistory } from "./chatHistory";
 import { ChatLog, threadOf } from "../../chat/chatLog";
@@ -23,7 +28,7 @@ import { ChatAnswers } from "./chatAnswers";
 import { ChatStreamUI } from "./chatStreaming";
 import { streamKey } from "../../io/agentStreams";
 import { postOrWarn } from "../shell/mutate";
-import { apiUrl } from "../../io/api";
+import { apiUrl, requestJson } from "../../io/api";
 import { toast } from "../ToastManager";
 import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attachTray";
 import { emit, Listeners } from "../../events";
@@ -72,6 +77,7 @@ export class DashboardChat {
     }
     /** Every message the chat holds; nothing else writes them. */
     private _log = new ChatLog();
+    private _introductions = new Map<string, string>();
     /** Getting what the person says to the agent they address. */
     private _sending = new ChatSending({
         log: this._log,
@@ -199,6 +205,7 @@ export class DashboardChat {
     /** Drop all chat state (a full reset / wipe). */
     clearAll(): void {
         this._log.clear();
+        this._introductions.clear();
         this._sending.turns.clear();
         this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
     }
@@ -206,6 +213,7 @@ export class DashboardChat {
     /** Forget that the agent `id`'s history was loaded (so it re-fetches if re-added). */
     forgetHistory(id: string): void {
         this._log.forgetHistory(id);
+        this._introductions.delete(id);
     }
 
     /** Build the chat view element (sidebar + pane); renders run again in afterMount once attached. */
@@ -353,11 +361,17 @@ export class DashboardChat {
         const streamText = this._streamUI.streamHereText();
         const msgs = this._log.thread(this.chatTarget);
         const offered = this._target.offered();
+        const agent = this.host.agents.get(this.chatTarget);
         if (offered.length) {
             thread.appendChild(buildChatChoicesState(this.chatTargetName, offered));
-        } else if (msgs.length === 0 && !streamText && !this._streamUI.awaitingHere()) {
+        } else if (!agent && msgs.length === 0 && !streamText && !this._streamUI.awaitingHere()) {
             thread.appendChild(buildChatEmptyState(this.chatTargetName));
         } else {
+            if (agent) {
+                thread.appendChild(
+                    buildChatIntroduction(this.host.label(agent), this._introductions.get(agent.id)),
+                );
+            }
             msgs.forEach(m => this._appendChatMsgEl(m, thread));
         }
         if (streamText) {
@@ -386,6 +400,7 @@ export class DashboardChat {
     /** Fetch and merge the persisted chat history of the agent `id` once (kept by
      *  id, since two agents may share a name; subsequent calls no-op). */
     async loadHistory(id: string): Promise<void> {
+        void this._loadIntroduction(id);
         // No target chosen yet — there is no conversation to fetch.
         if (!id || this._log.historyLoaded(id)) {
             return;
@@ -398,6 +413,22 @@ export class DashboardChat {
         }
         this._log.addHistory(id, incoming);
         if (incoming.length) {
+            this.renderChatThread();
+        }
+    }
+
+    private async _loadIntroduction(id: string): Promise<void> {
+        if (!id || this._introductions.has(id)) {
+            return;
+        }
+        const reply = await requestJson<{ introduction?: string }>(
+            apiUrl(`/api/actors/${encodeURIComponent(id)}`),
+        );
+        if (!reply.ok || typeof reply.value?.introduction !== "string" || !this.host.agents.has(id)) {
+            return;
+        }
+        this._introductions.set(id, reply.value.introduction);
+        if (id === this.chatTarget) {
             this.renderChatThread();
         }
     }

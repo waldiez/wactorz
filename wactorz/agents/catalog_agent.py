@@ -39,7 +39,6 @@ from ..core.addresses import Address
 from ..core.manifests import AgentManifest
 from ..core.paths import resolve_state_dir
 from ..core.pip import missing_requirements, pending_restart
-from ..core.spawn_introduction import announce_spawn_introduction, spawn_introduction
 from ..core.topics import agent_topic
 from .dependency_install import InstallOutcome, install_for_agent
 from .dynamic import DynamicAgent
@@ -218,8 +217,8 @@ def _build_native_catalog() -> dict[str, Any]:
             "factory": WeatherAgent,
             "description": "Natural-language weather: current conditions, forecast, and history via Open-Meteo. No API key required.",
             "examples": [
-                "@weather-agent What's the weather in Athens?",
-                "@weather-agent What's the forecast for Athens for the next three days?",
+                "What's the weather in Athens?",
+                "What's the forecast for Athens for the next three days?",
             ],
             "capabilities": ["weather.current", "weather.forecast", "weather.history"],
             "input_schema": {
@@ -578,7 +577,7 @@ def _build_catalog() -> dict[str, Any]:
                 "speech, opt-in voice conversation, gestures, and optional "
                 "Home Assistant actions."
             ),
-            "examples": ["@reachy-mini health", "@reachy-mini help"],
+            "examples": ["health", "help"],
             "docs": (
                 "Setup:\n"
                 "0. Run Wactorz on Windows or macOS for everything; on Linux (Python "
@@ -1153,13 +1152,15 @@ class CatalogAgent(Actor):
                         if options:
                             save_config["options"] = dict(options)
                         main._save_to_spawn_registry({**save_config, **placing.saved})
-                    return await self._finish_spawn(
-                        actor,
-                        resolved,
-                        recipe,
-                        beta_warning,
-                        first_start=placing.moved_from is None,
+                    msg = _chat_message_with_beta_warning(
+                        f"'{resolved}' spawned and running", beta_warning
                     )
+                    logger.info("[%s] %s", self.name, msg)
+                    await self._mqtt_publish(
+                        agent_topic(self.actor_id, "logs"),
+                        {"type": "log", "message": msg, "timestamp": time.time()},
+                    )
+                    return {"ok": True, "message": msg, "agent": resolved}
                 return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
 
             if recipe.get("require_install_success") is not True:
@@ -1322,33 +1323,12 @@ class CatalogAgent(Actor):
         if main:
             # Mark as trusted so it bypasses safety validator on restore
             main._save_to_spawn_registry({**recipe, "trusted": True, **placing.saved})
-        return await self._finish_spawn(
-            actor, name, recipe, beta_warning, first_start=placing.moved_from is None
-        )
-
-    async def _finish_spawn(
-        self,
-        actor: Actor,
-        name: str,
-        recipe: dict[str, Any],
-        beta_warning: str,
-        *,
-        first_start: bool,
-    ) -> dict[str, Any]:
-        """Confirm the catalogue spawn and let the new agent introduce itself in chat."""
         msg = _chat_message_with_beta_warning(f"'{name}' spawned and running", beta_warning)
         logger.info("[%s] %s", self.name, msg)
         await self._mqtt_publish(
             agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": msg, "timestamp": time.time()},
         )
-        if first_start:
-            intro = spawn_introduction(
-                recipe.get("description"),
-                recipe.get("examples"),
-                help_text=f"For setup and commands, try `@catalog info {name}`.",
-            )
-            await announce_spawn_introduction(actor, intro)
         return {"ok": True, "message": msg, "agent": name}
 
     # Public API ─────────────────────────────────────────────────────────────

@@ -7,7 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- **New agents introduce themselves at first startup.** Catalogue and generated agents post a short description and available examples in their own chat. Catalogue agents without examples point to their help.
+- **Every agent chat opens with an introduction.** The introduction sits above the conversation, with a description and examples when available. It is visible before the first message and after a restart.
 
 ### Changed
 

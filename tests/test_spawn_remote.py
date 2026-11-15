@@ -168,26 +168,6 @@ class TestWhatGoesOverTheWireVersusWhatIsSaved:
 
         assert not main.saved
 
-    async def test_only_a_fresh_spawn_command_carries_the_introduction(self) -> None:
-        main = _Main()
-        config = llm_agent(
-            description="Answers questions about the manual.", examples=["Find the warranty"]
-        )
-
-        await main.spawn(config)
-
-        _, payload, _ = main.published_to("/spawn")
-        assert (
-            payload["_spawn_intro"]
-            == "Answers questions about the manual.\n\nTry:\n- Find the warranty"
-        )
-        assert "_spawn_intro" not in main.saved[0]
-        assert "_spawn_intro" not in main.desired_state[0][1]
-
-        restored = _Main()
-        await restored.actor.spawns._spawn_remote(config, "rpi", save=False, restoring=True)
-        assert "_spawn_intro" not in restored.published_to("/spawn")[1]
-
 
 class TestReachingTheNode:
     """Three places know a node's address, tried in order of how much they know."""

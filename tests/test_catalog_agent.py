@@ -39,10 +39,9 @@ from wactorz.agents.main.hosts import SpawnHost
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.agents.mixins import KeptHere, NotSpawned, spawning
 from wactorz.catalogue_agents.weather_agent import WeatherAgent
-from wactorz.core.actor import ActorState, Message, MessageType
+from wactorz.core.actor import Message, MessageType
 from wactorz.core.addresses import Address
 from wactorz.core.identity import derive_actor_id
-from wactorz.core.topics import agent_topic
 
 
 def _available_off_loop(requirements: list[str]) -> list[str]:
@@ -56,11 +55,6 @@ class _Actor:
     def __init__(self, name: str) -> None:
         self.name = name
         self.actor_id = f"id-{name}"
-        self.state = ActorState.RUNNING
-        self.told: list[str] = []
-
-    async def notify_user(self, text: str) -> None:
-        self.told.append(text)
 
 
 class _Installer(_Actor):
@@ -172,8 +166,8 @@ def main_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Main:
 class _Spawner:
     """Replaces `Actor.spawn`, recording what would have been started."""
 
-    def __init__(self, result: Any = ..., error: Exception | None = None) -> None:
-        self.result = _Actor("spawned") if result is ... else result
+    def __init__(self, result: Any = "spawned", error: Exception | None = None) -> None:
+        self.result = result
         self.error = error
         self.calls: list[tuple[type, dict[str, Any]]] = []
 
@@ -407,14 +401,12 @@ class TestSpawnRefusals:
     async def test_an_agent_already_running_is_not_spawned_again(
         self, catalog: CatalogAgent, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        running = _Actor("smart-energy")
-        catalog._registry = _Registry(running)  # pyright: ignore[reportAttributeAccessIssue]
+        catalog._registry = _Registry(_Actor("smart-energy"))  # pyright: ignore[reportAttributeAccessIssue]
         spawner = _spawner(catalog, monkeypatch)
 
         result = await catalog._action_spawn("smart energy", {})
 
         assert result == {"ok": True, "message": "'smart-energy' is already running"}
-        assert running.told == []
         assert spawner.calls == []
 
 
@@ -606,11 +598,7 @@ class TestNativeSpawn:
         self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         catalog._registry = _Registry()  # pyright: ignore[reportAttributeAccessIssue]
-        weather = WeatherAgent(persistence_dir=str(tmp_path))
-        weather.state = ActorState.RUNNING
-        publish = AsyncMock()
-        monkeypatch.setattr(weather, "_mqtt_publish", publish)
-        spawner = _spawner(catalog, monkeypatch, result=weather)
+        spawner = _spawner(catalog, monkeypatch)
 
         result = await catalog._action_spawn("weather", {})
 
@@ -619,18 +607,6 @@ class TestNativeSpawn:
             "message": "'weather-agent' spawned and running",
             "agent": "weather-agent",
         }
-        publish.assert_awaited_once()
-        published = publish.await_args
-        assert published is not None
-        topic, payload = published.args
-        assert topic == agent_topic(weather.actor_id, "chat")
-        assert payload["from"] == "weather-agent"
-        assert "current conditions, forecast, and history" in payload["content"]
-        assert "@weather-agent What's the weather in Athens?" in payload["content"]
-        assert (
-            "@weather-agent What's the forecast for Athens for the next three days?"
-            in payload["content"]
-        )
         ((cls, kwargs),) = spawner.calls
         assert cls is WeatherAgent
         assert kwargs == {
@@ -1011,9 +987,6 @@ class TestDynamicSpawn:
         assert len(spawner.calls) == 1
         assert len(told) == 1
         assert "'reachy-mini' spawned and running" in told[0]
-        (introduction,) = spawner.result.told
-        assert "Controls a Reachy Mini" in introduction
-        assert "@reachy-mini health" in introduction
 
     async def test_an_agent_that_appeared_during_the_install_is_not_spawned_twice(
         self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch

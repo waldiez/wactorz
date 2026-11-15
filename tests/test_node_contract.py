@@ -205,8 +205,6 @@ SPAWN_CONFIG_FIELDS = frozenset(
         "replace",
         "_initial_state",
         "_migration_token",
-        # A first-start chat message carried by the direct spawn command.
-        "_spawn_intro",
         # A library agent, built from a package on the node: what to build,
         # and what its constructor or `agent.options` is given.
         "target",

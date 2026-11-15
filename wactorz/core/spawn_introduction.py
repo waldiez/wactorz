@@ -1,11 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The short introduction shown when a new agent has started."""
-
-import logging
-
-from .actor import Actor, ActorState
-
-logger: logging.Logger = logging.getLogger(__name__)
+"""Format the introduction at the start of an agent's chat."""
 
 
 def _short_line(value: object, limit: int) -> str:
@@ -31,13 +25,3 @@ def spawn_introduction(description: object, examples: object, *, help_text: str 
         else help_text
     )
     return "\n\n".join(part for part in (about, usage) if part)
-
-
-async def announce_spawn_introduction(actor: Actor, introduction: str) -> None:
-    """Send a first-start introduction from the new agent's own chat."""
-    if not introduction or actor.state != ActorState.RUNNING:
-        return
-    try:
-        await actor.notify_user(introduction)
-    except Exception:
-        logger.exception("[%s] Could not send the new agent's introduction", actor.name)

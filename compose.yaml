@@ -26,7 +26,7 @@ services:
 
   # ── MQTT broker ─────────────────────────────────────────────────────────────
   mosquitto:
-    image: eclipse-mosquitto:2.1.2-alpine@sha256:860aeb5d63ce509508f6dcfb2bc8a1c1dd2bc60555b562b45ce90e52d8dabb0f
+    image: eclipse-mosquitto:2.1.2-alpine@sha256:75d6662dee52c947dc9dd9c29f1d8d7ffef78ddaf38001caa09755681e8bbc98
     cap_drop: [ALL]
     # KILL is for the reload above: the broker drops to its own user, and the
     # watcher that tells it to read the new accounts runs as root, which cannot
@@ -466,7 +466,7 @@ services:
 
   prometheus:
     profiles: [python]
-    image: prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
+    image: prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     container_name: wactorz-prometheus

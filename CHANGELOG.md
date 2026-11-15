@@ -18,7 +18,7 @@ Wactorz 0.8.0 closes the loop on models: readings are recorded with the time the
 - **For code that uses Wactorz.** The package is typed (`py.typed`), `wactorz.client` talks to a running server (provisional), and `WACTORZ_NAMESPACE` lets two installs share one broker.
 - **Reachy Mini, still opt-in,** moves to SDK 1.12.0, with built-in help, clearer voice setup messages, and steadier audio and motors.
 - **Installing on 0.8.** The guide has a Windows page, Installation has an Upgrading section, and the Windows start script works again.
-- **Fixes** for stopping and restarting agents, file serving on Windows, routes and recording that waited on the disk, and many dashboard details.
+- **Fixes** for a Windows crash that stopped Wactorz when an agent's packages were installed while it ran, stopping and restarting agents, file serving on Windows, routes and recording that waited on the disk, and many dashboard details.
 
 ### Before you upgrade
 

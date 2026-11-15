@@ -9,12 +9,12 @@ ARG FLAVOUR=default
 # uv, at build time only: it turns uv.lock into the list the install below
 # checks every package against, and is never copied into the image. Pinned by
 # digest like the base. CI installs the uv this line names (.github/actions/setup-uv).
-FROM ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.8@sha256:5cc1805e2426484abca4ad46ea783bab281fdb225fd82d8ce6d66a81254bac85 AS uv
 
 # Each base is pinned by digest in a literal FROM line, so Dependabot proposes its
 # updates (.github/dependabot.yml) and every build starts from the same bytes.
 # A build makes only the one its FLAVOUR names.
-FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS base-default
+FROM python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f AS base-default
 
 # Unpinned on purpose, here and below: a pinned Debian version stops resolving
 # once a security update replaces it, and the `runtime` stage upgrades it
@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # One Python release behind the default image: the Reachy Mini SDK needs a
 # PyGObject that does not build on a newer one.
-FROM python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f AS base-ultra
+FROM python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90 AS base-ultra
 
 # Three kinds of package. What OpenCV and PyTorch load when they are imported
 # (libGL, GLib, the X libraries, OpenMP). What builds a package that ships no

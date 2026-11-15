@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from wactorz import cli, config
-from wactorz.config import _dashboard_port, _env_int, _env_truthy
+from wactorz.config import _dashboard_port, _env_int, _env_token, _env_truthy
 
 
 class TestAMalformedInteger:
@@ -180,3 +180,41 @@ class TestTheDashboardPort:
 
         assert "default=CONFIG.ws_port," in source
         assert "MONITOR_PORT" not in source
+
+
+class TestABotToken:
+    """A chat channel's token, read from its documented name or its shorter one."""
+
+    def test_whitespace_counts_as_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A blank token would log in, be rejected, and only then say so.
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", " \t")
+        monkeypatch.delenv("TELEGRAM_TOKEN", raising=False)
+
+        assert _env_token("TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN") == ""
+
+    def test_a_blank_documented_name_falls_back_to_the_shorter_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", " ")
+        monkeypatch.setenv("TELEGRAM_TOKEN", "123:abc")
+
+        assert _env_token("TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN") == "123:abc"
+
+    def test_a_real_token_is_trimmed_and_otherwise_kept(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", " MTIz.abc-def_ghi \n")
+
+        assert _env_token("DISCORD_BOT_TOKEN", "DISCORD_TOKEN") == "MTIz.abc-def_ghi"
+
+    def test_the_documented_name_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "first")
+        monkeypatch.setenv("DISCORD_TOKEN", "second")
+
+        assert _env_token("DISCORD_BOT_TOKEN", "DISCORD_TOKEN") == "first"
+
+    def test_both_channels_read_through_it(self) -> None:
+        source = Path(config.__file__).read_text(encoding="utf-8")
+
+        assert 'telegram_token=_env_token("TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN")' in source
+        assert 'discord_token=_env_token("DISCORD_BOT_TOKEN", "DISCORD_TOKEN")' in source

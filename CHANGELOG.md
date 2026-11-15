@@ -18,7 +18,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- **The documentation covers installing and upgrading on 0.8.** The guide has a Windows page (Docker Compose, the Docker Hub image, pip, and frontend development), and Installation has an Upgrading section. The broker command it gives for a pip install now works with Mosquitto 2, published on loopback only. The separate Quickstart page, which described the Windows start scripts, is retired in favour of the Windows page.
+- **The documentation covers installing and upgrading on 0.8.** The guide has a Windows page (Docker Compose, the Docker Hub image, pip, and frontend development), and Installation has an Upgrading section. The broker command it gives for a pip install now works with Mosquitto 2, published on loopback only. The Quickstart page's instructions for the Windows start script are consolidated into the Windows page, as its *Start script* section, and the separate page is gone.
+
+- **The Windows launcher works on 0.8.** `scripts\start.bat` now only runs the `start.ps1` beside it and exits with its code. `start.ps1` uses the checkout it is in, and updates it only when given `-Update`; it no longer clones or pulls on its own. It requires Python 3.11 or later before it installs anything or starts Docker, and installs into the checkout's `.venv`, reused on later runs and never deleted for you. It asks for `MQTT_PASSWORD` when it is empty (Enter generates one, kept out of the output), asks for an API key only when the chosen `LLM_PROVIDER` needs one, starts the broker with the repository's authenticated Compose service, and prints the dashboard's real address, `http://localhost:8888` by default. Each failure stops with what to do. The *Start script* section of the Windows guide describes it.
 
 - **A node's agents may use a pipeline's tick, a model's drift alarm and a trial's answers** under the node access
   list (`pipelines/#`, `models/+/drift`, `shadow/#`). A pipeline step or a drift agent placed on a node with its own

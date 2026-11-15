@@ -10,11 +10,13 @@ Surface Pro X and Copilot+ PCs.
 | Option | Needs | Best for |
 |---|---|---|
 | **A - Docker Compose** | Git, Docker Desktop | The full stack from a repository clone: broker, Wactorz, Prometheus |
+| **Start script** | Git, Docker Desktop, Python 3.11 or later | One command from a repository clone, with Wactorz running natively |
 | **B - Docker Hub image** | Docker Desktop | Running Wactorz without cloning anything |
 | **C - pip install** | Python 3.11 or later, Docker Desktop for the broker | Running Wactorz natively, or using it as a library |
 | **D - Frontend development** | Git, Docker Desktop, Python 3.11 or later, Bun | Working on the dashboard |
 
-Start with Option A if you want everything running from the repository. Use
+Start with Option A if you want everything running from the repository, or the
+[start script](#start-script) to have one command set it up and run it. Use
 Option B if you only want to run Wactorz. Use Option C to install the package into
 a Python environment of your own, and Option D when you are editing the dashboard.
 
@@ -94,6 +96,62 @@ To update, pull the repository and rebuild:
 git pull
 docker compose --profile python up -d --build
 ```
+
+---
+
+## Start script
+
+`scripts\start.bat` starts Wactorz from a repository checkout without Docker
+Compose running Wactorz itself: the broker runs in Docker, and Wactorz runs on
+Windows in the checkout's own virtual environment.
+
+Install, once:
+
+```powershell
+winget install Python.Python.3.13      # Python 3.11 or later
+winget install Git.Git
+winget install Docker.DockerDesktop    # then open it and wait for the engine
+```
+
+Then get the code and start:
+
+```powershell
+git clone https://github.com/waldiez/wactorz
+cd wactorz
+scripts\start.bat
+```
+
+Or double-click `scripts\start.bat` in Explorer. It only runs the `start.ps1`
+next to it, so keep the two together in the checkout.
+
+On every run the launcher:
+
+1. uses the checkout it is in, as it is (`-Update` runs `git pull --ff-only` first);
+2. finds Python 3.11 or later, or reuses the checkout's `.venv`. A `.venv` made with
+   an older Python is left alone: delete it and run the launcher again;
+3. creates `.env` from `.env.template` if there is none, and leaves an existing one
+   as it is;
+4. asks for `MQTT_PASSWORD` if it is empty: press Enter to generate one, which is
+   saved in `.env` and not shown, or `E` to set your own in Notepad;
+5. opens `.env` in Notepad if your `LLM_PROVIDER` needs an API key and none is set.
+   The default, `anthropic`, takes `ANTHROPIC_API_KEY` or `LLM_API_KEY`;
+   `LLM_PROVIDER=ollama` needs no key;
+6. starts the authenticated MQTT broker (`docker compose up -d --wait mosquitto`);
+7. installs Wactorz into `.venv`, again only when `pyproject.toml` changes;
+8. launches Wactorz and prints the dashboard address, http://localhost:8888 by
+   default (`MONITOR_PORT` changes it).
+
+Options, passed to `start.bat` or `start.ps1`:
+
+```powershell
+scripts\start.bat -Update      # git pull --ff-only, then start
+scripts\start.bat -NoPrompt    # never ask or open Notepad; stop with an error instead
+```
+
+`WACTORZ_PYTHON` names the `python.exe` to make `.venv` with, and any other
+arguments are passed on to `wactorz`. When something is missing (Python 3.11,
+Docker's engine, `MQTT_PASSWORD`, a key), the launcher stops and says what to do;
+run `scripts\start.bat` from a terminal to read the message if the window closes.
 
 ---
 

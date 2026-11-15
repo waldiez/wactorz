@@ -555,6 +555,11 @@ class MemoryHost(LLMHost, Protocol):
 
     _prompt_fragments: tuple[PromptFragment, ...]
 
+    @property
+    def _agent_manifests(self) -> dict[str, AgentManifest]:
+        """Read-only here: the catalogue's recipes are listed in the prompt from it."""
+        ...
+
 
 class PlanningHost(ActorHost, Protocol):
     """What `PlanningMixin` needs — and it is the widest of the four.

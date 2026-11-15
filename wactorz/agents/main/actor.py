@@ -54,7 +54,7 @@ from .migration import Migration
 from .nodes import NodeManager
 from .placement import PlacedOnNode, Placement
 from .planning import PlanningMixin, starts_with_bypass
-from .routing import RoutingMixin
+from .routing import RoutingMixin, spawn_request_name
 from .shadow_serving import ShadowServing
 from .spawn_registry import SpawnRegistry
 from .spawns import SpawnService
@@ -81,6 +81,9 @@ _INTERFACE_ACTION_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _DELEGATE_BLOCK_RE = re.compile(r"<delegate>(.*?)</delegate>", re.IGNORECASE | re.DOTALL)
+
+#: The name the catalogue agent runs under, which holds the recipes main starts by name.
+CATALOG_AGENT = "catalog"
 
 
 def _normalize_agent_name(name: str) -> str:
@@ -829,6 +832,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             await self._record_external_exchange(text, response, ts_user=ts_user)
             return note_prefix + response
 
+        recipe_reply = await self._spawn_named_recipe(text)
+        if recipe_reply is not None:
+            await self._record_external_exchange(text, recipe_reply, ts_user=ts_user)
+            return note_prefix + recipe_reply
+
         # Single LLM call classifies intent: ACTUATE, HA, PIPELINE (reactive rule), OTHER
         intent = await self._classify_intent(text)
         logger.info("[%s] Intent: %s — %s", self.name, intent, text[:60])
@@ -1097,6 +1105,13 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             yield {"done": True, "spawned": [], "system_msg": ""}
             return
 
+        recipe_reply = await self._spawn_named_recipe(text)
+        if recipe_reply is not None:
+            await self._record_external_exchange(text, recipe_reply, ts_user=ts_user)
+            yield recipe_reply
+            yield {"done": True, "spawned": [], "system_msg": ""}
+            return
+
         # Single LLM call classifies intent: ACTUATE, HA, PIPELINE, or OTHER
         intent = await self._classify_intent(text)
         logger.info("[%s] Intent: %s — %s", self.name, intent, text[:60])
@@ -1251,7 +1266,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # 2. Live catalog actor — authoritative, immune to injection races
         if self._registry:
-            cat = self._registry.find_by_name("catalog")
+            cat = self._registry.find_by_name(CATALOG_AGENT)
             if cat and hasattr(cat, "list_recipes"):
                 try:
                     for recipe_name in cat.list_recipes():  # pyright: ignore[reportAttributeAccessIssue]
@@ -1261,6 +1276,22 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     logger.debug("[%s] Catalog recipe lookup failed: %s", self.name, exc)
 
         return None
+
+    async def _spawn_named_recipe(self, text: str) -> str | None:
+        """Hand a plain request to start a catalogue recipe to the catalog; None for anything else.
+
+        "spawn reachy mini" names the ``reachy-mini`` recipe as a person would
+        say it. Left to the model, a name that is not running reads as a new
+        agent to write, so a request that is only a recipe's name is answered
+        the way ``@catalog spawn reachy-mini`` is, without a model call. Any
+        request with more in it goes to the model, which is shown the recipes.
+        """
+        name = spawn_request_name(text)
+        recipe = self._match_catalog_recipe(name) if name else None
+        if recipe is None:
+            return None
+        logger.info("[%s] %r names catalogue recipe %r", self.name, text[:60], recipe)
+        return await self.delegation.route_mention(f"@{CATALOG_AGENT} spawn {recipe}")
 
     async def _resolve_or_spawn(self, agent_name: str) -> tuple[Any, bool]:
         return await self.spawns._resolve_or_spawn(agent_name)

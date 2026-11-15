@@ -14,6 +14,7 @@ from collections.abc import Callable
 from typing import Any
 
 from wactorz.agents.main.memory import MemoryMixin
+from wactorz.core.manifests import AgentManifest
 
 
 def run(coro) -> Any:
@@ -63,6 +64,12 @@ class MemoryHost(MemoryMixin):
         self.total_output_tokens = 0
         self.total_cost_usd = 0.0
         self.persisted_cost = 0
+        self.manifests: dict[str, AgentManifest] = {}
+
+    # MainActor surface: the manifests the catalog writes its recipes into
+    @property
+    def _agent_manifests(self) -> dict[str, AgentManifest]:
+        return self.manifests
 
     # Actor base surface
     def recall(self, key, default=None) -> Any:

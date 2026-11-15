@@ -78,13 +78,33 @@ def build_social_companions(
     return companions
 
 
+async def run_companion(interface: Any) -> None:
+    """Run one companion until it stops, so that its failing stops it alone.
+
+    Companions are gathered with the actor system and the primary interface, and
+    an exception out of one would end the gather and the whole server with it. A
+    channel that cannot come up (Telegram unreachable, a privilege the bot was
+    never granted) is logged and ends here; cancellation still goes through.
+    Each channel logs the setting to fix for the failures it can name, such as a
+    rejected token, and returns before this is needed.
+    """
+    try:
+        await interface.run()
+    except Exception:
+        logger.exception(
+            "%s stopped; the server and the other interfaces keep running.",
+            type(interface).__name__,
+        )
+
+
 def run_all_interfaces(interfaces: list[Any]) -> list[Any]:
-    """Turn companion interface objects into their ``.run()`` coroutines for gather.
+    """Turn companion interface objects into guarded ``.run()`` coroutines for gather.
 
     The outbox goes in the same list: it has a ``run`` of the same shape, and
-    runs for as long as the channels it serves.
+    runs for as long as the channels it serves. Each is wrapped in
+    :func:`run_companion`, so one that fails does not take the others down.
     """
-    return [iface.run() for iface in interfaces]
+    return [run_companion(iface) for iface in interfaces]
 
 
 __all__ = [
@@ -100,5 +120,6 @@ __all__ = [
     "missing_dependency",
     "resolve_host",
     "run_all_interfaces",
+    "run_companion",
     "social_channel_blocked",
 ]

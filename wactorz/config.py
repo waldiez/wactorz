@@ -59,6 +59,19 @@ def _env_truthy(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on", "dev"}
 
 
+def _env_token(*names: str) -> str:
+    """The first of ``names`` that holds more than whitespace, trimmed; empty when none does.
+
+    A token is never whitespace, so a blank one counts as unset: the channel it
+    belongs to stays off instead of logging in with a token the service rejects.
+    """
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _api_key() -> str:
     """``API_KEY``, or else the contents of the file ``API_KEY_FILE`` names.
 
@@ -737,9 +750,9 @@ CONFIG = AppConfig(
     ha_state_bridge_domains=os.getenv("HA_STATE_BRIDGE_DOMAINS", ""),
     ha_state_bridge_per_entity=_env_truthy("HA_STATE_BRIDGE_PER_ENTITY"),
     # Also accept the shorter DISCORD_TOKEN / TELEGRAM_TOKEN names.
-    discord_token=os.getenv("DISCORD_BOT_TOKEN", "") or os.getenv("DISCORD_TOKEN", ""),
+    discord_token=_env_token("DISCORD_BOT_TOKEN", "DISCORD_TOKEN"),
     discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", "").strip(),
-    telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "") or os.getenv("TELEGRAM_TOKEN", ""),
+    telegram_token=_env_token("TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN"),
     telegram_allowed_user_id=_env_int("TELEGRAM_ALLOWED_USER_ID", 0),
     ws_port=_dashboard_port(),
     nim_api_key=os.getenv("NIM_API_KEY", ""),

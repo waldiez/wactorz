@@ -30,6 +30,14 @@ ASKED_KEPT = 1000
 #: and the interface keeps the rest.
 TOKEN_CHARS = 16
 
+#: What is logged when Telegram refuses the bot token: the setting to fix, and
+#: never the token itself.
+REJECTED_LOGIN = (
+    "[Telegram] Not starting: Telegram rejected the bot token. Set TELEGRAM_BOT_TOKEN "
+    "(or the add-on's telegram_bot_token option) to the token @BotFather gave you, and "
+    "restart. Everything else keeps running."
+)
+
 
 class TelegramInterface:
     """Telegram bot interface.
@@ -146,13 +154,15 @@ class TelegramInterface:
     async def run(self) -> None:
         """Poll Telegram and answer the allowed users, until cancelled.
 
-        Returns at once, logging why, when ``python-telegram-bot`` is not installed. With no
-        allowed users it runs in setup mode, answering only ``/start`` with the sender's id.
-        While it runs, the bot is registered as the ``telegram`` outbound channel.
+        Returns at once, logging why, when ``python-telegram-bot`` is not installed or Telegram
+        rejects the token. With no allowed users it runs in setup mode, answering only
+        ``/start`` with the sender's id. While it runs, the bot is registered as the
+        ``telegram`` outbound channel.
         """
         try:
             from telegram import Update  # optional dependency: the `telegram` extra
             from telegram.constants import ChatAction  # optional dependency: the `telegram` extra
+            from telegram.error import InvalidToken  # optional dependency: the `telegram` extra
             from telegram.ext import (  # optional dependency: the `telegram` extra
                 Application,
                 CallbackQueryHandler,
@@ -267,14 +277,20 @@ class TelegramInterface:
                 logger.debug("[Telegram] Could not take the buttons off a message: %s", exc)
             await self.outbox.answered(answer)
 
-        app = Application.builder().token(self.token).build()
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logger.info("[Telegram] Bot starting (polling)...")
+        try:
+            # The token is checked twice: by the builder for being empty, and by
+            # Telegram itself when initialize() asks who the bot is.
+            app = Application.builder().token(self.token).build()
+            await app.initialize()
+        except InvalidToken:
+            # Not logger.exception: the library's message quotes the token.
+            logger.error(REJECTED_LOGIN)  # noqa: TRY400  # the traceback would print the token
+            return
         app.add_handler(CommandHandler("start", start_cmd))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         app.add_handler(CallbackQueryHandler(handle_pick))
-
-        logging.getLogger("httpx").setLevel(logging.WARNING)
-        logger.info("[Telegram] Bot starting (polling)...")
-        await app.initialize()
         await app.start()
         self._bot = app.bot
         if app.updater:

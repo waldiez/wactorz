@@ -9,7 +9,7 @@ agent: an unlisted user, an unconfigured bot, a caller over the rate limit.
 **`python-telegram-bot` is faked here rather than imported.** It is an optional
 extra: CI installs `.[all,dev]` and gets it, but `pip install -e ".[dev]"` — the
 natural thing for a contributor to run — does not. A test resting on the real
-package would pass here and fail there. Faking the three modules `run()` imports
+package would pass here and fail there. Faking the modules `run()` imports
 also pins the tests to *our* use of that API rather than to its current shape.
 
 `start_cmd` and `handle_message` are closures inside `run()`, so there is nothing
@@ -181,6 +181,17 @@ class _Application:
         return None
 
 
+class _InvalidToken(Exception):
+    """The library's error for a token Telegram refuses; its message quotes the token."""
+
+
+class _RejectedApplication(_Application):
+    """An Application whose token Telegram refuses when asked who the bot is."""
+
+    async def initialize(self) -> None:
+        raise _InvalidToken("The token `t0ps3cret` was rejected by the server.")
+
+
 class _CommandHandler:
     def __init__(self, _name: str, callback: Any) -> None:
         self.kind = "command"
@@ -210,7 +221,7 @@ class _Filters:
 
 
 def _install_fake_telegram(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Put the three modules `run()` imports into `sys.modules`, restorably.
+    """Put the modules `run()` imports into `sys.modules`, restorably.
 
     `monkeypatch.setitem` rather than a bare assignment: `sys.modules` is
     process-wide and never restored on its own, so an unrestored stub shadows the
@@ -223,6 +234,9 @@ def _install_fake_telegram(monkeypatch: pytest.MonkeyPatch) -> None:
 
     constants = types.ModuleType("telegram.constants")
     constants.ChatAction = types.SimpleNamespace(TYPING="typing")  # type: ignore[attr-defined]
+
+    error = types.ModuleType("telegram.error")
+    error.InvalidToken = _InvalidToken  # type: ignore[attr-defined]
 
     ext = types.ModuleType("telegram.ext")
     ext.Application = _Application  # type: ignore[attr-defined]
@@ -239,6 +253,7 @@ def _install_fake_telegram(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setitem(sys.modules, "telegram", telegram)
     monkeypatch.setitem(sys.modules, "telegram.constants", constants)
+    monkeypatch.setitem(sys.modules, "telegram.error", error)
     monkeypatch.setitem(sys.modules, "telegram.ext", ext)
 
 
@@ -271,6 +286,46 @@ def fake_telegram_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(name="actor")
 def actor_fixture() -> _Recorder:
     return _Recorder()
+
+
+class TestWhenTheTokenIsRejected:
+    """A mistyped token stops the bot and nothing else, and says what to fix."""
+
+    async def test_it_logs_the_setting_and_returns(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(sys.modules["telegram.ext"], "Application", _RejectedApplication)
+        outbox = _Outbox()
+        interface = TelegramInterface(
+            _Recorder(),  # type: ignore[arg-type]
+            token="t0ps3cret",
+            allowed_user_ids=[7],  # type: ignore[arg-type]
+            outbox=cast(Outbox, outbox),
+        )
+
+        with caplog.at_level(logging.ERROR):
+            await interface.run()
+
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(errors) == 1
+        assert "TELEGRAM_BOT_TOKEN" in errors[0].getMessage()
+        assert errors[0].exc_info is None
+        assert "t0ps3cret" not in caplog.text
+        assert outbox.registered == []
+        assert interface._bot is None
+
+    async def test_an_empty_token_refused_by_the_builder_is_reported_the_same_way(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        def refuse(_self: _Application) -> _Application:
+            raise _InvalidToken("You must pass the token you received from @BotFather!")
+
+        monkeypatch.setattr(_Application, "build", refuse)
+
+        with caplog.at_level(logging.ERROR):
+            await _asking().run()
+
+        assert "TELEGRAM_BOT_TOKEN" in caplog.text
 
 
 class TestWhenTheLibraryIsMissing:

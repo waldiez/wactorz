@@ -10,10 +10,10 @@ Include the version, how the deployment is exposed (loopback, LAN, Home Assistan
 
 | Version | Supported |
 | ------- | --------- |
-| 0.7.x   | Yes       |
-| < 0.7   | No        |
+| 0.8.x   | Yes       |
+| < 0.8   | No        |
 
-Security fixes are released on the current minor version. Earlier versions receive no backports. The properties described below are those of 0.7.2.
+Security fixes are released on the current minor version. Earlier versions receive no backports. The properties described below are those of 0.8.0.
 
 ## The surfaces
 

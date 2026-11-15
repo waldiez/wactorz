@@ -38,7 +38,7 @@ With a camera attached:
 CAMERA=0 python run.py                 # or CAMERA=rtsp://user:pass@host/stream
 ```
 
-The `ultra` image (`wactorz:<version>-ultra`) has all of this installed, with
+The `ultra` image (`wactorz:v<version>-ultra`) has all of this installed, with
 GStreamer for cameras that need it.
 
 ## How it works

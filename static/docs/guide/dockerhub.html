@@ -171,17 +171,19 @@
 </thead>
 <tbody>
 <tr>
-<td><code>waldiez/wactorz:latest</code>, <code>:&lt;version&gt;</code></td>
+<td><code>waldiez/wactorz:latest</code>, <code>:v&lt;version&gt;</code></td>
 <td>Wactorz and its integrations (the <code>all</code> extra).</td>
 <td>Agents that talk to APIs, Home Assistant, MQTT, chat platforms. This is the one the examples here use.</td>
 </tr>
 <tr>
-<td><code>waldiez/wactorz:ultra</code>, <code>:&lt;version&gt;-ultra</code></td>
+<td><code>waldiez/wactorz:ultra</code>, <code>:v&lt;version&gt;-ultra</code></td>
 <td>The same, plus PyTorch (the CPU build), Ultralytics and OpenCV, the system libraries they load, a compiler, and GStreamer with its introspection data.</td>
 <td>Vision agents (anything that imports <code>cv2</code>, <code>torch</code> or <code>ultralytics</code>), and the Reachy Mini catalogue agent, whose SDK has to build part of itself.</td>
 </tr>
 </tbody>
 </table>
+<p>A version tag starts with <code>v</code>, as the release does: <code>waldiez/wactorz:v0.8.0</code> and
+<code>waldiez/wactorz:v0.8.0-ultra</code>. <code>latest</code> and <code>ultra</code> follow the newest release.</p>
 <p>The larger one is several times the size of the other, which is the reason there are
 two. An agent that needs it fails in the small image when it imports <code>cv2</code>
 (<code>libGL.so.1: cannot open shared object file</code>) or when pip tries to build a package that

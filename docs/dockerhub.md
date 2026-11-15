@@ -18,8 +18,11 @@ There are two, built from the same source and published under the same name:
 
 | Tag | What it holds | When to use it |
 | --- | --- | --- |
-| `waldiez/wactorz:latest`, `:<version>` | Wactorz and its integrations (the `all` extra). | Agents that talk to APIs, Home Assistant, MQTT, chat platforms. This is the one the examples here use. |
-| `waldiez/wactorz:ultra`, `:<version>-ultra` | The same, plus PyTorch (the CPU build), Ultralytics and OpenCV, the system libraries they load, a compiler, and GStreamer with its introspection data. | Vision agents (anything that imports `cv2`, `torch` or `ultralytics`), and the Reachy Mini catalogue agent, whose SDK has to build part of itself. |
+| `waldiez/wactorz:latest`, `:v<version>` | Wactorz and its integrations (the `all` extra). | Agents that talk to APIs, Home Assistant, MQTT, chat platforms. This is the one the examples here use. |
+| `waldiez/wactorz:ultra`, `:v<version>-ultra` | The same, plus PyTorch (the CPU build), Ultralytics and OpenCV, the system libraries they load, a compiler, and GStreamer with its introspection data. | Vision agents (anything that imports `cv2`, `torch` or `ultralytics`), and the Reachy Mini catalogue agent, whose SDK has to build part of itself. |
+
+A version tag starts with `v`, as the release does: `waldiez/wactorz:v0.8.0` and
+`waldiez/wactorz:v0.8.0-ultra`. `latest` and `ultra` follow the newest release.
 
 The larger one is several times the size of the other, which is the reason there are
 two. An agent that needs it fails in the small image when it imports `cv2`

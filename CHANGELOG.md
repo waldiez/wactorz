@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The Docker Hub guide names the image's version tags as they are published**: `waldiez/wactorz:v0.8.0` and `:v0.8.0-ultra`, with the `v`. It wrote them as `:<version>`, which reads as `:0.8.0`, a tag that does not exist.
+
 ### Fixed
 
 - **A Telegram or Discord bot that cannot log in no longer stops Wactorz.** A mistyped `TELEGRAM_BOT_TOKEN` or `DISCORD_BOT_TOKEN` made the bot's login fail at startup, and the failure took the dashboard, the REST API and every agent down with it. The bot now logs one error naming the setting to fix and stays off, and everything else keeps running. Any other failure of a bot running next to the dashboard (Telegram unreachable, say) stops that bot alone. A token that is only spaces counts as unset, so that channel is simply not started.

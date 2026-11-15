@@ -7,7 +7,7 @@ import os
 import re
 import time
 from collections.abc import AsyncGenerator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
@@ -299,7 +299,7 @@ def _calendar_timezone() -> tuple[Any, str | None]:
             return ZoneInfo(name), name
         except Exception:
             logger.debug("Unknown calendar timezone %r; using local time", name)
-    local = datetime.now().astimezone().tzinfo or timezone.utc
+    local = datetime.now().astimezone().tzinfo or UTC
     return local, getattr(local, "key", None)
 
 

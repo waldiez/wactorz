@@ -3,7 +3,7 @@ import base64
 import hashlib
 import json
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, ClassVar
 from unittest.mock import patch
 
@@ -358,7 +358,7 @@ class HomeAssistantHelperPureTest(unittest.TestCase):
 
         naive = "2026-06-27T17:00:00"
         result = ha_helper.to_utc(naive)
-        dt = datetime.fromisoformat(naive).astimezone().astimezone(timezone.utc)
+        dt = datetime.fromisoformat(naive).astimezone().astimezone(UTC)
         self.assertEqual(result, dt.isoformat())
 
     def test_to_utc_unparseable_passes_through(self) -> None:
@@ -1317,7 +1317,7 @@ class HomeAssistantHelperHistoryTest(unittest.IsolatedAsyncioTestCase):
     async def test_start_time_datetime_appears_in_url_path(self) -> None:
 
         _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
-        dt = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        dt = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC)
 
         await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.x", start_time=dt)
 
@@ -1328,7 +1328,7 @@ class HomeAssistantHelperHistoryTest(unittest.IsolatedAsyncioTestCase):
     async def test_end_time_datetime_appears_in_params(self) -> None:
 
         _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
-        dt = datetime(2024, 6, 2, 0, 0, 0, tzinfo=timezone.utc)
+        dt = datetime(2024, 6, 2, 0, 0, 0, tzinfo=UTC)
 
         await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.x", end_time=dt)
 

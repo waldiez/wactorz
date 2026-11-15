@@ -197,7 +197,7 @@ class CLIInterface:
 
         try:
             await asyncio.wait_for(asyncio.shield(listener), timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             listener.cancel()
             return f"[timeout] {agent_name} on {remote_node} did not respond within 30s"
 

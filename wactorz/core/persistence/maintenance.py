@@ -125,7 +125,7 @@ async def _loop(stopping: asyncio.Event) -> None:
     which is the one thing stopping the rotation is supposed to prevent.
 
     ``asyncio.wait``, not ``wait_for``, for the reason given in
-    ``retry._bounded``: on Python 3.10 a ``wait_for`` whose guarded future
+    ``retry._bounded``: on Python 3.11 a ``wait_for`` whose guarded future
     completes in the same instant the caller is cancelled returns from inside
     its own ``CancelledError`` handler, and the caller never learns it was
     cancelled. Here that would mean starting a job *after* being cancelled —

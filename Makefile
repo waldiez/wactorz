@@ -333,32 +333,8 @@ lock: ## Re-resolve uv.lock after changing dependencies in pyproject.toml (needs
 	$(require-uv)
 	uv lock
 
-# Advisories the audit passes over, each with the reason. Pillow fixes these in
-# 13.0, which needs Python 3.11, so the lock keeps 12.3 for Python 3.10 alone and
-# no fixed release exists there; every other Python, the images included, locks
-# 13. The ones after those are the same case: more for Pillow 12.3, and
-# filelock's, fixed in 4.2.1, which needs 3.11 too, so 3.10 keeps the 4.0 line
-# (only torch, an optional dependency, pulls it in). Remove them when Python
-# 3.10 is dropped or a fix reaches it.
-AUDIT_IGNORE := GHSA-65qm-jvmh-6pqg GHSA-vx6w-vv9f-6gvg GHSA-58r4-6rv3-gfh8 \
-	GHSA-q45j-58j2-45rg GHSA-462x-pgg6-55fp GHSA-8g5g-8vmr-9782 \
-	GHSA-c6hw-5grf-ff96 GHSA-p4wg-p73j-c528 GHSA-pchr-8j38-3x4p \
-	GHSA-rfgq-q3w2-pmv2 GHSA-w889-685w-c8fh GHSA-xgh8-jp6q-p5x8 \
-	GHSA-xvh5-g6gv-559v GHSA-27h8-gf7j-v5hc GHSA-f2g6-542v-9j58 \
-	GHSA-fc9g-5qg7-mf45 GHSA-j4m9-6w36-pw47 GHSA-jg86-v3jv-hrpm \
-	GHSA-74r2-7ff9-mjj2 GHSA-4558-3h8r-v8xp GHSA-gg2r-wvfm-q9rx \
-	GHSA-cp9v-662q-vvx9 GHSA-332p-7hrc-92wf GHSA-4rr5-89j8-mwwm \
-	GHSA-5xm2-6676-qcp9 GHSA-22hg-r758-rrw9 GHSA-254f-3936-288h \
-	GHSA-7mwm-ghpf-9vrm GHSA-4rm8-3hmm-39fg GHSA-9v9v-9qvf-h2hj \
-	GHSA-g4qv-2jxx-769h GHSA-p8hx-v2p6-rp84 GHSA-3j72-p6qg-6xp7 \
-	GHSA-g842-9rc4-69pw GHSA-78g4-xqwv-q3g8 GHSA-24rc-8hj2-v98c \
-	GHSA-g7cr-3p24-7wf7 GHSA-mrfp-p49p-3hf2 GHSA-v9pv-5gc8-w2m6 \
-	GHSA-654x-cwwv-5j9c GHSA-5x8w-8jj5-q52h \
-	GHSA-v4x8-3wr5-3wq8 GHSA-9vhv-jxww-xfm5 GHSA-567q-5qvw-pf92 \
-	GHSA-m462-7rxw-wvpg GHSA-rfpc-qcw5-3pc4 GHSA-69hj-f68j-2879 \
-	GHSA-8mx5-7m5m-r77g GHSA-9c4x-gm8v-wgc4 GHSA-fq56-3cx3-fjxp \
-	GHSA-cwqr-hh33-gh44 GHSA-9j6q-wvj5-jgjg GHSA-6627-m3xw-93mp \
-	GHSA-fj95-fr6c-h845 GHSA-wqgw-9xfh-qf2g GHSA-xcvg-w56q-r89m
+# Advisories the audit passes over, each listed here with the reason it is accepted.
+AUDIT_IGNORE :=
 
 audit: ## Known vulnerabilities in the locked dependencies (needs uv)
 	$(require-uv)
@@ -400,10 +376,10 @@ test-py: ## Run Python tests (pytest)
 	$(PYTHON) -m pytest tests -n auto
 
 # The Python versions `test-py-versions` runs on: those pyproject.toml supports,
-# as CI's matrix. Narrow it for a quicker look, e.g. PYTHONS="3.10 3.11", the two
-# whose asyncio differs most. Opt-in only: nothing else runs it, since each
+# as CI's matrix. Narrow it for a quicker look, e.g. PYTHONS="3.11 3.14", the
+# oldest and newest. Opt-in only: nothing else runs it, since each
 # version takes about as long as `make test-py`.
-PYTHONS ?= 3.10 3.11 3.12 3.13 3.14
+PYTHONS ?= 3.11 3.12 3.13 3.14
 
 test-py-versions: ## Run the Python tests on each supported version (PYTHONS=...), in throwaway uv environments (needs uv)
 	$(require-uv)

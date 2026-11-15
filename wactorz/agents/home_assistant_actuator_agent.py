@@ -442,7 +442,7 @@ class HomeAssistantActuatorAgent(Actor):
         if self._ha is None:
             try:
                 await asyncio.wait_for(self._ws_ready.wait(), timeout=10.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # A TimeoutError traceback is the wait_for frame and nothing else.
                 logger.error(  # noqa: TRY400  # a TimeoutError traceback is the wait_for frame and nothing else
                     "[%s] No HA connection after 10s — cannot call service %s.%s",

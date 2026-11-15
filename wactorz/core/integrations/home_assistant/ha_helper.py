@@ -6,7 +6,7 @@ import io
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -1090,7 +1090,7 @@ def to_utc(s: str) -> str:
         return s
     if dt.tzinfo is None:
         dt = dt.astimezone()  # attach local tz
-    return dt.astimezone(timezone.utc).isoformat()
+    return dt.astimezone(UTC).isoformat()
 
 
 _TS_KEYS = ("last_changed", "last_updated", "last_reported")
@@ -1119,7 +1119,7 @@ def localise_history_timestamps(history: dict[str, Any]) -> dict[str, Any]:
             for key in _TS_KEYS:
                 if isinstance(s.get(key), str):
                     try:
-                        dt = datetime.fromisoformat(s[key].replace("Z", "+00:00"))
+                        dt = datetime.fromisoformat(s[key])
                         s[key] = dt.astimezone(local_tz).isoformat()
                     except ValueError:
                         pass

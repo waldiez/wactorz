@@ -446,7 +446,7 @@ class Inbox:
             return {}
         try:
             await asyncio.wait_for(self._all_here(wanted), timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             gone = await self._missing(wanted)
             raise BlobsLate(len(gone), len(wanted), timeout) from None
         return {sha: self.path(sha) for sha in wanted}

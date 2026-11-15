@@ -28,7 +28,7 @@ Claude Desktop config (~/.claude/claude_desktop_config.json):
 import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -181,7 +181,7 @@ def _calendar_timezone() -> tuple[Any, str | None]:
             return ZoneInfo(name), name
         except Exception:
             logger.debug("Unknown calendar timezone %r; using local time", name)
-    local = datetime.now().astimezone().tzinfo or timezone.utc
+    local = datetime.now().astimezone().tzinfo or UTC
     return local, getattr(local, "key", None)
 
 

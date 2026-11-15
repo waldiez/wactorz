@@ -751,7 +751,7 @@ class NodeRunner:
         )
         try:
             _, stderr = await asyncio.wait_for(proc.communicate(), timeout=INSTALL_TIMEOUT_S)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # A pip that never returns would otherwise hold this spawn for ever,
             # and with it the control command that asked for it. Generous rather
             # than tight: these run on a Raspberry Pi building a wheel from
@@ -1590,7 +1590,7 @@ class NodeRunner:
         # publisher is taken down with everything else.
         await asyncio.sleep(0.3)
         # Asked again while they keep running, rather than cancelled once: on
-        # Python 3.10 and 3.11 a cancellation that lands inside a `wait_for` is
+        # Python 3.11 a cancellation that lands inside a `wait_for` is
         # discarded, and the broker client waits that way. A lost request here
         # would leave `run` waiting on a gather that never completes -- a node
         # that was told to stop and simply does not.

@@ -12,7 +12,7 @@ license-files = [
     "LICENSE",
     "NOTICE.md",
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "Wactorz Contributors" }]
 keywords = ["agents", "llm", "actor-model", "mqtt", "multi-agent", "orchestration"]
 classifiers = [
@@ -22,7 +22,6 @@ classifiers = [
     "Intended Audience :: Education",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -75,12 +74,12 @@ vision    = ["opencv-python>=4.8.0"]
 # so that spawn has nothing to install and needs no restart. Out of `all`: on
 # Linux the robot SDK compiles part of itself and needs system GStreamer.
 reachy    = [
-    "reachy-mini==1.12.0; python_version >= '3.11'",
-    "numpy; python_version >= '3.11'",
-    "edge-tts; python_version >= '3.11'",
-    "pillow>=13; python_version >= '3.11'",
-    "webrtcvad-wheels; python_version >= '3.11'",
-    "deepgram-sdk>=3,<4; python_version >= '3.11'",
+    "reachy-mini==1.12.0",
+    "numpy",
+    "edge-tts",
+    "pillow>=13",
+    "webrtcvad-wheels",
+    "deepgram-sdk>=3,<4",
 ]
 
 # A LangGraph graph or a LangChain chain as an agent, with its spend reported
@@ -191,14 +190,10 @@ Documentation = "https://docs.waldiez.io/wactorz/"
 # proposes older ones in their place. Kept in the lockfile as a span, so
 # `uv sync --locked` holds as the days pass.
 exclude-newer = "7 days"
-# Python 3.10 cannot have the fixed filelock (4.1.1 onwards needs 3.11), and the
-# 4.1 line it could have adds advisories of its own. It stays on the 4.0 line, which
-# has the fewest; only torch, an optional dependency, pulls it in. Drop this with 3.10.
 # These plugin releases publish only cp313t/cp314t Windows wheels. Universal
 # resolution otherwise selects them for ordinary CPython and macOS as well.
 # Keep the SDK's supported ranges; allow subsequent compatible releases.
 constraint-dependencies = [
-    "filelock<4.1; python_version < '3.11'",
     "gstreamer-plugins!=1.28.8",
     "gstreamer-plugins-gpl!=1.28.8",
     "gstreamer-plugins-gpl-restricted!=1.28.8",
@@ -307,7 +302,7 @@ exclude = [
 # ── Ruff: linter + formatter ────────────────────────────────
 [tool.ruff]
 line-length = 100              # matches the former .flake8; the formatter owns width
-target-version = "py310"       # lowest supported runtime (requires-python = ">=3.10")
+target-version = "py311"       # lowest supported runtime (requires-python = ">=3.11")
 extend-exclude = ["static", "frontend", "node_modules", "build", "dist", ".local"]
 
 [tool.ruff.lint]
@@ -316,7 +311,7 @@ select = [
     "E", "W",  # pycodestyle errors/warnings
     "F",       # pyflakes — undefined names, unused imports/vars (real bugs)
     "I",       # isort — import ordering (auto-fixed)
-    "UP",      # pyupgrade — modernise to 3.10+ syntax (auto-fixed)
+    "UP",      # pyupgrade — modernise to 3.11+ syntax (auto-fixed)
     "B",       # flake8-bugbear — likely-bug patterns (e.g. mutable arg defaults)
     "C4",      # flake8-comprehensions — simpler/faster comprehensions
     "SIM",     # flake8-simplify — redundant or convoluted logic
@@ -354,6 +349,12 @@ ignore = [
     "SIM117",  # combined with-statements not required
     # blocking I/O and idle-loop patterns in async code, confined to rare start/stop paths
     "ASYNC110", "ASYNC230", "ASYNC240",
+    # A `timeout` parameter on a coroutine is part of the public API across agents,
+    # transports and the node bridge; callers pass one rather than wrapping the call.
+    "ASYNC109",
+    # `(str, Enum)` is kept over `StrEnum`: the two differ in `str()` and `format()`,
+    # and these values reach logs, MQTT payloads and persisted state.
+    "UP042",
 ]
 # Exceptions: an exception class says its own message, each reason a
 # classmethod or a class of its own, so the words for one failure are written
@@ -435,7 +436,7 @@ convention = "google"          # docstring style for the advisory `D` checks (mo
 [tool.basedpyright]
 include = ["wactorz", "tests", "scripts"]
 exclude = ["**/node_modules", "static", "frontend", "build", "dist", ".local", "**/__pycache__"]
-pythonVersion = "3.10"
+pythonVersion = "3.11"
 typeCheckingMode = "basic"
 reportMissingTypeStubs = false
 # A generic says what it holds: a bare `dict` reads as `dict[Unknown, Unknown]`, which

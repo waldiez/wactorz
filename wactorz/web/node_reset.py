@@ -76,9 +76,7 @@ async def _ask(main_actor: Any, scope: str, agent: str | None, nodes: list[str])
                 payload = json.dumps({"scope": scope, "agent": agent, "request": request})
                 await client.publish(topic, payload, qos=1, **signed_publish_kwargs(topic, payload))
             await asyncio.wait_for(_hear(client, request, answers), ANSWER_TIMEOUT_S)
-    # Spelled this way on purpose: the two are one object from 3.11 and separate
-    # on 3.10, where only this spelling catches what `wait_for` raises.
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pass
     except (OSError, MqttError) as exc:
         logger.warning("[reset] Could not ask the nodes to reset %s: %s", scope, exc)

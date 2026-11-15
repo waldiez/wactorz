@@ -519,7 +519,7 @@ def test_an_install_that_times_out_is_a_warning_not_a_stop(monkeypatch, main_hos
     main_host._registry.add(FakeActor("installer"))
 
     async def _never(*_args, **_kwargs) -> NoReturn:
-        raise asyncio.TimeoutError("'installer' did not answer within 120s")
+        raise TimeoutError("'installer' did not answer within 120s")
 
     monkeypatch.setattr(spawning, "ask_through", _never)
     with caplog.at_level(logging.WARNING, logger="wactorz.agents.mixins.spawning"):

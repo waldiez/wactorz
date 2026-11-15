@@ -17,7 +17,7 @@ from wactorz.core.persistence.json_value import NotJsonError
 from wactorz.core.persistence.memory_store import MemoryStore
 from wactorz.core.persistence.pickle_store import PickleStore
 
-WHEN = datetime.datetime(2026, 10, 6, 12, 0, tzinfo=datetime.timezone.utc)
+WHEN = datetime.datetime(2026, 10, 6, 12, 0, tzinfo=datetime.UTC)
 
 
 @pytest.fixture(name="db")

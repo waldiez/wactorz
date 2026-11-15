@@ -36,7 +36,7 @@ STEP_S = 60
 DAY_S = 86400
 #: Monday 2 March 2026, 00:00 UTC: the start of the week `train.py` fits on,
 #: whose runs someone noted down.
-WEEK = dt.datetime(2026, 3, 2, tzinfo=dt.timezone.utc).timestamp()
+WEEK = dt.datetime(2026, 3, 2, tzinfo=dt.UTC).timestamp()
 #: The Saturday after, which `publish.py` plays.
 SATURDAY = WEEK + 12 * DAY_S
 SEED = 2026

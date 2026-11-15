@@ -44,7 +44,7 @@ async def guess(run: dict, me: wactorz.FunctionAgent) -> dict:
 
 def clock(ts: float) -> str:
     """``ts`` as the simulated house's time of day."""
-    return dt.datetime.fromtimestamp(ts, dt.timezone.utc).strftime("%H:%M")
+    return dt.datetime.fromtimestamp(ts, dt.UTC).strftime("%H:%M")
 
 
 def question(guessed: dict[str, Any]) -> str:

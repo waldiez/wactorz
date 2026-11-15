@@ -596,7 +596,7 @@ class InstallerAgent(Actor):
         self._asking[question_id] = _Asking(tuple(waiting), settled)
         try:
             await asyncio.wait_for(asyncio.shield(settled), timeout=APPROVAL_TIMEOUT_S)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 "[%s] No answer within %gs about installing %s",
                 self.name,
@@ -1805,7 +1805,7 @@ class InstallerAgent(Actor):
             await asyncio.wait_for(
                 self._connect_once(username, password, node_name), CREDENTIAL_CHECK_TIMEOUT_S
             )
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise BrokerRefusedNodeAccountError(node_name, username, "no answer in time") from exc
         except Exception as exc:
             raise BrokerRefusedNodeAccountError(node_name, username, str(exc)[:200]) from exc
@@ -1963,7 +1963,7 @@ class InstallerAgent(Actor):
         try:
             async with asyncssh.connect(**(await self._ssh_kwargs(payload))) as conn:
                 ok, output = await asyncio.wait_for(self._ssh_run(conn, command), timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return {
                 "success": False,
                 "error": f"Still running after {timeout:.0f}s; stopped waiting",

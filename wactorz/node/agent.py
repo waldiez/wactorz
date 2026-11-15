@@ -143,7 +143,7 @@ class NodeAgent(NodeHosted, DynamicAgent):
             return {"error": f"Agent '{self.name}' has no handle_task function."}
         try:
             result = await self._run_handle_task(payload)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.exception(
                 "[%s] handle_task() timed out after %ss", self.name, self._HANDLE_TASK_TIMEOUT
             )

@@ -317,7 +317,7 @@ class ExecutionMixin(_Host):
             # The step's failure is part of the plan's result, not an exception
             # here: the caller decides whether a fallback stands in for it.
             return exc.reply
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("[%s] Timeout from '%s'", self.name, agent_name)
             return {"error": f"Timeout from {agent_name}"}
         except RuntimeError as exc:

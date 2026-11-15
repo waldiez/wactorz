@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -108,7 +108,7 @@ def source_dir(root: Path, source: str) -> Path:
 
 def hour_of(ts: float) -> tuple[int, int, int, int]:
     """The UTC year, month, day and hour ``ts`` falls in."""
-    moment = datetime.fromtimestamp(float(ts), tz=timezone.utc)
+    moment = datetime.fromtimestamp(float(ts), tz=UTC)
     return moment.year, moment.month, moment.day, moment.hour
 
 
@@ -177,7 +177,7 @@ def hours_of(root: Path, source: str) -> list[tuple[float, list[Path]]]:
                         int(month_dir.name),
                         int(day_dir.name),
                         int(match.group("hour")),
-                        tzinfo=timezone.utc,
+                        tzinfo=UTC,
                     ).timestamp()
                     found.setdefault(moment, []).append(path)
     return [(hour, sorted(paths)) for hour, paths in sorted(found.items())]

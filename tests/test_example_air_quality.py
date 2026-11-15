@@ -14,6 +14,7 @@ importable.
 
 import importlib
 import re
+import tomllib
 import types
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -242,8 +243,6 @@ class TestAskingAboutIt:
 
 class TestThePackage:
     def test_it_names_its_two_agents_and_its_tab(self, aq: types.SimpleNamespace) -> None:
-        # The example needs Python 3.11, which is where tomllib comes from.
-        tomllib = pytest.importorskip("tomllib")
         declared = tomllib.loads((EXAMPLE / "pyproject.toml").read_text(encoding="utf-8"))
         points = declared["project"]["entry-points"]
 

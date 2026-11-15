@@ -119,7 +119,7 @@ async def _stop_window(window: Any) -> None:
     task = inner._task
     inner.stop()
     if task is not None:
-        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.10/3.11.
+        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.11.
         await asyncio.wait({task}, timeout=5)
 
 

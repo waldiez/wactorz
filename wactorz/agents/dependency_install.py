@@ -9,7 +9,6 @@ may take, and only starts the agent when that answer says it can run. The
 waiting and the reading of the answer live here so both spawn paths agree.
 """
 
-import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -132,7 +131,7 @@ async def install_for_agent(
             },
             timeout=APPROVAL_TIMEOUT_S + install_wait_s(len(packages)),
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("Install for '%s' timed out: %s", agent_name, packages)
         return InstallOutcome(timed_out=True)
     except ReplyError as exc:

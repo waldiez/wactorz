@@ -17,7 +17,7 @@ import json
 import logging
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +34,7 @@ DEFAULT_WINDOW_S = 24 * 3600.0
 
 
 def _moment(value: float) -> str:
-    return datetime.fromtimestamp(value, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return datetime.fromtimestamp(value, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def _window(args: argparse.Namespace) -> tuple[float, float]:

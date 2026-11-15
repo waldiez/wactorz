@@ -99,8 +99,6 @@ class TestTheCap:
         assert runner.dropped == 1
 
     async def test_publishing_never_blocks(self, runner: Any) -> None:
-        # `wait_for`, not `asyncio.timeout`: the latter is 3.11+ and this
-        # project supports 3.10.
         runner._queue = asyncio.Queue(maxsize=1)
 
         async def publish_many() -> None:

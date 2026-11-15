@@ -299,7 +299,7 @@ class TestAnAgentReachedThroughItsMailbox:
 
     async def test_no_reply_in_time_is_said(self) -> None:
         agents = _Agents()
-        agents._by_name["tasked"] = _Tasked(agents, failure=asyncio.TimeoutError())
+        agents._by_name["tasked"] = _Tasked(agents, failure=TimeoutError())
         runtime.registry = agents
 
         assert await _say("@tasked go") == [
@@ -477,7 +477,7 @@ class TestAnAgentOnANode:
     async def test_no_reply_in_time_is_said(
         self, node: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        broker = _Broker([b"forged"], after=asyncio.TimeoutError())
+        broker = _Broker([b"forged"], after=TimeoutError())
         monkeypatch.setattr(chat, "mqtt_client", lambda *_a, **_k: broker)
 
         assert await _say("@counter four") == [

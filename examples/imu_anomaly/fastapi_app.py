@@ -80,7 +80,7 @@ async def detect_now(reading: dict) -> dict:
         result = await wactorz.ask(AGENT, reading, timeout=30)
     except LookupError as exc:
         raise HTTPException(503, str(exc)) from exc
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise HTTPException(504, str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(502, str(exc)) from exc

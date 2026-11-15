@@ -328,7 +328,7 @@ class MessagingMixin(_Host):
             await _until_subscribed(subscribed, self.name, agent_name)
             await self._actor._mqtt_publish(topic, payload)
             return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 "[%s] send_to '%s' on '%s' timed out after %ss",
                 self.name,
@@ -418,7 +418,7 @@ class MessagingMixin(_Host):
                 return exc.reply
             except RuntimeError:
                 return {"error": f"'{agent_name}' is not taking messages: its mailbox is full"}
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "[%s] send_to '%s' timed out after %ss", self.name, agent_name, timeout
                 )
@@ -460,7 +460,7 @@ async def _until_subscribed(subscribed: asyncio.Event, name: str, agent_name: st
     """
     try:
         await asyncio.wait_for(subscribed.wait(), timeout=REPLY_SUBSCRIBE_TIMEOUT_S)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning(
             "[%s] send_to '%s': the reply subscription did not come up in %.0fs; "
             "sending anyway, so the reply may be missed",

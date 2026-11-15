@@ -1171,7 +1171,7 @@ Slides that received a real PDF image skip NIM generation. Slides without one fa
 
 ## 17. Remote Nodes & Edge Deployment
 
-Wactorz can run agents on any machine on your network — Raspberry Pi, VM, cloud server, or any device with Python 3.10+. An edge node runs the same package, started in a different role.
+Wactorz can run agents on any machine on your network — Raspberry Pi, VM, cloud server, or any device with Python 3.11+. An edge node runs the same package, started in a different role.
 
 ### How It Works
 

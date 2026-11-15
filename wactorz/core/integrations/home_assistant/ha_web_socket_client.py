@@ -95,9 +95,7 @@ async def _measured(command: str, request: Awaitable[T]) -> T:
     outcome = ha_metrics.ERROR
     try:
         result = await request
-    except (TimeoutError, asyncio.TimeoutError):
-        # Both: on Python 3.10 a frame that never comes raises asyncio's own
-        # TimeoutError, and a deadline run out raises the builtin one.
+    except TimeoutError:
         outcome = ha_metrics.TIMEOUT
         raise
     except asyncio.CancelledError:

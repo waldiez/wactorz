@@ -323,7 +323,7 @@ def _manifest(listed: dict[str, dict[str, Any]], *, secrets: bool) -> bytes:
         {
             "format": FORMAT,
             "wactorz": __version__,
-            "created": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "created": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
             "secrets": secrets,
             "files": listed,
         },

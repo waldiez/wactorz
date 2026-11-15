@@ -99,7 +99,7 @@ class TestStartAndStop:
     async def test_a_cancelled_loop_stays_cancelled(self) -> None:
         """It must not swallow the cancellation and run a job anyway.
 
-        The failure this guards is subtle: `wait_for` on Python 3.10 can return
+        The failure this guards is subtle: `wait_for` on Python 3.11 can return
         from inside its own CancelledError handling, so a loop written with it
         would start a job *after* being cancelled — putting a thread on the
         connection lock during shutdown.

@@ -80,7 +80,7 @@ async def _hears_statistics(broker: tuple[str, int], account: str | None, wait: 
         await client.subscribe("$SYS/broker/uptime")
         try:
             await asyncio.wait_for(anext(aiter(client.messages)), timeout=wait)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
         return True
 
@@ -114,7 +114,7 @@ async def _delivered_as_sent(
 
         try:
             return await asyncio.wait_for(_wait(), timeout=wait)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
 
 

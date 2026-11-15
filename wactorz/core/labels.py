@@ -131,7 +131,7 @@ def _time(value: Any, what: str) -> float:
         seconds = float(value)
     elif isinstance(value, str) and value.strip():
         try:
-            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value.strip())
         except ValueError:
             raise LabelError.bad_time(what, value) from None
         if parsed.tzinfo is None:

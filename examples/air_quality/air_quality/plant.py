@@ -24,7 +24,7 @@ UNITS = {"co2": "ppm", "temperature": "°C", "humidity": "%", "pm25": "µg/m³"}
 STEP_S = 300
 DAY_S = 86400
 #: Monday 2 March 2026, 00:00 UTC: the start of the healthy week `train.py` fits on.
-WEEK = dt.datetime(2026, 3, 2, tzinfo=dt.timezone.utc).timestamp()
+WEEK = dt.datetime(2026, 3, 2, tzinfo=dt.UTC).timestamp()
 #: The next Tuesday, which `publish.py` plays, faults and all.
 TUESDAY = WEEK + 8 * DAY_S
 SEED = 2026

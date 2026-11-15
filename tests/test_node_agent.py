@@ -191,7 +191,6 @@ class TestWhatIsDifferentOnANode:
         assert request_signed_for(json.loads(json.dumps(sent[0])), "node-a")
 
     async def test_a_bridged_call_that_is_never_answered_gives_up(self, runner: NodeRunner) -> None:
-        # `wait_for`, not `asyncio.timeout`: a node may be running Python 3.10.
         agent = _agent(runner)
 
         async def _publish(*_a: Any, **_kw: Any) -> None:

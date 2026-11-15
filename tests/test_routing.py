@@ -119,10 +119,7 @@ def test_classify_exception_is_other() -> None:
 
 
 def test_classify_timeout_is_other() -> None:
-    assert (
-        run(RoutingHost(llm=FakeLLM(raises=asyncio.TimeoutError()))._classify_intent("x"))
-        == "OTHER"
-    )
+    assert run(RoutingHost(llm=FakeLLM(raises=TimeoutError()))._classify_intent("x")) == "OTHER"
 
 
 # ── _is_home_automation_request ──────────────────────────────────────────────

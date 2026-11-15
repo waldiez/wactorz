@@ -7,13 +7,10 @@ That only holds while the two lists agree: a package in the recipe but not the
 extra is installed at spawn after all, and can bring the restart back with it.
 """
 
+import tomllib
 from pathlib import Path
 
-import pytest
-
 from wactorz.agents.catalog_agent import _build_catalog
-
-tomllib = pytest.importorskip("tomllib")  # standard library from Python 3.11
 
 PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 
@@ -25,10 +22,7 @@ def _extras() -> dict[str, list[str]]:
 
 def test_the_extra_lists_exactly_what_the_recipe_installs() -> None:
     requirements = _extras()["reachy"]
-    assert all(req.endswith("; python_version >= '3.11'") for req in requirements)
-    assert [req.split(";", 1)[0] for req in requirements] == _build_catalog()["reachy-mini"][
-        "install"
-    ]
+    assert requirements == _build_catalog()["reachy-mini"]["install"]
 
 
 def test_the_extra_stays_out_of_all() -> None:

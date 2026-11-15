@@ -733,7 +733,7 @@ class TestCallbackServer:
             async with http.get(f"{base}/oauth/callback?code=c1&state=s1") as right:
                 assert "authentication complete" in await right.text()
 
-        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.10/3.11.
+        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.11.
         done, _ = await asyncio.wait({waiting}, timeout=5)
         assert waiting in done
         assert waiting.result() == ("c1", "s1")

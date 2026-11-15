@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """One session with a server: its address, its key, timeouts, and what a refusal means."""
 
-import asyncio
 import logging
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -121,7 +120,7 @@ class Transport:
                 timeout=aiohttp.ClientTimeout(total=limit),
             ) as response:
                 return await read(self, response, path)
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             if isinstance(exc, ClientError):
                 raise
             raise TimedOutError(method, path, limit) from exc

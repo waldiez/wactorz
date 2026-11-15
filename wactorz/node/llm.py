@@ -80,9 +80,7 @@ async def request_over_mqtt(
     for a remote call from main — so the runner has one place to deliver a reply
     to, whichever kind of request asked for it.
 
-    ``asyncio.wait_for`` rather than ``asyncio.timeout``: this runs on Python
-    3.10, where the latter does not exist. The future is cancelled on timeout
-    and the key is dropped either way, so a reply that arrives afterwards finds
+    The future is cancelled on timeout and the key is dropped either way, so a reply that arrives afterwards finds
     nothing waiting and is logged rather than resolving a call that gave up.
     """
     reply_topic = node_topic(agent.node, "reply", uuid.uuid4().hex[:8])
@@ -102,7 +100,7 @@ async def request_over_mqtt(
         )
         await agent._mqtt_publish(topic, request)
         return await asyncio.wait_for(future, timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("[%s] %s timed out after %ss", agent.name, topic, timeout)
         return None
     finally:

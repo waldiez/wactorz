@@ -103,7 +103,7 @@ def ensure(
     """
     target = directory if directory is not None else default_directory()
     target.mkdir(parents=True, exist_ok=True)
-    moment = now if now is not None else datetime.datetime.now(datetime.timezone.utc)
+    moment = now if now is not None else datetime.datetime.now(datetime.UTC)
     ca_cert, ca_key = _ca(target, moment)
     wanted = _wanted_names(names)
     cert_path, key_path = target / BROKER_CERT_FILE, target / BROKER_KEY_FILE

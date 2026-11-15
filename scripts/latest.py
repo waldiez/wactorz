@@ -12,13 +12,13 @@ Usage, from the repository root:
 import argparse
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
 def fmt(ts: float) -> str:
     """The stored unix time as local wall-clock time, to the millisecond."""
-    local_dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone()
+    local_dt = datetime.fromtimestamp(ts, tz=UTC).astimezone()
     return local_dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 

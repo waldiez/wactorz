@@ -12,6 +12,7 @@ the README's `pip install -e` would make it importable.
 import importlib
 import itertools
 import re
+import tomllib
 import types
 from pathlib import Path
 from typing import Any
@@ -217,8 +218,6 @@ async def _refused(*_: Any, **__: Any) -> Any:
 
 class TestThePackage:
     def test_it_names_its_two_agents_and_its_tab(self, he: types.SimpleNamespace) -> None:
-        # The example needs Python 3.11, which is where tomllib comes from.
-        tomllib = pytest.importorskip("tomllib")
         declared = tomllib.loads((EXAMPLE / "pyproject.toml").read_text(encoding="utf-8"))
         points = declared["project"]["entry-points"]
 

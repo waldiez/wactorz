@@ -898,7 +898,7 @@ class SpawnMixin(_Host):
         )
         try:
             result = await ask_through(self, "installer", request, timeout=wait)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("[%s] Install timed out for %s ('%s')", self.name, needed, agent_name)
             return InstallOutcome(timed_out=True)
         except ReplyError as exc:

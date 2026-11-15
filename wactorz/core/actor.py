@@ -372,8 +372,8 @@ class NotFoundError(LookupError):
 class NoAnswerError(asyncio.TimeoutError):
     """The time to wait for an answer passed.
 
-    An `asyncio.TimeoutError`, which is what callers catch: on Python 3.10 that
-    is not the builtin `TimeoutError`.
+    A `TimeoutError` (`asyncio.TimeoutError` is the same class), which is what
+    callers catch.
     """
 
     @classmethod
@@ -455,7 +455,7 @@ async def ask_through(
             raise AskError.mailbox_full(target)
         try:
             reply = await asyncio.wait_for(future, timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise NoAnswerError.from_agent(target, timeout) from None
     finally:
         host._result_futures.pop(task_id, None)
@@ -861,8 +861,8 @@ class Actor(ABC):
         try:
             if others:
                 # Bounded: a task that will not unwind must not hold up shutdown.
-                # Each is asked again while it keeps running: on Python 3.10 and
-                # 3.11 a cancellation that lands inside a wait_for is discarded, and
+                # Each is asked again while it keeps running: on Python 3.11 a
+                # cancellation that lands inside a wait_for is discarded, and
                 # the broker and Home Assistant clients both wait that way, so one
                 # request can leave stop() waiting out the whole timeout.
                 # cancel_all_until_done never uses wait_for itself, for the same
@@ -913,7 +913,7 @@ class Actor(ABC):
                     self._handling_since = None
                 self._mailbox.task_done()
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             except asyncio.CancelledError:
                 break
@@ -2149,7 +2149,7 @@ class Actor(ABC):
         await self._write_question(question)
         try:
             return await self.wait_for_answer(question_id, timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             if timeout is None or question.channel == DASHBOARD:
                 raise
         # Nothing came from the chat channel: the same question, the same id,
@@ -2222,7 +2222,7 @@ class Actor(ABC):
             # Shielded: a waiter that gives up must not cancel the future a
             # later answer, or another waiter, still needs.
             return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise NoAnswerError.to_question(self.name, question.text, timeout) from None
         finally:
             # The last waiter to leave takes the future with it, so a pick that

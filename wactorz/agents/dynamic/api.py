@@ -228,7 +228,7 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
             return await asyncio.wait_for(
                 self.llm.complete(messages, system=system), timeout=timeout
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("[%s] chat timed out after %ss", self.name, timeout)
             return ""
 
@@ -245,14 +245,13 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
 
         The bound is applied here rather than passed down, because a provider
         need not accept one — and an agent that asked for a 5-second answer must
-        not be left waiting a minute by one that does not. `wait_for`, not
-        `asyncio.timeout`: a node may be running Python 3.10.
+        not be left waiting a minute by one that does not.
         """
         if self.llm is None:
             return "[No LLM configured for this agent]"
         try:
             return await asyncio.wait_for(self.llm.chat(prompt, system=system), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("[%s] ask_llm timed out after %ss", self.name, timeout)
             return ""
 

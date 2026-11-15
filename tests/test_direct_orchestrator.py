@@ -111,7 +111,7 @@ class TestAskingAnAgent:
 
     async def test_a_silent_agent_is_given_up_on_and_said(self) -> None:
         orchestrator, registry = _direct(_actor("slow"), timeout=2.5)
-        registry.raises = asyncio.TimeoutError()
+        registry.raises = TimeoutError()
 
         answer = await orchestrator.handle_turn("@slow think", channel="dashboard")
 

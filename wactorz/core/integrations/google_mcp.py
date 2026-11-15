@@ -409,7 +409,7 @@ class GoogleMcpClient:
             result = await asyncio.wait_for(
                 self._call_mcp(tool_name, arguments), timeout=mcp_timeout()
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             result = f"{self.config.label} MCP error: timed out"
         if _looks_permission_denied(result) or _looks_mcp_unavailable(result):
             fallback = await self._call_rest(tool_name, arguments)

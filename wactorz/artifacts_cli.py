@@ -129,7 +129,7 @@ def _line(artifact: Artifact, marks: tuple[str, ...] = ()) -> str:
     """One version on one line, ``marks`` naming the pointers that stand on it."""
     # In this machine's time, as whoever reads the list expects.
     added = (
-        datetime.datetime.fromtimestamp(artifact.added_at, tz=datetime.timezone.utc)
+        datetime.datetime.fromtimestamp(artifact.added_at, tz=datetime.UTC)
         .astimezone()
         .strftime("%Y-%m-%d %H:%M")
     )

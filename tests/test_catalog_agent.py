@@ -620,7 +620,9 @@ class TestNativeSpawn:
             "agent": "weather-agent",
         }
         publish.assert_awaited_once()
-        topic, payload = publish.await_args.args
+        published = publish.await_args
+        assert published is not None
+        topic, payload = published.args
         assert topic == agent_topic(weather.actor_id, "chat")
         assert payload["from"] == "weather-agent"
         assert "current conditions, forecast, and history" in payload["content"]

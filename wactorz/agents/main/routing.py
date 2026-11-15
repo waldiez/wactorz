@@ -10,6 +10,7 @@ self._result_futures, self.actor_id).
 
 import asyncio
 import logging
+import re
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -31,6 +32,27 @@ else:
     _Host = object
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+#: A request that is nothing but "start this agent": a verb, an optional
+#: article, and a name of a few words. Anything more ("spawn an agent that
+#: watches the reachy mini's battery") is not matched, so it reaches the model,
+#: which can tell a new agent from a ready-made one.
+_SPAWN_REQUEST = re.compile(
+    r"^(?:please\s+)?(?:spawn|start|launch|run)\s+(?:(?:the|a|an)\s+)?"
+    r"(?P<name>[a-z0-9][a-z0-9_-]*(?:\s+[a-z0-9_-]+){0,4}?)"
+    r"(?:\s+please)?[\s.!]*$",
+    re.IGNORECASE,
+)
+
+
+def spawn_request_name(text: str) -> str | None:
+    """The agent name a plain spawn request asks for, as typed, or None for any other text.
+
+    "spawn reachy mini" and "start the anomaly detector agent." give the name
+    as written; whether it names a catalogue recipe is the caller's question.
+    """
+    match = _SPAWN_REQUEST.match(text.strip())
+    return match["name"] if match else None
 
 
 class RoutingMixin(_Host):

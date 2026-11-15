@@ -114,6 +114,24 @@ class MemoryMixin(_Host):
             lines.append(line)
         return "\n".join(lines)
 
+    def _get_catalogue_recipes_summary(self) -> str:
+        """The catalogue's ready-made agents that are not running, one line each, or "".
+
+        The catalog writes a manifest for each recipe into main's manifests,
+        marked spawnable and naming the catalog. Without this block the model
+        sees only what runs, and reads a request to start a recipe as a request
+        to write a new agent.
+        """
+        running = {actor.name for actor in self._registry.all_actors()} if self._registry else set()
+        lines = []
+        for name, manifest in sorted(self._agent_manifests.items()):
+            if name in running or not (manifest.get("spawnable") and manifest.get("catalog")):
+                continue
+            desc = " ".join(str(manifest.get("description") or "").split())[:120]
+            beta = " (beta)" if manifest.get("experimental") else ""
+            lines.append(f"  {name}{beta} — {desc}" if desc else f"  {name}{beta}")
+        return "\n".join(lines)
+
     def _prefix_with_live_context(self, user_text: str) -> str:
         """Wrap the user's message with a `[CURRENT SYSTEM STATE]` block so the LLM
         sees the live agent list INSIDE the user message — not just the system
@@ -230,7 +248,8 @@ class MemoryMixin(_Host):
             "When the user asks what agents exist, what's running, or anything about\n"
             "current system state, READ THE 'CURRENTLY RUNNING AGENTS' BLOCK BELOW.\n"
             "That block IS your capability lookup — already done for you, refreshed live\n"
-            "on every turn. Do not pretend to perform a separate lookup.\n"
+            "on every turn, together with the CATALOGUE RECIPES block when there is one.\n"
+            "Do not pretend to perform a separate lookup.\n"
         )
 
         prompt = override + "\n" + orchestrator_prompt(self._prompt_fragments)
@@ -250,6 +269,7 @@ class MemoryMixin(_Host):
             "more, no less. Do not invent entries from memory. Do not include agents from\n"
             "earlier turns that aren't here now.\n\n"
             "When the user asks to spawn an agent and that name is NOT on this list:\n"
+            "start it from the CATALOGUE RECIPES block if it names one there, otherwise\n"
             "spawn it. Do NOT say 'it already exists' — that claim is based on stale memory.\n"
         )
         if agents_summary:
@@ -269,6 +289,23 @@ class MemoryMixin(_Host):
                 "and that target; no code, no other type. Do not write a dynamic agent that\n"
                 "does what one of these does.\n"
             ) + registered_summary
+
+        # ── Block 1b2: the catalogue's ready-made agents that are not running ──
+        # Started through the catalog, so a request naming one, however loosely,
+        # is not read as a new agent to write.
+        recipes_summary = self._get_catalogue_recipes_summary()
+        if recipes_summary:
+            prompt += (
+                "\n\n== CATALOGUE RECIPES (ready-made agents, not running, start on demand) ==\n"
+                "These agents are pre-built and tested. When the user asks to spawn, start,\n"
+                "launch or run one, have the catalog start it: never write code for it, and\n"
+                "never ask what it should do. Users name them loosely: 'reachy mini', 'the\n"
+                "reachy mini agent' and 'reachy_mini' all mean reachy-mini. To start one:\n"
+                '  <delegate>{"agent": "catalog", "payload": {"action": "spawn", '
+                '"agent": "<recipe name>"}}</delegate>\n'
+                "To give one a task instead, delegate the task to the recipe's own name; it\n"
+                "is started first.\n"
+            ) + recipes_summary
 
         # ── Block 1c: the models a spawned agent may name ──
         # Read off the event loop by `_refresh_stored_models` before the turn;

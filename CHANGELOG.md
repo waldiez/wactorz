@@ -13,6 +13,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Asking main to spawn a catalogue agent by name starts it.** "spawn reachy mini", "start the anomaly detector" and other spellings of a recipe's name are handed to the catalog, the way `@catalog spawn reachy-mini` is, instead of main asking what code the new agent should run. A request with more in it reaches the model, whose prompt now lists the catalogue's recipes that are not running and how to have the catalog start one.
 
+- **A Telegram or Discord bot that cannot log in no longer stops Wactorz.** A mistyped `TELEGRAM_BOT_TOKEN` or `DISCORD_BOT_TOKEN` made the bot's login fail at startup, and the failure took the dashboard, the REST API and every agent down with it. The bot now logs one error naming the setting to fix and stays off, and everything else keeps running. Any other failure of a bot running next to the dashboard (Telegram unreachable, say) stops that bot alone. A token that is only spaces counts as unset, so that channel is simply not started.
+
 ## [0.8.0] - 2026-11-15
 
 Wactorz 0.8.0 closes the loop on models: readings are recorded with the time they happened, a model is trained, judged against labels and tried in the shadow of the one served, and a policy decides when it takes over. Two agents may now share a name on different hosts, addressed as `name@node`, and the dashboard gains a Wiring view, an Inbox and tabs that installed packages add. It requires Python 3.11 or later.

@@ -11,6 +11,7 @@ Driven against a stand-in `discord` module, so neither the library nor a
 network is needed.
 """
 
+import logging
 import sys
 import types
 from collections.abc import AsyncIterator
@@ -68,6 +69,10 @@ class _Message:
         self.channel = channel
 
 
+class _LoginFailure(Exception):
+    """The library's error for a token Discord refuses."""
+
+
 class _Client:
     """Runs the registered handlers over scripted messages when started."""
 
@@ -79,12 +84,15 @@ class _Client:
     people: "dict[int, _User]" = {}  # noqa: RUF012  # reset per test by the fixture
     #: What to do once logged in, before the script runs: where a test sends.
     once_logged_in: Any = None
+    #: Whether Discord refuses the next client's token; reset by the fixture.
+    rejects_token: bool = False
 
     def __init__(self, intents: Any) -> None:
         self.intents = intents
         self.user: _User | None = None
         self.handlers: dict[str, Any] = {}
         self.script = list(_Client.next_script)
+        self.closed = False
         _Client.instances.append(self)
 
     def event(self, handler: Any) -> Any:
@@ -100,8 +108,13 @@ class _Client:
         except KeyError:
             raise LookupError(f"no such user {user_id}") from None
 
+    async def close(self) -> None:
+        self.closed = True
+
     async def start(self, token: str) -> None:
         self.token = token
+        if _Client.rejects_token:
+            raise _LoginFailure("Improper token has been passed.")
         if self.script:
             await self.handlers["on_message"](self.script[0])  # before login: ignored
         self.user = _User(1)
@@ -146,12 +159,14 @@ def discord_module_fixture(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
         Intents=types.SimpleNamespace(default=lambda: types.SimpleNamespace(message_content=False)),
         Client=_Client,
         Message=_Message,
+        LoginFailure=_LoginFailure,
     )
     monkeypatch.setitem(sys.modules, "discord", module)
     _Client.instances = []
     _Client.next_script = []
     _Client.people = {}
     _Client.once_logged_in = None
+    _Client.rejects_token = False
     return module
 
 
@@ -343,3 +358,23 @@ async def test_a_user_that_is_not_an_id_is_refused(discord_module: types.ModuleT
 
     assert len(seen) == 1
     assert "numeric id" in str(seen[0])
+
+
+async def test_a_rejected_token_is_logged_with_the_setting_and_the_bot_stops(
+    discord_module: types.ModuleType, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A mistyped token stops the bot, not the process gathered with it."""
+    _Client.rejects_token = True
+    outbox = _Outbox()
+    bot = _bot(_Orchestrator(), allowed_user_ids={7}, outbox=cast(Outbox, outbox))
+
+    with caplog.at_level(logging.ERROR):
+        await bot.run()
+
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "DISCORD_BOT_TOKEN" in errors[0].getMessage()
+    (client,) = _Client.instances
+    assert client.closed
+    assert outbox.registered == []
+    assert bot._client is None

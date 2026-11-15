@@ -24,6 +24,13 @@ logger: logging.Logger = logging.getLogger(__name__)
 #: The most text one Discord message carries.
 MESSAGE_CHARS = 2000
 
+#: What is logged when Discord refuses the bot token: the setting to fix.
+REJECTED_LOGIN = (
+    "[Discord] Not starting: Discord rejected the bot token. Set DISCORD_BOT_TOKEN "
+    "(or the add-on's discord_bot_token option) to the token from the Bot page of your "
+    "application in the Discord developer portal, and restart. Everything else keeps running."
+)
+
 
 class DiscordInterface:
     """Discord bot interface. Requires: pip install discord.py
@@ -94,8 +101,8 @@ class DiscordInterface:
         """Log the bot in and answer messages from the allowed users until the client stops.
 
         Returns at once, logging why, when ``discord.py`` is not installed or no user is allowed:
-        a bot that answers anyone is not started. While it runs, the bot is registered as the
-        ``discord`` outbound channel.
+        a bot that answers anyone is not started. Returns, logging the setting to fix, when Discord
+        rejects the token. While it runs, the bot is registered as the ``discord`` outbound channel.
         """
         try:
             import discord  # optional dependency: the `discord` extra
@@ -169,6 +176,10 @@ class DiscordInterface:
         self.outbox.register("discord", self)
         try:
             await client.start(self.token)
+        except discord.LoginFailure:
+            logger.error(REJECTED_LOGIN)  # noqa: TRY400  # the rejection is the whole diagnosis
+            # The failed login leaves the client's HTTP session open.
+            await client.close()
         finally:
             self.outbox.unregister("discord")
             self._client = None

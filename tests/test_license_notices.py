@@ -2,7 +2,6 @@
 """The license-line check: what it accepts, what it writes, what it never touches."""
 
 import importlib.util
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -228,6 +227,16 @@ class TestRun:
         assert ln.run(["pkg/deleted.py"], fix=False) == 0
 
 
+#: The variables that tell git which repository, index and work tree to use.
+GIT_REPOSITORY_VARIABLES = (
+    "GIT_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_WORK_TREE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_COMMON_DIR",
+)
+
+
 def git(cwd: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, timeout=60)
 
@@ -235,11 +244,10 @@ def git(cwd: Path, *args: str) -> None:
 def test_source_files_are_the_tracked_and_the_new_but_never_the_ignored(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Run from a commit hook, git's own variables name the repository being
-    # committed to, and every git command below would act on it rather than on
-    # the one made here.
-    for name in [name for name in os.environ if name.startswith("GIT_")]:
-        monkeypatch.delenv(name)
+    # A commit hook runs this with git's own variables set for the repository
+    # being committed to; left in place, they point these git calls at its index.
+    for name in GIT_REPOSITORY_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
     git(tmp_path, "init", "-q")
     (tmp_path / ".gitignore").write_text("ignored.py\n", encoding="utf-8")
     for name in ("tracked.py", "new.py", "ignored.py"):

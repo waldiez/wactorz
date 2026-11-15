@@ -1,0 +1,1109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Reachy Mini — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="https://waldiez.github.io/media/images/wactorz/icon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    /* ── Nav bar ── */
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:#fff;text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    /* ── Layout ── */
+    .layout{display:flex;flex:1}
+
+    /* ── Sidebar ── */
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    /* Collapsible groups: only the active section is open by default */
+    details.sidebar-group > summary.sidebar-label{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none;transition:color .15s}
+    details.sidebar-group > summary.sidebar-label::-webkit-details-marker{display:none}
+    details.sidebar-group > summary.sidebar-label::after{content:'▸';font-size:.6rem;color:var(--muted);transition:transform .15s;transform:translateY(-1px)}
+    details.sidebar-group[open] > summary.sidebar-label::after{content:'▾'}
+    details.sidebar-group > summary.sidebar-label:hover{color:var(--muted-hi)}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
+
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.25rem 0}
+    .content strong{color:#fff;font-weight:500}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    /* ── Footer ── */
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+    footer a:hover{color:var(--text)}
+
+    /* ── Responsive ── */
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">Wactorz</a>
+  <nav class="topbar-links">
+    <a href="https://github.com/waldiez/wactorz">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/">PyPI</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <details class="sidebar-group">
+      <summary class="sidebar-label">Guide</summary>
+      <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
+      <a href="../guide/windows.html" class="">Windows</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/library.html" class="">Library</a>
+      <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
+      <a href="../guide/interfaces.html" class="">Interfaces</a>
+      <a href="../guide/pipelines.html" class="">Pipelines</a>
+      <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
+      <a href="../guide/security.html" class="">Security</a>
+      <a href="../guide/prometheus.html" class="">Prometheus</a>
+      <a href="../guide/extensions.html" class="">Extensions</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
+    </details>
+    <details class="sidebar-group" open>
+      <summary class="sidebar-label">Catalogue agents</summary>
+      <a href="../catalogue/catalogue-agents.html" class="">Overview</a>
+      <a href="../catalogue/catalogue-google-setup.html" class="">Google — setup & login</a>
+      <a href="../catalogue/catalogue-google-calendar.html" class="">Google Calendar</a>
+      <a href="../catalogue/catalogue-gmail.html" class="">Gmail</a>
+      <a href="../catalogue/catalogue-weather.html" class="">Weather</a>
+      <a href="../catalogue/catalogue-smart-energy.html" class="">Smart Energy</a>
+      <a href="../catalogue/catalogue-reachy-mini.html" class="active">Reachy Mini</a>
+      <a href="../catalogue/catalogue-anomaly-detector.html" class="">Anomaly Detector</a>
+      <a href="../catalogue/catalogue-manual.html" class="">Device Manuals</a>
+      <a href="../catalogue/catalogue-doc-to-pptx.html" class="">Doc → PPTX</a>
+      <a href="../catalogue/catalogue-timeseries.html" class="">Time-Series Collector</a>
+    </details>
+  </aside>
+  <main class="content">
+<h1 id="reachy-mini">Reachy Mini</h1>
+<p>Connect a Reachy Mini to Wactorz, then control it in plain language. Reachy can move,
+look around, speak, listen, take photos, perform expressive gestures, and optionally
+control Home Assistant devices.</p>
+<blockquote>
+<p><strong>Beta:</strong> Reachy Mini is an experimental agent. Use it for supervised trials, not
+unattended production workflows. Keep the robot within reach while testing motion.</p>
+</blockquote>
+<h2 id="installation-policy">Installation policy</h2>
+<p>Reachy's recipe opts into <code>require_install_success: true</code>: it waits for package
+installation, reports failures, and postpones startup when loaded packages need a
+restart. The policy defaults to off. Other catalogue agents retain Wactorz's
+best-effort startup after a busy or timed-out installer. Package refusals block
+startup under both policies; strict installation never authorizes a package or a
+restore action.</p>
+<h2 id="before-you-start">Before you start</h2>
+<p>You need:</p>
+<ul>
+<li><strong>A Reachy Mini</strong>, Wireless or Lite.</li>
+<li><strong>Internet access</strong> on the computer running Wactorz. Reachy's voice comes from an online
+  speech service.</li>
+<li><strong>Wactorz installed with Reachy's packages</strong>, with its dashboard open and an LLM provider
+  set up. Install both together, putting your provider's extra in place of <code>anthropic</code>:</li>
+</ul>
+<p><code>bash
+  pip install 'wactorz[anthropic,reachy]'</code></p>
+<p>From a clone of the repository, use <code>pip install -e '.[anthropic,reachy]'</code>. The <code>reachy</code>
+  extra installs the robot SDK and its speech packages alongside Wactorz, so adding Reachy
+  later has nothing to install and needs no restart. Already running Wactorz? Run
+  <code>pip install 'wactorz[reachy]'</code> in the same environment and restart it once. For the rest
+  of the setup, follow the <a href="https://github.com/waldiez/wactorz#readme">README quick start</a>.</p>
+<p>For an audited installation from a repository clone, use the committed lock:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>sync<span class="w"> </span>--locked<span class="w"> </span>--extra<span class="w"> </span>anthropic<span class="w"> </span>--extra<span class="w"> </span>reachy
+uv<span class="w"> </span>run<span class="w"> </span>--no-sync<span class="w"> </span>wactorz
+</code></pre></div>
+
+<p>SDK 1.12.0 publishes secure Starlette requirements for both pip and uv. No uv
+metadata override is used. Reachy requires Python 3.11+, as Wactorz does. Client
+and HTTP middleware checks do not validate the full daemon dashboard
+or physical robot. Old saved Reachy recipes with changed dependency pins are
+refused at restore: respawn through <code>@catalog spawn reachy-mini</code> to use the normal
+package approval flow, then restart if requested. Saved runtime state is retained.</p>
+<p>Where Wactorz runs decides what Reachy can do:</p>
+<table>
+<thead>
+<tr>
+<th>Wactorz runs on…</th>
+<th>What works</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Windows or macOS</td>
+<td>Everything. The robot SDK brings the media libraries it needs.</td>
+</tr>
+<tr>
+<td>Linux</td>
+<td>Movement and speech, after the preparation in <a href="#linux">Linux</a>. Listening, conversation and the camera also need GStreamer's WebRTC plugin, which Linux distributions do not package.</td>
+</tr>
+<tr>
+<td>Docker, or the Home Assistant add-on</td>
+<td><strong>Not supported yet.</strong> Their images cannot install the robot SDK.</td>
+</tr>
+</tbody>
+</table>
+<p>To restart Wactorz, which a first install asks for once, stop it with <code>Ctrl+C</code> and start
+it again.</p>
+<h3 id="linux">Linux</h3>
+<p>The robot SDK compiles part of itself on Linux, so install the build tools and GStreamer
+first. On Debian or Ubuntu:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>python3-venv<span class="w"> </span>python3-dev<span class="w"> </span>build-essential<span class="w"> </span>pkg-config<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>libcairo2-dev<span class="w"> </span>libgirepository1.0-dev<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>gstreamer1.0-plugins-base<span class="w"> </span>gstreamer1.0-plugins-good<span class="w"> </span>gstreamer1.0-plugins-bad<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>gstreamer1.0-nice<span class="w"> </span>gstreamer1.0-libav<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>gir1.2-gstreamer-1.0<span class="w"> </span>gir1.2-gst-plugins-base-1.0<span class="w"> </span>gir1.2-gst-plugins-bad-1.0
+</code></pre></div>
+
+<p>Run Wactorz with <strong>Python 3.11 to 3.13</strong>. The SDK needs a version of PyGObject that
+does not work on Python 3.14, which is the default on Ubuntu 26.04; there, create the
+virtual environment with an older Python and with pip in it, for example:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>venv<span class="w"> </span>--seed<span class="w"> </span>-p<span class="w"> </span><span class="m">3</span>.13<span class="w"> </span>venv
+venv/bin/pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'wactorz[anthropic,reachy]'</span>
+</code></pre></div>
+
+<p>Without <code>--seed</code> the environment has no pip; install with <code>uv pip install</code> instead, and
+Wactorz uses <code>uv</code> for any later installs as long as it is on the <code>PATH</code> of the shell that
+starts Wactorz.</p>
+<p>Wactorz then connects without Reachy's camera and microphone, and says so. Movement and
+speech work; listening, conversation and the camera stay off until GStreamer's WebRTC
+plugin (gst-plugins-rs) is installed, which means building it from source.</p>
+<p>This was tested on Ubuntu 26.04 with Python 3.13 and a Reachy Mini Wireless.</p>
+<h2 id="quick-start">Quick start</h2>
+<p>This path gets the robot moving from the Wactorz dashboard. Start with text commands;
+voice comes last and is optional.</p>
+<h3 id="1-prepare-the-robot">1. Prepare the robot</h3>
+<p>Choose the model you have:</p>
+<p><strong>Reachy Mini Wireless</strong></p>
+<ol>
+<li>Power on Reachy.</li>
+<li>Connect Reachy and the computer running Wactorz to the same Wi-Fi network.</li>
+<li>Close any Hugging Face or Reachy Mini control app that is controlling the robot.</li>
+</ol>
+<p><strong>Reachy Mini Lite</strong></p>
+<ol>
+<li>Connect Reachy to the computer over USB.</li>
+<li>Find the robot's serial port. It looks like <code>COM3</code> on Windows or <code>/dev/ttyACM0</code>
+   on Linux.</li>
+<li>Open a terminal and start the daemon, replacing <code>&lt;serial_port&gt;</code> with that value:</li>
+</ol>
+<div class="highlight"><pre><span></span><code>reachy-mini-daemon<span class="w"> </span>-p<span class="w"> </span>&lt;serial_port&gt;
+</code></pre></div>
+
+<p>Leave that terminal open while using Reachy.</p>
+<h3 id="2-add-reachy-to-wactorz">2. Add Reachy to Wactorz</h3>
+<p>In the dashboard chat, send:</p>
+<div class="highlight"><pre><span></span><code>@catalog spawn reachy-mini
+</code></pre></div>
+
+<p><strong>Installed with the <code>reachy</code> extra:</strong> the chat answers "reachy-mini spawned and running".
+Go on to step 3. The first start takes up to a minute longer while the robot SDK downloads
+Reachy's gesture library, once.</p>
+<p><strong>Installed without it:</strong> Wactorz installs Reachy's packages first. This is what you will
+see in chat:</p>
+<ol>
+<li>Straight away, a reply saying which packages it is installing. The whole install takes
+   a few minutes, longer on a slow connection.</li>
+<li>One line per package as it installs, for example
+   <code>Installing reachy-mini==1.12.0 (1/6) for reachy-mini…</code>.</li>
+<li>Then one of these:</li>
+<li><strong>"reachy-mini spawned and running"</strong>: go on to step 3.</li>
+<li><strong>"…restart Wactorz once to finish; reachy-mini will start by itself after the
+     restart"</strong>: this is normal on a first install. The robot packages need an older
+     version of a library Wactorz had already loaded, and Python cannot swap it while it
+     runs. Restart Wactorz (<code>Ctrl+C</code>, then start it again) and Reachy comes back on its own.
+     Installing with the <code>reachy</code> extra, as in <a href="#before-you-start">Before you start</a>,
+     avoids this.</li>
+<li><strong>"…was not started because some of its packages failed to install"</strong>: the message
+     names each package and pip's error. Fix the cause it names, usually the network, then
+     send <code>@catalog spawn reachy-mini</code> again. Packages that did install are kept.</li>
+</ol>
+<p>Later spawns and restarts skip the install. The first start after it takes up to a
+minute longer while the robot SDK downloads Reachy's gesture library, once.</p>
+<h3 id="3-check-the-connection">3. Check the connection</h3>
+<p>Send:</p>
+<div class="highlight"><pre><span></span><code>@reachy-mini health
+</code></pre></div>
+
+<p>A good reply starts with <strong>"I'm connected to my body"</strong>. If it says Reachy is not
+connected, jump to <a href="#if-reachy-does-not-connect">If Reachy does not connect</a>.</p>
+<h3 id="4-try-the-first-commands">4. Try the first commands</h3>
+<p>Send these one at a time:</p>
+<div class="highlight"><pre><span></span><code>@reachy-mini wake up
+@reachy-mini look left
+@reachy-mini do a happy gesture
+@reachy-mini say hello
+</code></pre></div>
+
+<p>Reachy should move for the first three commands and speak for the last one. The dashboard
+also shows the result, so an audio or motor problem does not look like a successful command.</p>
+<p>If Reachy's voice is quiet, see
+<a href="#optional-make-reachys-voice-louder-with-ffmpeg">make Reachy's voice louder with ffmpeg</a>.</p>
+<h3 id="5-optional-talk-to-reachy">5. Optional: talk to Reachy</h3>
+<p>Text commands and Reachy's speech need nothing more. To <strong>talk to</strong> Reachy, Wactorz needs
+a speech recognition service. The default is Deepgram, a hosted service; voice audio is
+sent to it.</p>
+<ol>
+<li>Sign up at <a href="https://console.deepgram.com">console.deepgram.com</a> and create an API key.</li>
+<li>Put it in the <code>.env</code> file Wactorz reads, then restart Wactorz:</li>
+</ol>
+<p><code>dotenv
+   DEEPGRAM_API_KEY=your-key-here</code></p>
+<ol>
+<li>Try one question, then a conversation:</li>
+</ol>
+<p><code>text
+   @reachy-mini listen and ask Wactorz
+   @reachy-mini start conversation</code></p>
+<p><code>listen and ask Wactorz</code> records five seconds, then answers out loud.
+   <code>start conversation</code> (or <code>start listening</code>) keeps listening until you say
+   "goodbye" or send <code>@reachy-mini stop conversation</code>.</p>
+<p>To keep audio on your own computer instead, use the local recognizer described in
+<a href="#push-to-talk-voice-input">Push-to-talk voice input</a>.</p>
+<h3 id="where-to-go-next">Where to go next</h3>
+<ul>
+<li>If something is not working, see <a href="#common-problems">Common problems</a>.</li>
+<li>To use Wactorz and Home Assistant through Reachy, see
+  <a href="#use-reachy-as-the-wactorz-interface">Use Reachy as the Wactorz interface</a>.</li>
+<li>For everything Reachy can do, send <code>@reachy-mini help</code>.</li>
+<li>For MQTT or code-driven control, see <a href="#structured-commands">Structured commands</a>.</li>
+</ul>
+<h2 id="common-problems">Common problems</h2>
+<table>
+<thead>
+<tr>
+<th>What you see</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The spawn reply says it is installing, and nothing else happens for a few minutes</td>
+<td>Normal on a first install. Each package is announced as it starts.</td>
+</tr>
+<tr>
+<td>"…restart Wactorz once to finish…"</td>
+<td>Normal when Reachy's packages are installed at spawn. Restart Wactorz; Reachy starts by itself. Installing with the <code>reachy</code> extra avoids it.</td>
+</tr>
+<tr>
+<td>"…some of its packages failed to install"</td>
+<td>Fix what pip's error names, usually the network, then spawn again.</td>
+</tr>
+<tr>
+<td>"This Python environment … has no pip"</td>
+<td>Add pip with <code>python -m ensurepip --upgrade</code>, or put <code>uv</code> on the <code>PATH</code>, then spawn again.</td>
+</tr>
+<tr>
+<td>"reachy-mini could not start: the Python module '…' is not installed"</td>
+<td>Send <code>@catalog spawn reachy-mini</code> again to install what is missing.</td>
+</tr>
+<tr>
+<td>"reachy not connected"</td>
+<td>See <a href="#if-reachy-does-not-connect">If Reachy does not connect</a>.</td>
+</tr>
+<tr>
+<td>Reachy talks but does not move</td>
+<td>Close the Reachy Mini control app, then send <code>@reachy-mini reconnect</code>.</td>
+</tr>
+<tr>
+<td>Reachy's voice is quiet</td>
+<td>Install ffmpeg, see <a href="#optional-make-reachys-voice-louder-with-ffmpeg">make Reachy's voice louder</a>, or say <code>presenter mode</code>.</td>
+</tr>
+<tr>
+<td>Voice input says <code>DEEPGRAM_API_KEY</code> is required</td>
+<td>Do <a href="#5-optional-talk-to-reachy">step 5</a>.</td>
+</tr>
+<tr>
+<td>"Reachy is connected without its camera and microphone…"</td>
+<td>Expected on Linux: movement and speech work. See <a href="#linux">Linux</a>.</td>
+</tr>
+<tr>
+<td>The Wactorz log shows <code>ERROR … No Reachy Mini Audio USB device found!</code> at startup</td>
+<td>Harmless on Reachy Mini Wireless: the robot SDK first looks for the Lite's USB audio.</td>
+</tr>
+<tr>
+<td>Reachy stops talking in the middle of a sentence</td>
+<td>Check the Wactorz log at that moment for <code>Reachy motor link is down</code>, and report it with the lines around it.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="if-reachy-does-not-connect">If Reachy does not connect</h2>
+<p>Work through these checks in order:</p>
+<ol>
+<li>Make sure Reachy is powered on and that the preparation steps above still apply.</li>
+<li>For Wireless, confirm the robot and Wactorz host are on the same local network. Guest
+   Wi-Fi often blocks devices from seeing one another.</li>
+<li>For Wireless, close the Reachy Mini control app. For Lite, confirm the daemon terminal
+   is still running and shows no connection error.</li>
+<li>Ask the already-running agent to try again with <code>@reachy-mini reconnect</code>.</li>
+<li>If Wireless discovery still fails, or Wactorz runs inside WSL or a virtual machine, set the robot address
+   explicitly as described in <a href="#set-a-wireless-address">Set a Wireless address</a>.</li>
+</ol>
+<p>Use <code>@reachy-mini reconnect force</code> when the dashboard claims the link is alive but the
+robot does not respond. Reinstalling or respawning should not be the first troubleshooting
+step.</p>
+<h2 id="detailed-setup">Detailed setup</h2>
+<h3 id="set-a-wireless-address">Set a Wireless address</h3>
+<p>Automatic discovery is easiest when it works. It does not reach the robot from inside
+WSL or a virtual machine, which see the network through their host, and it can be
+unreliable elsewhere. Then tell Wactorz the robot's address yourself.</p>
+<p>Find the address in your router's list of connected devices, or try the name
+<code>reachy-mini.local</code>. The examples below use <code>192.168.1.42</code>; replace it with yours.</p>
+<p>Add these lines to the <code>.env</code> file Wactorz reads:</p>
+<div class="highlight"><pre><span></span><code>REACHY_CONNECTION_MODE=network
+REACHY_ROBOT_HOST=192.168.1.42
+</code></pre></div>
+
+<p><code>.env</code> is read when Wactorz starts, so restarting only the agent is not enough. Restart
+Wactorz.</p>
+<p><strong>Without restarting:</strong> publish the address to Wactorz's MQTT broker, then reconnect. Use
+<code>mosquitto_pub</code>, or Home Assistant's <strong>Settings → Devices &amp; services → MQTT → Configure →
+Publish a packet</strong> when it shares the broker:</p>
+<div class="highlight"><pre><span></span><code>topic: custom/reachy/config
+payload: {"robot_host": "192.168.1.42", "connection_mode": "network"}
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code>@reachy-mini reconnect
+</code></pre></div>
+
+<p>An address set this way is remembered, and it overrides the one in <code>.env</code>. The address in
+use is published in <code>custom/reachy/state</code> as <code>robot_host</code>.</p>
+<h3 id="reachys-packages">Reachy's packages</h3>
+<p>The <code>reachy</code> extra installs everything the agent uses, in the versions it was tested
+with:</p>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'wactorz[reachy]'</span>
+</code></pre></div>
+
+<p>It holds the same list the catalogue installs on a first spawn: the robot SDK
+(<code>reachy-mini</code>), <code>numpy</code>, <code>pillow</code>, <code>edge-tts</code> for speech, <code>webrtcvad-wheels</code> for voice
+detection, and <code>deepgram-sdk</code> for voice input. Deepgram needs an API key; text control and
+speech output do not.</p>
+<h3 id="optional-make-reachys-voice-louder-with-ffmpeg">Optional: make Reachy's voice louder with ffmpeg</h3>
+<p>Reachy speaks without <code>ffmpeg</code>. With it, speech gets a loudness boost that makes it
+clearly louder, which helps in a noisy room or in front of an audience. Without it, Reachy
+asks the speech service for its loudest clean voice instead, which is louder than plain
+speech but not as loud as the boost.</p>
+<p>If <code>ffmpeg</code> is missing, Reachy says so once in chat, the first time it speaks, with the
+command for your system. <code>@reachy-mini health</code> also says whether the boost is on.</p>
+<p>Install it on the <strong>computer running Wactorz</strong>, not on the robot, then restart Wactorz:</p>
+<table>
+<thead>
+<tr>
+<th>System</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Windows</td>
+<td><code>winget install ffmpeg</code></td>
+</tr>
+<tr>
+<td>macOS</td>
+<td><code>brew install ffmpeg</code></td>
+</tr>
+<tr>
+<td>Debian, Ubuntu, Raspberry Pi OS</td>
+<td><code>sudo apt install ffmpeg</code></td>
+</tr>
+</tbody>
+</table>
+<p>Or turn Reachy up instead: say <code>presenter mode</code> or <code>speak louder</code>.</p>
+<h2 id="hardware-warnings-and-what-reachy-can-tell-you-about-itself">Hardware warnings and what Reachy can tell you about itself</h2>
+<p>Say <code>are you overheating</code> (or <code>health</code>, <code>how are you feeling</code>, <code>battery</code>) for what the
+robot reports about its own condition.</p>
+<p><strong>Motor faults, including overheating, are watched automatically.</strong> The daemon reads the
+servos' hardware-error byte several times a second and decodes overheating, overload,
+electrical-shock and input-voltage faults — but it writes them to its own log and nowhere
+the SDK can read, not even into the status it serves. Wactorz therefore follows the
+daemon's log stream (<code>/logs/ws/daemon</code>, the same source the official control app shows its
+overheating warning from) and raises each fault in chat with what to do about it. The same
+fault on the same motor is repeated at most every five minutes, because the daemon re-reads
+the motors continuously and would otherwise produce a warning per read. The watch starts on
+connect and reconnects on its own, since the stream ends whenever the daemon restarts.</p>
+<p><strong>Only the wireless robot serves that stream</strong> — the daemon mounts the route behind its
+wireless flag — so a Lite over USB has no fault watch. <code>health</code> says so explicitly rather
+than reporting silence, which would otherwise read as "nothing wrong".</p>
+<p><strong>There is no battery level, and there is no way to add one.</strong> Pollen state it plainly in
+their FAQ: "We do not have the possibility to check the battery status, that's a known
+limitation of the design. We only have the led indication for low battery when it's time to
+charge it (green -&gt; orange -&gt; red)." The charge state is wired to that LED on the foot and
+reaches no software at all, so <code>health</code> says so outright rather than leaving an absent number
+to be read as a full charge. <strong>Watch the LED, not the dashboard</strong>: green is fine, orange means
+soon, red means charge it now.</p>
+<p><strong>An <code>Input Voltage Error</code> from a motor is not a fault here</strong> and is never raised as a warning.
+Reachy Mini runs its servos above their own protection threshold deliberately — Pollen's FAQ
+says "We are using a higher voltage on Reachy Mini, it's on purpose" — so it appears on healthy
+robots. It is written to the Wactorz log and left there; warning about it would train you to
+ignore the faults that matter.</p>
+<p>The one temperature available is the IMU's own, reported by <code>health</code> when the robot has an
+IMU. It is the inertial chip, not a motor, so treat it as the robot's internal ambient — the
+thing that actually overheats reports through the fault watch above.</p>
+<h2 id="connection-modes-advanced">Connection modes (advanced)</h2>
+<p>By default the SDK auto-detects: it probes <code>localhost</code> first, then the robot. If you
+run the robot wirelessly and do <strong>not</strong> have the Reachy Mini control app open, pin
+<code>network</code> so the agent connects straight to the robot and skips the localhost probe:</p>
+<div class="highlight"><pre><span></span><code>topic: custom/reachy/config
+payload: {"connection_mode": "network"}
+</code></pre></div>
+
+<p>When you do want the Reachy Mini control app or its <strong>simulator</strong> (for example a shared
+demo, or working with no physical robot), pin <code>local</code> instead:</p>
+<div class="highlight"><pre><span></span><code>topic: custom/reachy/config
+payload: {"connection_mode": "local"}
+</code></pre></div>
+
+<p>After publishing, say <code>reconnect</code> to apply the new mode. You can also set
+<code>REACHY_CONNECTION_MODE=network</code> (or <code>local</code>) in the environment, which is read at spawn
+and so needs a restart. The active mode is reported in <code>custom/reachy/state</code> as
+<code>connection_mode</code>. This only selects <em>where</em> the agent connects — speaker/host audio
+routing is set separately by <code>media_backend</code>.</p>
+<blockquote>
+<p>If the robot talks but does not move, the agent likely reached the robot's media
+stream but not its motor control. Use <code>network</code> mode (no control app), or make sure
+the control app / simulator is running for <code>local</code> mode.</p>
+</blockquote>
+<h2 id="everyday-commands">Everyday commands</h2>
+<p>Plain English works for normal use:</p>
+<div class="highlight"><pre><span></span><code>@reachy-mini wake up
+@reachy-mini do a happy gesture
+@reachy-mini wiggle your antennas
+@reachy-mini look left
+@reachy-mini say hello
+@reachy-mini turn on the light and nod
+</code></pre></div>
+
+<h3 id="ask-reachy-for-help">Ask Reachy for help</h3>
+<p>Help is built into the agent and works even when the robot is disconnected. In chat—or
+while an opt-in conversation is running—say:</p>
+<div class="highlight"><pre><span></span><code>@reachy-mini help
+</code></pre></div>
+
+<p>The full answer shows examples and keywords for movement, speech, voice input, camera,
+connection status, volume, and Wactorz/Home Assistant. Ask for a shorter topic guide with:</p>
+<div class="highlight"><pre><span></span><code>@reachy-mini help movement
+@reachy-mini help voice
+@reachy-mini help camera
+@reachy-mini help connection
+@reachy-mini help volume
+@reachy-mini help home
+</code></pre></div>
+
+<p>Natural questions work too: <code>what can you do?</code>, <code>how do I use the camera?</code>, and
+<code>how can I start a conversation?</code>. In voice mode, Reachy speaks a short answer and puts
+the complete command guide in its dashboard thread.</p>
+<p>Other agents can send the same requests directly:</p>
+<div class="highlight"><pre><span></span><code><span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">send_to</span><span class="p">(</span><span class="s2">"reachy-mini"</span><span class="p">,</span> <span class="s2">"do a happy gesture"</span><span class="p">)</span>
+<span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">send_to</span><span class="p">(</span><span class="s2">"reachy-mini"</span><span class="p">,</span> <span class="s2">"say hello"</span><span class="p">)</span>
+</code></pre></div>
+
+<h2 id="use-reachy-as-the-wactorz-interface">Use Reachy as the Wactorz interface</h2>
+<p>Use the explicit <code>ask Wactorz</code> prefix in chat to bypass Reachy's local robot planner:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">@reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="n">ask</span><span class="w"> </span><span class="n">Wactorz</span><span class="w"> </span><span class="n">what</span><span class="err">'</span><span class="n">s</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">weather</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">Athens</span><span class="vm">?</span>
+<span class="nv">@reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="n">ask</span><span class="w"> </span><span class="n">Wactorz</span><span class="w"> </span><span class="n">turn</span><span class="w"> </span><span class="k">off</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">living</span><span class="o">-</span><span class="n">room</span><span class="w"> </span><span class="n">light</span>
+<span class="nv">@reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="n">ask</span><span class="w"> </span><span class="n">Wactorz</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">living</span><span class="o">-</span><span class="n">room</span><span class="w"> </span><span class="n">light</span><span class="w"> </span><span class="k">on</span><span class="vm">?</span>
+</code></pre></div>
+
+<p>The prefix forwards the remaining text to main with <code>_via_interface=True</code> for restricted
+conversation, everyday Home Assistant device control, and delegation to its existing
+bounded allowlist. Main accepts this context only from a reviewed local catalogue
+program; that admission does not authenticate the original caller. Robot voice,
+agent tasks and MQTT input cannot issue operator commands, approve plans, or create
+or delete executable agents through this bridge. Type administrative commands directly
+in main's operator chat. Payload flags and source labels do not grant authority.
+<code>ask Wactorz</code> needs the agent on
+main: from a node it has no route there, since main does not take tasks from nodes, and
+Reachy answers from its own commands instead. The final text is returned to chat and spoken through Reachy's speaker.
+Without the prefix, Reachy handles its own robot, camera, speech, microphone, and
+Home Assistant commands first; unhandled text can still fall through to main, but
+<code>ask Wactorz</code> is the deterministic interface route.</p>
+<p>The full path is:</p>
+<div class="highlight"><pre><span></span><code><span class="n">text</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="err">@</span><span class="n">reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">main</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">selected</span><span class="w"> </span><span class="n">Wactorz</span><span class="w"> </span><span class="n">agent</span><span class="o">/</span><span class="k">tool</span>
+<span class="w">                    </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">spoken</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="n">text</span><span class="w"> </span><span class="n">answer</span><span class="w"> </span><span class="o">&lt;-</span>
+</code></pre></div>
+
+<h3 id="push-to-talk-voice-input">Push-to-talk voice input</h3>
+<p>Voice input is an explicit, one-shot command. It records a bounded clip, transcribes
+the WAV, sends the transcript through the same <code>_bridge_to_main</code> interface path above,
+returns the answer to chat, and speaks it through Reachy:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">@reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="n">listen</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="n">ask</span><span class="w"> </span><span class="n">Wactorz</span>
+</code></pre></div>
+
+<p>Or over MQTT:</p>
+<div class="highlight"><pre><span></span><code><span class="kc">t</span><span class="err">opic</span><span class="p">:</span><span class="w"> </span><span class="err">cus</span><span class="kc">t</span><span class="err">om/reachy/cmd/ask_voice</span>
+<span class="err">payload</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"duration"</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">}</span>
+</code></pre></div>
+
+<p><code>ask_voice</code> remains one-shot. There is deliberately no always-on microphone or wake
+word.
+The default backend is hosted Deepgram Nova-3. It needs an API key, see
+<a href="#5-optional-talk-to-reachy">step 5</a>. <code>ask_voice</code> uploads one bounded WAV clip; conversation mode streams Reachy's
+WebRTC microphone as mono PCM while the user speaks:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Hosted default</span>
+pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'deepgram-sdk&gt;=3,&lt;4'</span>
+<span class="nv">DEEPGRAM_API_KEY</span><span class="o">=</span>...
+<span class="nv">REACHY_STT_BACKEND</span><span class="o">=</span>deepgram
+<span class="nv">REACHY_STT_MODEL</span><span class="o">=</span>nova-3
+
+<span class="c1"># Local alternative; audio stays on this machine</span>
+pip<span class="w"> </span>install<span class="w"> </span>faster-whisper
+<span class="nv">REACHY_STT_BACKEND</span><span class="o">=</span>faster-whisper
+<span class="nv">REACHY_STT_MODEL</span><span class="o">=</span>Infomaniak-AI/faster-whisper-large-v3-turbo
+
+<span class="c1"># Alternative local implementation</span>
+pip<span class="w"> </span>install<span class="w"> </span>openai-whisper
+<span class="nv">REACHY_STT_BACKEND</span><span class="o">=</span>whisper
+<span class="nv">REACHY_STT_MODEL</span><span class="o">=</span>base
+
+<span class="c1"># Hosted OpenAI transcription (explicit opt-in; audio leaves the host)</span>
+pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'wactorz[openai]'</span>
+<span class="nv">REACHY_STT_BACKEND</span><span class="o">=</span>openai
+<span class="nv">REACHY_STT_MODEL</span><span class="o">=</span>gpt-4o-transcribe
+<span class="nv">OPENAI_API_KEY</span><span class="o">=</span>...
+</code></pre></div>
+
+<p>Optional <code>REACHY_STT_LANGUAGE</code>, <code>REACHY_STT_FALLBACK_LANGUAGE</code>,
+<code>REACHY_STT_DEVICE</code>, <code>REACHY_STT_COMPUTE_TYPE</code>, and <code>REACHY_STT_HOTWORDS</code>
+settings tune language, uncertain-language fallback, local inference, and recognition
+bias. <code>REACHY_STT_TIMEOUT_S</code> bounds hosted calls and defaults to 60 seconds. Use
+<code>REACHY_STT_LANGUAGE=multi</code> and <code>REACHY_STT_STREAM_LANGUAGE=multi</code> with Nova-3 for
+English and Greek in one conversation; set either to <code>en</code> or <code>el</code> to constrain a session.
+Short utterances whose language probability is below <code>stt_min_language_probability</code>
+(default <code>0.60</code>) are retried in the configured fallback language; unresolved guesses are silently discarded instead
+of being routed as commands. The MQTT payload can override these settings with
+<code>stt_backend</code>, <code>stt_model</code>, <code>language</code>, <code>stt_fallback_language</code>, <code>stt_device</code>,
+<code>stt_compute_type</code>, <code>stt_hotwords</code>, and <code>stt_min_language_probability</code>. Keys are read
+from the environment and are never embedded in the recipe.</p>
+<p><code>custom/reachy/events</code> reports <code>transcript</code>, <code>capture_duration_s</code>,
+<code>transcription_duration_s</code>, <code>response_text</code>, <code>total_duration_s</code>, <code>ok</code>, <code>error</code>,
+<code>type</code>, and <code>ts</code>. Failures also carry a <code>stage</code>: <code>capture_failed</code>,
+<code>transcription_failed</code>, <code>empty_transcript</code>, <code>routing_failed</code>, or <code>speech_failed</code>.
+Completed-stage fields remain present on failures for diagnosis.</p>
+<p>Before each clip the recorder drains a short, bounded queued WebRTC pre-roll. It
+captures for the requested wall-clock duration even if the SDK yields buffered samples
+faster than real time, and then retains only the newest requested-duration audio. This
+prevents old queued audio from becoming the start of a new transcription.</p>
+<h3 id="opt-in-conversation-mode">Opt-in conversation mode</h3>
+<p>Start a natural multi-turn session explicitly:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">@reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="k">start</span><span class="w"> </span><span class="n">conversation</span>
+</code></pre></div>
+
+<p>Or over MQTT:</p>
+<div class="highlight"><pre><span></span><code><span class="kc">t</span><span class="err">opic</span><span class="p">:</span><span class="w"> </span><span class="err">cus</span><span class="kc">t</span><span class="err">om/reachy/cmd/co</span><span class="kc">n</span><span class="err">versa</span><span class="kc">t</span><span class="err">io</span><span class="kc">n</span><span class="err">_s</span><span class="kc">tart</span>
+<span class="err">payload</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span>
+</code></pre></div>
+
+<p>Main is the single conversational brain; the optional catalogue agent makes Reachy
+its embodied microphone, speaker, and gesture surface. Home Assistant actions and
+normal Wactorz tools follow Main's existing route. The current utterance is sent as
+plain executable text, while
+up to four prior turns travel separately as structured reference context. An older
+command can therefore help resolve "it" without becoming part of the new command.</p>
+<p>Reachy declares its available gestures in generic interface metadata. Main may return
+a validated <code>&lt;interface_action&gt;</code> block for the catalogue agent to execute, so a
+less-literal embodied request can still move the robot without a Main → Reachy
+delegation loop. Wactorz core contains no Reachy dependency; without the catalogue
+agent, Main behaves exactly as before.</p>
+<p>With Deepgram selected, each turn streams the PCM frames already being read from
+Reachy's WebRTC microphone. Local WebRTC VAD remains responsible for confirmed speech
+onset, motor-noise rejection, cancellation, and inactivity limits. Deepgram endpointing
+normally closes the turn after 500 ms of silence, with a 1200 ms utterance-end backstop.
+Interim recognition is published on <code>custom/reachy/events</code> while the user speaks. If the
+stream cannot start, disconnects, or returns no final transcript, the completed local
+capture goes through prerecorded Deepgram transcription without asking the user to repeat.
+The complete reply appears in Reachy's dashboard thread before playback begins, and
+the same sanitized reply is spoken in sentence-sized chunks without replacing its
+ending with a "rest in Wactorz chat" notice. Recognized
+speech stays in the same thread, labelled as an interface-mediated exchange; Main
+remains internal reasoning metadata. Raw service calls and planner details remain
+available in conversation diagnostics as <code>raw_response</code>, not ordinary chat.
+Execution receipts such as <code>ran 4 of 4</code> are also hidden by default; say
+<code>enable debug</code> to show them and
+<code>disable debug</code> to return to the normal user-facing view. Debug always starts off
+after an agent restart. Punctuation-only recognition noise is ignored.</p>
+<p>Prerecorded conversation turns auto-detect the spoken language. Streaming uses
+<code>stt_stream_language</code> (or <code>REACHY_STT_STREAM_LANGUAGE</code>), which defaults to <code>multi</code>: English
+and Greek in the same conversation. Set it to <code>en</code> or <code>el</code> to keep a session to one
+language. Common names
+and device terms are supplied as hotwords; override them with <code>stt_hotwords</code> or
+<code>REACHY_STT_HOTWORDS</code>. Common mishearings such as "Richie", "Riti", "Ritzy", and
+"Lizzy" are corrected to "Reachy" when used as the robot's name. Main is explicitly
+told that these variants refer to Reachy, never the user, and it addresses the user
+by name only after a clear naming statement or a durable saved fact. Local Faster
+Whisper also enables its VAD, disables
+previous-transcript conditioning, and reports confidence/no-speech scores. Results
+below <code>stt_min_confidence</code> (default <code>0.25</code>) or above <code>stt_max_no_speech</code> (default
+<code>0.60</code>) are silently discarded without consuming a turn.</p>
+<p>Speech comes back out in whatever language the reply is written in. <code>TTS_VOICE</code>
+sets the voice; a <em>Multilingual</em> edge-tts voice
+(<code>en-US-BrianMultilingualNeural</code>, <code>en-AU-WilliamMultilingualNeural</code>, ...)
+pronounces every supported language itself, so Reachy keeps one voice across
+English and Greek. Any other voice speaks a single language and would read Greek
+out as Unicode letter names, so Greek text is redirected to <code>TTS_VOICE_EL</code>
+instead - <code>el-GR-AthinaNeural</code> (female) by default, or <code>el-GR-NestorasNeural</code>
+(male); edge-tts ships no others. A per-call <code>{"voice": "..."}</code> on <code>say</code>
+overrides both.</p>
+<p>Confident auto-detected languages become a session hint for later ambiguous turns.
+Voice-originated turns create no durable personal facts unless the user explicitly
+says to remember or save something. This prevents a bad transcript from becoming the
+user's name or household profile while preserving intentional voice memory.</p>
+<p>Greek and English requests to lower or raise Reachy's own voice are handled locally
+as robot speaker-volume changes rather than being sent to Home Assistant.</p>
+<h3 id="idle-presets">Idle presets</h3>
+<p>Amplitude, tempo, which joints move and how often attract beats play are five
+independent settings, and nobody wants to reason about five settings with an
+audience already in front of the robot. A preset sets all of them at once:</p>
+<table>
+<thead>
+<tr>
+<th>Preset</th>
+<th>What it looks like</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>off</code></td>
+<td><strong>The default.</strong> Completely still. Motors stay live and every command still works — this is stillness, not sleep.</td>
+</tr>
+<tr>
+<td><code>calm</code></td>
+<td>Barely moving, and <em>slower</em> as well as smaller. Breathing that is only shallower reads as a robot turned down; breathing that is also slower reads as something at rest.</td>
+</tr>
+<tr>
+<td><code>antennas</code></td>
+<td>Antennas alive, head and body held absolutely still. For a plinth where a sweeping head is a hazard, or when he should look like he is listening rather than performing.</td>
+</tr>
+<tr>
+<td><code>alive</code></td>
+<td><strong>What you get when you turn ambient motion on without naming a preset.</strong> Breathing, gaze drift, an attract beat every half minute or so.</td>
+</tr>
+<tr>
+<td><code>showtime</code></td>
+<td>Bigger and quicker, with beats two to three times as often. Too much for a quiet room, and meant to be.</td>
+</tr>
+</tbody>
+</table>
+<p>Set it whichever way is nearest to hand:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"life"</span><span class="p">,</span><span class="w"> </span><span class="nt">"preset"</span><span class="p">:</span><span class="w"> </span><span class="s2">"showtime"</span><span class="p">}</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code>REACHY_IDLE_PRESET=alive                        # .env, at boot
+custom/reachy/config {"idle_preset": "calm"}    # persists
+</code></pre></div>
+
+<p>Or just say it — this is the control you reach for with people watching, so it
+works out loud, in English or Greek:</p>
+<blockquote>
+<p>"calm down" · "settle down" · "antennas only" · "showtime" · "show off" ·
+"stop moving" · "alive" · "back to normal"
+"ηρέμησε" · "μόνο τις κεραίες" · "μη κουνιέσαι" · "πιο ζωηρά" · "κανονικά"</p>
+</blockquote>
+<p>Naming a preset next to any word meaning <em>how you move</em> also works, so
+"set preset animation alive", "idle showtime" and "motion calm" all land. A bare
+preset name is matched only as the whole message: "alive" changes the preset,
+"are you alive?" stays a question.</p>
+<p>If ambient motion is ever held down by a flag that outlived whatever set it,
+it releases itself after 25 seconds and logs which flag it was. Nothing
+legitimate holds one that long, and the alternative — a robot that stops moving
+permanently and silently while every command still reports success — is the
+worst failure this feature has.</p>
+<p><code>{"cmd": "life"}</code> with no arguments reports the current preset and lists the
+rest with a description of each. Individual settings are applied <em>after</em> a
+preset, so <code>{"preset": "calm", "attract": true}</code> reads the way it looks: that
+mood, with one deliberate exception.</p>
+<h3 id="ambient-motion">Ambient motion</h3>
+<p>A robot holding one pose perfectly still is hard to tell from a prop, which
+matters most in a room where people are walking past. <code>REACHY_IDLE_LIFE=1</code> (or
+<code>{"cmd": "life", "enabled": true}</code>, or <code>custom/reachy/config {"idle_life":
+true}</code>) keeps a small amount of motion going: breathing on a 4.3s cycle, a slow
+weight shift on 11.3s, gaze that settles somewhere for a few seconds and then
+moves, and an occasional asymmetric antenna flick. The three periods do not
+divide into each other, so the sum never visibly repeats. Off by default.</p>
+<p>It cannot take the robot away from you, because it never names an absolute
+target. Every offset is added to the pose your last command established, so a
+<code>pose</code> moves the base and ambient motion breathes around the new one. It also
+stands down completely while any command is in flight (<code>busy</code>), while Reachy is
+speaking, and while he is asleep. Scale it with
+<code>{"cmd": "life", "amplitude": 0.5}</code> or <code>REACHY_IDLE_LIFE_AMPLITUDE</code> — 1.0 is the
+tuned default and 1.5 the maximum, and the hard ceilings in the code apply on
+top of whatever you set.</p>
+<p>A commanded pose is <strong>held and then released</strong>. It stays put for about three and
+a half seconds, then eases back toward neutral over another two and a half. A
+pose is transient intent, not a new resting posture: without this, aiming his
+head down for a <code>describe</code> left him breathing politely at the floor until
+something else moved him. The direction he is <em>facing</em> is never relaxed away —
+turn him toward the room and he stays turned. Set <code>REACHY_IDLE_RELAX=0</code> or
+<code>{"cmd": "life", "relax": false}</code> to pin a pose exactly where you put it.</p>
+<p>After <code>look_at</code>, <code>look_pixel</code> or an <code>emotion</code> clip the head pose has no name in
+pose space, so ambient motion leaves the head alone and keeps only the antennas
+alive. He holds that gaze for the same few seconds, then makes one smooth
+interpolated move back to neutral and resumes — a pause, never a dead end.</p>
+<h3 id="attract-beats">Attract beats</h3>
+<p>Breathing stops him reading as switched off. It does not make anyone cross a
+room. Every 18-45 seconds, when nothing else is happening, Reachy plays one
+larger move drawn at random without immediate repeats: <code>scan</code> (a slow sweep of
+the room), <code>perk</code> (head cock, antennas up), <code>double_take</code> (glance away, snap
+back), <code>stretch</code>, <code>muse</code>. Each runs as a real trajectory under the motion lock
+with <code>busy</code> set, so it yields to your commands exactly as ambient motion does,
+and ends at neutral.</p>
+<p>They are suppressed while Reachy is mid-turn in a conversation — a big move
+while someone is being listened to reads as not paying attention. A session that
+is merely open and waiting is fine. Turn them off with <code>REACHY_ATTRACT=0</code> or
+<code>{"cmd": "life", "attract": false}</code>, retime with <code>REACHY_ATTRACT_MIN_GAP</code> /
+<code>REACHY_ATTRACT_MAX_GAP</code>, or fire one on demand to check it reads from where the
+audience will stand:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"life"</span><span class="p">,</span><span class="w"> </span><span class="nt">"beat"</span><span class="p">:</span><span class="w"> </span><span class="s2">"perk"</span><span class="p">}</span>
+</code></pre></div>
+
+<p>When ambient motion is on, spoken replies are animated against their own word
+timings: edge-tts reports the offset and duration of every word it synthesises,
+so accents land on the words rather than on a timer that would drift against the
+sentence within a couple of seconds. A small lift at the start of an utterance
+and a settle at the end give it a beginning and an end. Opt out for one line
+with <code>{"cmd": "say", "text": "...", "speech_motion": false}</code>.</p>
+<p>Emoji never reach the synthesiser. edge-tts does not skip them — it reads their
+Unicode names aloud, so a cheerful reply ended with Reachy solemnly announcing
+"smiling face with smiling eyes". They are stripped at synthesis, so every path
+is covered: a direct <code>say</code>, a spoken vision description, or a reply the planner
+wrote. Dashes, curly quotes and ellipsis are deliberately kept; they belong in
+speech.</p>
+<p>Audio is intentionally plainer than the dashboard response. Emoji, Markdown
+role-play directions such as <code>*waves*</code>, links, and raw Home Assistant service/entity
+syntax stay visual. Reachy speaks a short human acknowledgement instead; for example,
+<code>Done: light.turn_on -&gt; light.main_light</code> becomes "Okay, the light is on", or
+"Okay, the light is pink" when that was the request.</p>
+<p>Reachy applies the compatible parts of Pollen's conversation tuning to the XVF3800
+audio processor. A firmware-owned nonlinear-attenuation flag is intentionally left
+untouched; the robot can force its readback even after applying all useful
+echo/noise settings. On some physical robots the microphone still hears the entire
+speaker utterance, so a simple VAD monitor cannot reliably distinguish Reachy's
+voice from a human interruption. Automatic barge-in therefore defaults off and
+normal replies play to completion.</p>
+<p>Set <code>"barge_in": true</code> only as an experiment on hardware with verified acoustic echo
+cancellation. In chat, <code>start conversation with interruption</code> (also <code>start interruptible
+conversation</code> or <code>start conversation with barge in</code>) sets the same flag without hand-writing
+JSON; plain <code>start conversation</code> leaves it off. Either way the reply to the start command
+says which mode you are in, so a robot that will not be talked over is distinguishable from
+one that is ignoring you. In that mode the monitor ignores the first 450 ms of speaker startup,
+then requires about 210 ms of sustained voice onset. Onset is treated as a suspicion
+rather than a verdict: the sentence in progress finishes, and the recording is then
+checked before it counts. It has to carry at least <code>barge_verify_min_speech_s</code>
+of voice — defaulting to <code>barge_min_speech_s</code>, the same floor used to call it an utterance
+in the first place, since a stricter one here only discards real interruptions — transcribe
+to something the recogniser stands behind, and not repeat the words
+Reachy was speaking — his own voice satisfies every acoustic test, so the only thing that
+separates it from a person's is what was said. That check transcribes with the recogniser's own VAD switched off
+(<code>stt_vad_filter</code>): the clip was recorded while the loudspeaker was playing and has already
+been gated by Reachy's VAD, and running a second one over it discards the speech it was
+meant to protect. The check runs alongside the next sentence rather than
+between sentences: it costs a recogniser pass — seconds on the robot — and Reachy's own
+voice trips the onset on nearly every sentence, so waiting for it put that pause into every
+gap. One check runs at a time, and its answer is taken as soon as the sentence in progress
+ends. A confirmed interruption stops the reply and is routed as the next turn,
+carrying the transcript already made for the check rather than deriving it twice; an
+unconfirmed one is discarded and he keeps talking.
+The cost of a real interruption is the rest of one sentence, which reads as letting him
+finish rather than as ignoring you. A typed <code>stop</code>,
+<code>silence</code>, <code>quiet</code>, or <code>shut up</code> still cuts the current reply immediately without
+ending the conversation. Spoken stop phrases work while Reachy is listening, but
+reliable spoken interruption during TTS requires a true full-duplex realtime audio
+pipeline rather than this cascaded STT -&gt; LLM -&gt; TTS path.</p>
+<p>Stop with <code>stop conversation</code>, <code>stop the conversation</code>, <code>stop listening</code>,
+<code>end conversation</code>, <code>end the conversation</code>, <code>goodbye Reachy</code>, <code>goodbye</code>, <code>bye</code>,
+<code>that's all</code>, <code>σταμάτα</code>, <code>σταμάτα να ακούς</code>, <code>τέλος συζήτησης</code>, or <code>αντίο</code>.
+You can also stop from chat or MQTT at any stage:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">@reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="n">stop</span><span class="w"> </span><span class="n">conversation</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="kc">t</span><span class="err">opic</span><span class="p">:</span><span class="w"> </span><span class="err">cus</span><span class="kc">t</span><span class="err">om/reachy/cmd/co</span><span class="kc">n</span><span class="err">versa</span><span class="kc">t</span><span class="err">io</span><span class="kc">n</span><span class="err">_s</span><span class="kc">t</span><span class="err">op</span>
+<span class="err">payload</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span>
+</code></pre></div>
+
+<p>Only one conversation can run at a time. By default it listens until a spoken stop
+phrase or <code>conversation_stop</code>; set a positive <code>inactivity_timeout</code> to add an idle
+timeout. Set a positive <code>max_turns</code> only when a bounded session is wanted. Optional
+start fields include <code>silence_s</code>, <code>max_utterance_s</code>, <code>min_speech_s</code>, <code>pre_roll_s</code>,
+<code>flush_s</code>, <code>vad_mode</code>, <code>vad_min_rms</code>, <code>cooldown_s</code>, <code>barge_in</code>, <code>barge_guard_s</code>,
+<code>barge_onset_s</code>, <code>barge_silence_s</code>, <code>barge_min_speech_s</code>, <code>barge_flush_s</code>,
+<code>barge_min_rms</code>, <code>barge_verify_min_speech_s</code>, <code>voice_friendly</code>,
+<code>state_motion</code>, <code>idle_motion</code>, <code>stt_language</code>, <code>stt_streaming</code>, <code>stt_stream_language</code>,
+<code>stt_endpointing_ms</code>, <code>stt_utterance_end_ms</code>, <code>stt_finalize_timeout_s</code>, <code>stt_hotwords</code>,
+<code>stt_min_confidence</code>, <code>stt_max_no_speech</code>, and <code>max_turns</code>. Barge-in defaults to
+false and is enabled only by an explicit <code>barge_in:true</code>; all physical conversation
+motion defaults to false.</p>
+<p>Set <code>state_motion:true</code> (or <code>REACHY_CONVERSATION_STATE_MOTION=1</code>) for subtle
+listening/speaking antenna cues. These use
+antenna-only <code>set_target</code> calls and do not command or reset the head. Conversation
+states are published on <code>custom/reachy/events</code>; events also report <code>session_id</code>,
+<code>turn_index</code>, <code>interim_transcript</code>, <code>transcript</code>, <code>response</code>, <code>raw_response</code>,
+<code>spoken_response</code>, <code>interrupted</code>,
+timings, <code>stop_reason</code>, <code>ok</code>, <code>error</code>, and <code>ts</code>.</p>
+<p>Physical listening motion defaults to <code>false</code> because Reachy's antenna servos are audible to
+its live microphone and can become convincing transcription false positives. The robot stays
+mechanically still while recording; personality remains in deliberate response
+gestures and the ambient-life layer. Set <code>idle_motion:true</code> or
+<code>REACHY_CONVERSATION_IDLE_MOTION=1</code> only to experiment on hardware with quiet servos. The
+opt-in motion uses small, eased antenna sweeps, stops when voice activity is confirmed,
+and never moves the head. Short mechanical bursts that trip VAD are rejected before
+the recognizer and do not consume a turn or error budget, but keeping motors still is the
+reliable default.</p>
+<p>For bilingual English/Greek use, set both <code>REACHY_STT_LANGUAGE=multi</code> and
+<code>REACHY_STT_STREAM_LANGUAGE=multi</code> with Nova-3. When local VAD closes a turn, the streaming
+client sends Deepgram <code>Finalize</code> and waits briefly for the final transcript before falling back
+to a prerecorded request using the same captured audio. This avoids closing the WebSocket while
+its final result is still in flight.</p>
+<p>Embodied requests stay on the robot. "Turn left" and "turn right" rotate the body
+45 degrees relative to its current heading; an explicit angle such as "turn left
+90 degrees" overrides the default within Reachy's safe range. "Do a little dance",
+"turn around", "nod",
+"shake your head", "wiggle your antennas", and "look curious" run safe, explicit
+physical poses instead of going to the Wactorz LLM for pretend role-play. "What do
+you see?" and other room-view questions make Reachy scan with its own camera; requests
+specifically about the view in front capture a single forward frame. The dance ends
+with a short spoken "Ta-da!"; the full action result remains visible in chat.</p>
+<p>The Reachy playback API remains fire-and-forget, so non-interrupted turns use Edge
+TTS word-boundary duration plus a tail pad and cooldown. Explicit stop and barge-in
+both cut playback immediately. A plain chat "stop" is treated as "stop talking" and
+produces no acknowledgement bubble unless debug mode is enabled. Local transcription
+already running inside a native
+STT library cannot be forcibly terminated, but its result is discarded after session
+cancellation.</p>
+<h2 id="structured-commands">Structured commands</h2>
+<p>Request all help or one help topic without an LLM call or robot connection:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"help"</span><span class="p">}</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"help"</span><span class="p">,</span><span class="w"> </span><span class="nt">"topic"</span><span class="p">:</span><span class="w"> </span><span class="s2">"camera"</span><span class="p">}</span>
+</code></pre></div>
+
+<p>For direct control, send a dict with <code>cmd</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>help</code></td>
+<td>All help or one topic: movement, voice, camera, connection, volume, home</td>
+</tr>
+<tr>
+<td><code>wake</code>, <code>sleep</code>, <code>stop</code></td>
+<td>Basic robot state</td>
+</tr>
+<tr>
+<td><code>pose</code></td>
+<td>Head yaw, pitch, roll, x/y/z</td>
+</tr>
+<tr>
+<td><code>antennas</code></td>
+<td>Left and right antenna angles</td>
+</tr>
+<tr>
+<td><code>gesture</code></td>
+<td>Physical <code>dance</code>, persistent <code>turn_around</code>, <code>nod</code>, <code>shake</code>, <code>wiggle</code>, or <code>curious</code> choreography</td>
+</tr>
+<tr>
+<td><code>face_forward</code></td>
+<td>Return from a rear-facing orientation to the user</td>
+</tr>
+<tr>
+<td><code>look_at</code>, <code>look_pixel</code></td>
+<td>Gaze target</td>
+</tr>
+<tr>
+<td><code>camera</code></td>
+<td>Capture one still frame from the onboard camera (base64 JPEG/PNG)</td>
+</tr>
+<tr>
+<td><code>describe</code></td>
+<td>Look through the camera and speak a description of the scene (vision LLM)</td>
+</tr>
+<tr>
+<td><code>look_around</code></td>
+<td>Scan several camera angles and describe the surrounding room</td>
+</tr>
+<tr>
+<td><code>look_behind</code></td>
+<td>Turn rearward, describe that camera view, and remain rear-facing</td>
+</tr>
+<tr>
+<td><code>debug</code></td>
+<td>Opt in or out of action-sequence receipts (<code>enabled: true/false</code>)</td>
+</tr>
+<tr>
+<td><code>listen</code></td>
+<td>Record a short mic-array clip (base64 WAV) with direction of arrival</td>
+</tr>
+<tr>
+<td><code>ask_voice</code></td>
+<td>Push-to-talk WAV → STT → main Wactorz route → spoken answer</td>
+</tr>
+<tr>
+<td><code>conversation_start</code>, <code>conversation_stop</code></td>
+<td>Opt-in VAD multi-turn Wactorz interface</td>
+</tr>
+<tr>
+<td><code>doa</code></td>
+<td>Report the mic array's current direction of arrival, no recording</td>
+</tr>
+<tr>
+<td><code>emotion</code>, <code>list_emotions</code></td>
+<td>Recorded gesture clips</td>
+</tr>
+<tr>
+<td><code>say</code>, <code>volume</code></td>
+<td>Speech and speaker volume</td>
+</tr>
+<tr>
+<td><code>life</code></td>
+<td>Ambient idle motion on/off, and its amplitude</td>
+</tr>
+<tr>
+<td><code>ha</code></td>
+<td>Home Assistant request</td>
+</tr>
+<tr>
+<td><code>bind</code>, <code>unbind</code></td>
+<td>Persistent reaction to an MQTT/HA event</td>
+</tr>
+</tbody>
+</table>
+<p>Examples:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"wake"</span><span class="p">}</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pose"</span><span class="p">,</span><span class="w"> </span><span class="nt">"yaw"</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span><span class="w"> </span><span class="nt">"duration"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.6</span><span class="p">,</span><span class="w"> </span><span class="nt">"method"</span><span class="p">:</span><span class="w"> </span><span class="s2">"minjerk"</span><span class="p">}</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"antennas"</span><span class="p">,</span><span class="w"> </span><span class="nt">"left"</span><span class="p">:</span><span class="w"> </span><span class="mi">45</span><span class="p">,</span><span class="w"> </span><span class="nt">"right"</span><span class="p">:</span><span class="w"> </span><span class="mi">-45</span><span class="p">,</span><span class="w"> </span><span class="nt">"duration"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="p">}</span>
+</code></pre></div>
+
+<h2 id="camera-and-microphone">Camera and microphone</h2>
+<p>Reachy's onboard camera and microphone array are exposed as commands. The captured
+bytes come back in the command result (and, optionally, on a one-shot MQTT topic or
+saved to a file) — they are never written into the retained <code>custom/reachy/state</code>
+heartbeat.</p>
+<p>Capture a still frame (returns <code>image_b64</code>, plus <code>width</code>/<code>height</code>):</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"camera"</span><span class="p">}</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"camera"</span><span class="p">,</span><span class="w"> </span><span class="nt">"format"</span><span class="p">:</span><span class="w"> </span><span class="s2">"png"</span><span class="p">,</span><span class="w"> </span><span class="nt">"path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/tmp/shot.png"</span><span class="p">,</span><span class="w"> </span><span class="nt">"publish"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
+</code></pre></div>
+
+<p>Record a short mic clip (returns <code>audio_b64</code> WAV, <code>samplerate</code>, <code>channels</code>,
+<code>duration_s</code>, and a best-effort <code>doa_deg</code>):</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"listen"</span><span class="p">,</span><span class="w"> </span><span class="nt">"duration"</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">}</span>
+</code></pre></div>
+
+<p>Direction of arrival only, without recording:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"doa"</span><span class="p">}</span>
+</code></pre></div>
+
+<p>These commands require a video/audio-capable media backend and that the daemon holds
+the camera and microphone (no Hugging Face app running on the robot).</p>
+<blockquote>
+<p>camera does not save the frame anywhere by default — the image comes back as
+base64 in the command result. Pass path to write it to disk or publish to
+emit it on custom/reachy/camera.</p>
+</blockquote>
+<h2 id="see-and-describe">See and describe</h2>
+<p><code>describe</code> captures a frame, sends it to the vision-capable LLM, and <strong>speaks the
+real description</strong> — unlike <code>camera</code> + <code>say</code>, which would only capture a frame and
+then make up a line. Plain English "what do you see?", "what's in front of you?",
+"describe the scene", and "look around" all route here. "Behind you" and "look
+behind you" use the dedicated <code>look_behind</code> path: Reachy turns to a mechanically safe
+155-degree rear view, captures without recentering, and stays there. Say "face me" or
+"turn back" to return forward.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"describe"</span><span class="p">}</span>
+</code></pre></div>
+
+<p>Ask a specific question about the view, or get the text without speaking it:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"describe"</span><span class="p">,</span><span class="w"> </span><span class="nt">"question"</span><span class="p">:</span><span class="w"> </span><span class="s2">"how many people are here?"</span><span class="p">}</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"describe"</span><span class="p">,</span><span class="w"> </span><span class="nt">"say"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">}</span>
+</code></pre></div>
+
+<p>This needs the same video-capable media backend as <code>camera</code>, plus a configured LLM
+provider (the model must support images).</p>
+  </main>
+</div>
+
+<footer>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+</footer>
+</body>
+</html>

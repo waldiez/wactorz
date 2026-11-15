@@ -1,92 +1,95 @@
 # How to run Wactorz on Windows
 
-Scripts for setting up and running Wactorz on Windows. Handles cloning or updating the repo, checking the API key, starting the MQTT broker, and launching the application.
+`scripts\start.bat` and `scripts\start.ps1` start Wactorz from a checkout of the
+repository: they check Python, help set up `.env`, start the MQTT broker with
+Docker Compose, install Wactorz into the checkout's own virtual environment, and
+launch it.
 
 ---
 
-## Before anything — install these three things (once, ever)
+## Before anything: install these (once)
 
-| What | Where |
+| What | How |
 |---|---|
-| **Python** | https://www.python.org/downloads/ — on the first screen check **"Add Python to PATH"** |
-| **Git** | https://git-scm.com/download/win |
-| **Docker Desktop** | https://www.docker.com/products/docker-desktop/ — after install, open it and wait for the whale icon in the taskbar to stop moving |
+| **Python 3.11 or later** | `winget install Python.Python.3.13` |
+| **Git** | `winget install Git.Git` |
+| **Docker Desktop** | `winget install Docker.DockerDesktop`, then open it and wait until the engine is running |
 
 ---
 
-## The easy way — download and run the script
+## Get the code and start
 
-Open **Windows Terminal** or the black window (`cmd`).
-
-### Option A — you already have the repo
-
-If you cloned Wactorz already, just go into that folder and run:
-
-```
-powershell -ExecutionPolicy Bypass -File scripts\start.ps1
+```powershell
+git clone https://github.com/waldiez/wactorz
+cd wactorz
+scripts\start.bat
 ```
 
-Or double-click `scripts\start.bat`.
+Or double-click `scripts\start.bat` in Explorer. `start.bat` only runs the
+`start.ps1` next to it, so keep the two together in the checkout.
+
+The launcher:
+
+- uses the checkout it is in, as it is (pass `-Update` to `git pull --ff-only` first)
+- finds Python 3.11 or later, or reuses the checkout's `.venv`
+- creates `.env` from `.env.template` if there is none, and leaves an existing one as it is
+- asks for `MQTT_PASSWORD` if it is empty: press Enter to generate one, or `E` to set your own
+- opens `.env` in Notepad if your model provider needs an API key and none is set
+- starts the authenticated MQTT broker (`docker compose up -d --wait mosquitto`)
+- installs Wactorz into `.venv` (again only when `pyproject.toml` changes)
+- launches Wactorz and prints the dashboard address, `http://localhost:8888` by default
 
 ---
 
-### Option B — you don't have anything yet
+## What the launcher needs from you (first time only)
 
-Paste this into the terminal and press Enter. It downloads and runs the script in one shot:
-
-```
-powershell -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/waldiez/wactorz/main/scripts/start.ps1' -OutFile '%TEMP%\wactorz-start.ps1'; & '%TEMP%\wactorz-start.ps1'"
-```
-
----
-
-The script will automatically:
-
-- Detect if you are already inside an wactorz folder — and use it
-- Otherwise look for `C:\waldiez\wactorz` — and use it
-- Otherwise clone the repo fresh into `C:\waldiez\wactorz`
-- Open your `.env` file in Notepad if your API key is missing
-- Start the mosquitto MQTT broker in Docker
-- Install the Python package
-- Launch Wactorz
-
-When it's running, open your browser at **http://localhost:8888**
+- **A broker password.** Press Enter when asked, and one is generated and saved in
+  `.env` without being shown.
+- **Your model provider's key**, unless the provider needs none. With the default
+  `LLM_PROVIDER=anthropic`, set `ANTHROPIC_API_KEY` or `LLM_API_KEY`. OpenAI takes
+  `OPENAI_API_KEY`, Gemini `GEMINI_API_KEY`, NIM `NIM_API_KEY`; any of them takes
+  `LLM_API_KEY`. `LLM_PROVIDER=ollama` runs a local model and needs no key.
 
 ---
 
-## What the script needs from you (first time only)
+## Options
 
-Your **Anthropic API key**. When the script opens Notepad, find this line:
-
+```powershell
+scripts\start.bat -Update      # git pull --ff-only, then start
+scripts\start.bat -NoPrompt    # never ask or open Notepad; stop with an error instead
 ```
-LLM_API_KEY=
-```
 
-Paste your key after the `=`, save, close Notepad, then press Enter in the terminal to continue.
-
-> Need screenshots? Ask us — we have step-by-step images for the API key setup.
+Set `WACTORZ_PYTHON` to a `python.exe` to choose the interpreter the environment is
+made with. Any other arguments are passed on to `wactorz`.
 
 ---
 
 ## Updating Wactorz
 
-Just run the script again. It does `git pull` and reinstalls automatically.
+```powershell
+scripts\start.bat -Update
+```
 
 ---
 
 ## Something is wrong?
 
-**"running scripts is disabled"** — use the `start.bat` file instead, or run:
-```
-powershell -ExecutionPolicy Bypass -File scripts\start.ps1
-```
+**"Wactorz needs Python 3.11 or later"**: install a newer Python
+(`winget install Python.Python.3.13`) and run the launcher again.
 
-**"pip is not recognized"** — Python is not installed, or "Add Python to PATH" was not checked. Reinstall Python and check that box.
+**".venv uses Python 3.10"**: the environment was made with an old Python. The
+launcher leaves it alone; delete `.venv` and run the launcher again.
 
-**"git is not recognized"** — install Git from https://git-scm.com/download/win
+**"Docker is installed but its engine is not running"**: open Docker Desktop and
+wait until the engine is running.
 
-**"docker is not recognized"** — Docker Desktop is not running. Open it from the Start menu and wait for the whale.
+**"MQTT_PASSWORD is empty"**: set it in `.env`, or run the launcher without
+`-NoPrompt` and let it generate one.
 
-**Agents can't talk to each other** — mosquitto is not running. Run `docker start mosquitto`.
+**"running scripts is disabled"**: use `start.bat`, which runs `start.ps1` with the
+execution policy set for that one run.
 
-**Window closes immediately after launch** — something crashed. Run `wactorz` from the terminal directly so you can read the error.
+**Agents can't talk to each other**: check the broker with `docker compose ps`.
+
+**The window closes immediately**: run `scripts\start.bat` from a terminal so you
+can read the error.

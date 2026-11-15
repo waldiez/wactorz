@@ -2,6 +2,7 @@
 """The license-line check: what it accepts, what it writes, what it never touches."""
 
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -234,6 +235,11 @@ def git(cwd: Path, *args: str) -> None:
 def test_source_files_are_the_tracked_and_the_new_but_never_the_ignored(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Run from a commit hook, git's own variables name the repository being
+    # committed to, and every git command below would act on it rather than on
+    # the one made here.
+    for name in [name for name in os.environ if name.startswith("GIT_")]:
+        monkeypatch.delenv(name)
     git(tmp_path, "init", "-q")
     (tmp_path / ".gitignore").write_text("ignored.py\n", encoding="utf-8")
     for name in ("tracked.py", "new.py", "ignored.py"):

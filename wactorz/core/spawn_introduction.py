@@ -5,7 +5,7 @@ import logging
 
 from .actor import Actor, ActorState
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def _short_line(value: object, limit: int) -> str:

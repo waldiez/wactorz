@@ -545,6 +545,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **On Windows, a socket closed under the event loop no longer stops Wactorz.** Spawning an agent whose packages are installed while Wactorz runs (the Reachy Mini agent's first spawn, for one) could leave a broker connection's socket closed while the loop still watched it, and Windows' `select()` then failed for every connection: the dashboard, the agents and the chat interfaces all stopped, and with Discord or Telegram running the process stayed up holding its ports. The loop now hands such a socket back to its owner, which reconnects. An agent whose `setup()` fails because a module is not installed is left failed instead of being restarted in a loop, since a restart in the same process fails the same way; its notice says to restart Wactorz when the packages were installed while it ran. A broker connection whose opener is cancelled while it connects is now closed once the connect completes, rather than left open.
+
 - **An agent stopped on the server itself stays stopped when the server restarts.** A stop from the dashboard, the
   API, `/agents stop` or the agent's commands topic lasted only until the next start, which brought the agent back
   running; only a stop on a node was remembered. Main now remembers it for the agents it spawned, and at its next

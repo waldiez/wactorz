@@ -378,6 +378,21 @@ class TestRepairingSetup:
         (notice,) = told
         assert "'definitely_not_installed_zzz' is not installed" in notice
         assert "/agents restart crashy" in notice
+        # Restarting in this process imports from the same environment: the
+        # Supervisor is told not to, so it does not restart the agent in a loop.
+        assert agent.restart_futile is not None
+        assert "definitely_not_installed_zzz" in agent.restart_futile
+
+    async def test_a_failure_a_restart_could_fix_leaves_the_restart_to_the_supervisor(
+        self, tmp_path: Path
+    ) -> None:
+        agent = make_agent(tmp_path, CRASHING_SETUP, None)  # no model: no repair
+        await agent.on_start()
+
+        await until(lambda: agent.state is ActorState.FAILED)
+        await shut_down(agent)
+
+        assert agent.restart_futile is None
 
     async def test_untrusted_missing_import_still_uses_validated_repair(
         self, tmp_path: Path

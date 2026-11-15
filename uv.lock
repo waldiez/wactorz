@@ -4821,12 +4821,11 @@ wheels = [
 
 [[package]]
 name = "reachy-mini"
-version = "1.14.0"
+version = "1.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "asgiref" },
-    { name = "certifi" },
     { name = "fastapi" },
     { name = "gstreamer-bundle", marker = "sys_platform != 'linux'" },
     { name = "huggingface-hub" },
@@ -4859,9 +4858,9 @@ dependencies = [
     { name = "websockets" },
     { name = "zeroconf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5b/6a/47fc7e63e17e12f8bd468d7d4544fb5c14e37fb6ad2dc01726f278aed1d6/reachy_mini-1.14.0.tar.gz", hash = "sha256:f0afe6e378009113651b82b99ac9a54d3cdd20666bb00ce38641aac27e51c2fc", size = 23971410, upload-time = "2026-11-05T13:08:23.943Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2a/14/533a24c473de3054f56351fc46decf7e3d82efd4d95e8a0db6e08fcfd4c9/reachy_mini-1.12.0.tar.gz", hash = "sha256:5fc149a8d45034e909629a46d56f473d8ff01503d4ca111b8ad5f7b42285c172", size = 24178044, upload-time = "2026-10-15T13:06:20.465Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/c3/d730d3cc35db95e189238056ca8fa18e4f208b7b8ca5eb1147cbbc9ae113/reachy_mini-1.14.0-py3-none-any.whl", hash = "sha256:7fc5fb12d209d59ee053590ac43f13ee712c9906793b00f733bef67f554f77b9", size = 24065982, upload-time = "2026-11-05T13:08:20.039Z" },
+    { url = "https://files.pythonhosted.org/packages/05/90/25732d1239b54f833f0d54a92dfb4443df9746791c6cfb2e0c7e4553f09f/reachy_mini-1.12.0-py3-none-any.whl", hash = "sha256:bcb27d09e1bddc67874bd281d7fa59f08cb4d4b5a3cc5858cd9ffd7de7660b34", size = 24264318, upload-time = "2026-10-15T13:06:16.98Z" },
 ]
 
 [[package]]
@@ -6058,7 +6057,7 @@ requires-dist = [
     { name = "python-telegram-bot", marker = "extra == 'all'", specifier = ">=21.0" },
     { name = "python-telegram-bot", marker = "extra == 'telegram'", specifier = ">=21.0" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "reachy-mini", marker = "extra == 'reachy'", specifier = "==1.14.0" },
+    { name = "reachy-mini", marker = "extra == 'reachy'", specifier = "==1.12.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.0" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'ml'", specifier = ">=2.5.0", index = "https://download.pytorch.org/whl/cpu" },
     { name = "torch", marker = "sys_platform != 'linux' and extra == 'ml'", specifier = ">=2.5.0" },

@@ -74,7 +74,7 @@ vision    = ["opencv-python>=4.8.0"]
 # so that spawn has nothing to install and needs no restart. Out of `all`: on
 # Linux the robot SDK compiles part of itself and needs system GStreamer.
 reachy    = [
-    "reachy-mini==1.14.0",
+    "reachy-mini==1.12.0",
     "numpy",
     "edge-tts",
     "pillow>=13",

@@ -14,6 +14,7 @@ early by ``wactorz/__init__.py`` — a module-level ``from ..config import CONFI
 here re-enters the half-initialised package and causes a circular import.
 """
 
+import asyncio
 import logging
 import os
 import random
@@ -212,6 +213,56 @@ def reconnect_wait(delay: float) -> float:
     return delay * random.uniform(1.0, 1.5)  # noqa: S311  # spreading retries, not a secret
 
 
+#: How long closing a connection whose opener was cancelled may take. A broker
+#: that never acknowledges the disconnect is not waited on for ever.
+ABANDONED_CONNECT_CLOSE_S = 10.0
+
+#: Closes of connections whose opener was cancelled, held so none is collected
+#: before it finishes.
+_closing_abandoned: set[asyncio.Task[None]] = set()
+
+
+async def _close_abandoned(client: aiomqtt.Client, attempt: "asyncio.Future[Any]") -> None:
+    """Disconnect ``client`` once its cancelled connect ``attempt`` has finished."""
+    await asyncio.wait({attempt})
+    if attempt.cancelled() or attempt.exception() is not None:
+        # The connect failed on its own; aiomqtt has nothing open to close.
+        return
+    closing = asyncio.ensure_future(client.__aexit__(None, None, None))
+    done, _ = await asyncio.wait({closing}, timeout=ABANDONED_CONNECT_CLOSE_S)
+    if closing not in done:
+        closing.cancel()
+        logger.debug("[MQTT] A connection opened after its caller left did not close in time")
+    elif closing.exception() is not None:
+        logger.debug(
+            "[MQTT] Closing a connection opened after its caller left failed",
+            exc_info=closing.exception(),
+        )
+
+
+class Client(aiomqtt.Client):
+    """``aiomqtt.Client`` that closes a connection its opener was cancelled while making.
+
+    aiomqtt connects on a worker thread. A task cancelled while that connect is
+    still running leaves ``async with`` before entering it, so ``__aexit__``
+    never runs, and the socket the worker thread goes on to open stays
+    registered with the event loop, with nothing left to close it. An agent
+    stopped just after it starts is such a task. Here the connect is left to
+    finish and then closed, without holding up the cancelled caller.
+    """
+
+    async def __aenter__(self) -> "Client":
+        attempt = asyncio.ensure_future(super().__aenter__())
+        try:
+            await asyncio.shield(attempt)
+        except asyncio.CancelledError:
+            closing = asyncio.ensure_future(_close_abandoned(self, attempt))
+            _closing_abandoned.add(closing)
+            closing.add_done_callback(_closing_abandoned.discard)
+            raise
+        return self
+
+
 def mqtt_client(hostname: str, port: int, **kwargs: Any) -> aiomqtt.Client:
     """Build an ``aiomqtt.Client`` with broker credentials and TLS injected from CONFIG.
 
@@ -226,7 +277,7 @@ def mqtt_client(hostname: str, port: int, **kwargs: Any) -> aiomqtt.Client:
         kwargs["password"] = CONFIG.mqtt_password
     if tls_enabled(CONFIG.mqtt_tls) and "tls_context" not in kwargs and "tls_params" not in kwargs:
         kwargs["tls_context"] = client_context(CONFIG.mqtt_tls_ca, CONFIG.mqtt_tls_check_hostname)
-    return aiomqtt.Client(hostname, port, **kwargs)
+    return Client(hostname, port, **kwargs)
 
 
 def broker_exposure_warning(host: str, username: str) -> str | None:

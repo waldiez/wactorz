@@ -537,6 +537,11 @@ class Actor(ABC):
         self.stable_id: bool = bool(actor_id or name)
         self.name: str = name or f"actor-{self.actor_id[:8]}"
         self.state = ActorState.IDLE
+        #: Why restarting this actor cannot help, once it has failed for a reason
+        #: a restart in the same process would meet again, such as a module that
+        #: is not installed. The Supervisor leaves such an actor failed rather than
+        #: restarting it in a loop; a restart someone asks for still happens.
+        self.restart_futile: str | None = None
         self.metrics: ActorMetrics = ActorMetrics()
 
         # Async mailbox (inbox)

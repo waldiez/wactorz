@@ -11,7 +11,26 @@ import os
 import sys
 from collections.abc import MutableMapping
 
+from ._selector import DeadSocketTolerantSelector
+
 WACTORZ_BOOTSTRAP = False
+
+
+def new_selector_loop() -> asyncio.AbstractEventLoop:
+    """A selector event loop whose ``select()`` outlives one dead socket.
+
+    See :mod:`wactorz._selector` for why Windows needs it.
+    """
+    return asyncio.SelectorEventLoop(DeadSocketTolerantSelector())
+
+
+if sys.platform == "win32":
+
+    class _SelectorLoopPolicy(asyncio.WindowsSelectorEventLoopPolicy):
+        """Windows' selector policy, with loops made by :func:`new_selector_loop`."""
+
+        def new_event_loop(self) -> asyncio.AbstractEventLoop:
+            return new_selector_loop()
 
 
 def avoid_loop_sendfile(environ: MutableMapping[str, str]) -> None:
@@ -38,7 +57,7 @@ def _bootstrap() -> None:
         WACTORZ_BOOTSTRAP = True
         # Windows: MUST run before any async library is imported or started.
         if sys.platform == "win32":
-            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+            asyncio.set_event_loop_policy(_SelectorLoopPolicy())
             avoid_loop_sendfile(os.environ)
             # Force UTF-8 on the real Windows console only. Skip when stdio has been
             # replaced (pytest capture, test runners, etc.) since re-wrapping a

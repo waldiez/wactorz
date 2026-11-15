@@ -204,7 +204,7 @@ class TestTheServerFactory:
     @pytest.fixture(autouse=True)
     def _real_factory(self, monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         recorder = _Recorder()
-        monkeypatch.setattr("aiomqtt.Client", recorder)
+        monkeypatch.setattr("wactorz.core.mqtt.Client", recorder)
         return recorder
 
     def _configure(self, monkeypatch: pytest.MonkeyPatch, **tls: str) -> None:

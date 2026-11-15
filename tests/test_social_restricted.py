@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Security tests for ``MainActor.process_user_input_restricted`` — the entry
 point social channels (Discord/Telegram) use.
 
@@ -10,7 +11,7 @@ spawn/delete executors are wired to explode if ever called.
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 
@@ -19,7 +20,7 @@ from wactorz.agents.main.delegation import DelegationManager
 from wactorz.agents.main.planning import BYPASS_MARKERS, starts_with_bypass
 
 
-def run(coro):
+def run(coro) -> Any:
     return asyncio.run(coro)
 
 
@@ -30,14 +31,14 @@ class _StubbedMain(MainActor):
 
 
 class _Registry:
-    def __init__(self, agents=()):
+    def __init__(self, agents=()) -> None:
         self._by = {n: SimpleNamespace(name=n) for n in agents}
 
-    def find_by_name(self, name):
+    def find_by_name(self, name) -> "SimpleNamespace | None":
         return self._by.get(name)
 
 
-def make_main(*, intent="OTHER", chat_response="hello", agents=()):
+def make_main(*, intent="OTHER", chat_response="hello", agents=()) -> "_StubbedMain":
     """A MainActor with only the surface process_user_input_restricted touches,
     stubbed. Spawn/delete executors raise if reached."""
     m = _StubbedMain.__new__(_StubbedMain)
@@ -52,45 +53,45 @@ def make_main(*, intent="OTHER", chat_response="hello", agents=()):
     m._prefix_with_live_context = lambda t: t  # pyright: ignore[reportAttributeAccessIssue]
     m.persist = lambda k, v: None  # pyright: ignore[reportAttributeAccessIssue]
 
-    async def _record(_t, _r, *, ts_user):
+    async def _record(_t, _r, *, ts_user) -> None:
         return None
 
     m._record_external_exchange = _record  # pyright: ignore[reportAttributeAccessIssue]
 
-    async def _classify(_t):
+    async def _classify(_t) -> str:
         m.calls["classified"] += 1
         return intent
 
     m._classify_intent = _classify  # pyright: ignore[reportAttributeAccessIssue]
 
-    async def _actuate(_t, allowed_domains=None):
+    async def _actuate(_t, allowed_domains=None) -> str:
         m.calls["actuate"] += 1
         m.calls["actuate_domains"] = allowed_domains
         return "actuated the device"
 
     m._handle_actuate_intent = _actuate  # pyright: ignore[reportAttributeAccessIssue]
 
-    async def _delegate_task(_name, _text, timeout=0):
+    async def _delegate_task(_name, _text, timeout=0) -> dict[str, str]:
         return {"result": "home-assistant says ok"}
 
     m.delegation.delegate_task = _delegate_task  # pyright: ignore[reportAttributeAccessIssue]
 
-    async def _chat(_t):
+    async def _chat(_t) -> str:
         m.calls["chat"] += 1
         return chat_response
 
     m.chat = _chat  # pyright: ignore[reportAttributeAccessIssue]
 
-    async def _run_delegation(name, _payload):
+    async def _run_delegation(name, _payload) -> str:
         m.calls["delegated"].append(name)
         return f"[{name} handled it]"
 
     m.delegation._run_delegation = _run_delegation  # pyright: ignore[reportAttributeAccessIssue]
 
-    async def _boom_spawn(_resp):
+    async def _boom_spawn(_resp) -> NoReturn:
         raise AssertionError("spawn executor reached on a restricted channel!")
 
-    async def _boom_delete(_resp):
+    async def _boom_delete(_resp) -> NoReturn:
         raise AssertionError("delete executor reached on a restricted channel!")
 
     m._process_spawn_commands = _boom_spawn  # pyright: ignore[reportAttributeAccessIssue]
@@ -101,7 +102,7 @@ def make_main(*, intent="OTHER", chat_response="hello", agents=()):
 # ── Pure helper ──────────────────────────────────────────────────────────────
 
 
-def test_neutralize_strips_spawn_and_delete():
+def test_neutralize_strips_spawn_and_delete() -> None:
     text = 'talk <spawn>{"name":"x","code":"..."}</spawn> more <delete>{"name":"y"}</delete> end'
     clean, had = MainActor._neutralize_action_blocks(text)
     assert had is True
@@ -109,7 +110,7 @@ def test_neutralize_strips_spawn_and_delete():
     assert "talk" in clean and "end" in clean
 
 
-def test_neutralize_leaves_plain_text():
+def test_neutralize_leaves_plain_text() -> None:
     clean, had = MainActor._neutralize_action_blocks("just a normal answer")
     assert had is False
     assert clean == "just a normal answer"
@@ -119,7 +120,7 @@ def test_neutralize_leaves_plain_text():
 
 
 @pytest.mark.parametrize("cmd", ["/delete weather-agent", "/deploy node1", "pipeline! do x"])
-def test_admin_commands_refused_without_reaching_llm(cmd):
+def test_admin_commands_refused_without_reaching_llm(cmd) -> None:
     m = make_main()
     out = run(m.process_user_input_restricted(cmd))
     assert "aren't available" in out
@@ -168,7 +169,7 @@ def test_the_planner_and_the_guard_agree_on_the_set() -> None:
     assert not starts_with_bypass("just talking")
 
 
-def test_pipeline_intent_refused():
+def test_pipeline_intent_refused() -> None:
     m = make_main(intent="PIPELINE")
     out = run(m.process_user_input_restricted("every morning email me the news"))
     assert "can't create automations" in out
@@ -178,7 +179,7 @@ def test_pipeline_intent_refused():
 # ── Spawn/delete emitted in a chat reply are neutralized, not executed ───────
 
 
-def test_spawn_block_in_reply_is_not_executed():
+def test_spawn_block_in_reply_is_not_executed() -> None:
     # The LLM's prose falsely confirms a spawn; the whole reply must be discarded
     # in favor of an honest refusal, and nothing spawned.
     m = make_main(
@@ -191,7 +192,7 @@ def test_spawn_block_in_reply_is_not_executed():
     assert "dashboard-only" in out
 
 
-def test_delete_block_in_reply_is_not_executed():
+def test_delete_block_in_reply_is_not_executed() -> None:
     m = make_main(chat_response='Done, deleted it. <delete>{"name":"weather-agent"}</delete>')
     out = run(m.process_user_input_restricted("delete the weather agent"))
     assert "<delete>" not in out
@@ -203,14 +204,14 @@ def test_delete_block_in_reply_is_not_executed():
 
 
 @pytest.mark.parametrize("bad", ["catalog", "installer", "planner"])
-def test_delegation_to_create_agents_denied(bad):
+def test_delegation_to_create_agents_denied(bad) -> None:
     m = make_main(chat_response=f'<delegate>{{"agent":"{bad}","task":"spawn a bot"}}</delegate>')
     out = run(m.process_user_input_restricted("spawn a bot via the catalog"))
     assert f"{bad} isn't available" in out
     assert m.calls["delegated"] == []  # never dispatched
 
 
-def test_delegation_to_safe_running_agent_works():
+def test_delegation_to_safe_running_agent_works() -> None:
     m = make_main(
         chat_response='<delegate>{"agent":"weather-agent","task":"weather in Athens"}</delegate>',
         agents=("weather-agent",),
@@ -223,7 +224,7 @@ def test_delegation_to_safe_running_agent_works():
 # ── Allowed paths: actuation, HA, plain chat ─────────────────────────────────
 
 
-def test_actuate_intent_allowed():
+def test_actuate_intent_allowed() -> None:
     from wactorz.agents.one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
 
     m = make_main(intent="ACTUATE")
@@ -234,13 +235,13 @@ def test_actuate_intent_allowed():
     assert m.calls["actuate_domains"] == SOCIAL_ACTUATE_DOMAINS
 
 
-def test_ha_intent_allowed():
+def test_ha_intent_allowed() -> None:
     m = make_main(intent="HA")
     out = run(m.process_user_input_restricted("is the garage door closed?"))
     assert "home-assistant says ok" in out
 
 
-def test_plain_conversation_allowed():
+def test_plain_conversation_allowed() -> None:
     m = make_main(chat_response="I'm doing great, thanks for asking!")
     out = run(m.process_user_input_restricted("hey how are you"))
     assert out == "I'm doing great, thanks for asking!"

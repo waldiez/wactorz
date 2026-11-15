@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 Tests for cost persistence, cost restoration on startup, and chat history API.
 
@@ -7,11 +8,14 @@ Covers three recent features:
   - GET /api/actors/{id}/history endpoint filters and returns conversation history
 """
 
+import asyncio
 import json
-import sqlite3
 import tempfile
 import types
 import unittest
+from datetime import datetime
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # ── Minimal stubs so heavy optional deps don't need to be installed ──────────
@@ -20,7 +24,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # real aiohttp Response objects, read via _payload() below.
 from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissingImports]
 from wactorz.core import agent_reset
-from wactorz.web import api_actors, cost, events, runtime
+from wactorz.core.persistence.db import WactorzDB
+from wactorz.web import api_actors, cost, db_writer, events, runtime
 
 ensure_importable("openai")
 
@@ -31,7 +36,7 @@ ensure_importable("openai")
 
 
 class FinalCostRoutingTest(unittest.TestCase):
-    def test_final_cost_key_is_in_sqlite_keys(self):
+    def test_final_cost_key_is_in_sqlite_keys(self) -> None:
         from wactorz.core.persistence import SQLITE_KEYS
 
         self.assertIn(
@@ -53,13 +58,13 @@ class LLMAgentCostRestoreTest(unittest.IsolatedAsyncioTestCase):
     that heartbeats carry accurate lifetime totals after a restart.
     """
 
-    def _make_agent(self, saved_cost: dict):
+    def _make_agent(self, saved_cost: dict[str, Any]) -> Any:
         from wactorz.agents.llm_agent import LLMAgent
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             agent = LLMAgent(name="test-llm", persistence_dir=tmp)
 
-        def _recall(key, default=None):
+        def _recall(key, default=None) -> dict[Any, Any] | list[Any] | Any | str | None:
             if key == "_final_cost":
                 return saved_cost
             if key == "conversation_history":
@@ -73,7 +78,7 @@ class LLMAgentCostRestoreTest(unittest.IsolatedAsyncioTestCase):
         agent.publish_manifest = AsyncMock()
         return agent
 
-    async def test_cost_seeded_from_persisted_final_cost(self):
+    async def test_cost_seeded_from_persisted_final_cost(self) -> None:
         saved = {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.0042}
         agent = self._make_agent(saved)
 
@@ -83,7 +88,7 @@ class LLMAgentCostRestoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.total_output_tokens, 50)
         self.assertAlmostEqual(agent.total_cost_usd, 0.0042, places=6)
 
-    async def test_zero_cost_when_no_saved_cost(self):
+    async def test_zero_cost_when_no_saved_cost(self) -> None:
         agent = self._make_agent({})
 
         await agent.on_start()
@@ -91,7 +96,7 @@ class LLMAgentCostRestoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.total_input_tokens, 0)
         self.assertEqual(agent.total_cost_usd, 0.0)
 
-    async def test_a_second_on_start_does_not_double_the_totals(self):
+    async def test_a_second_on_start_does_not_double_the_totals(self) -> None:
         """The start command restarts the same instance; on_start runs again."""
         saved = {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.0042}
         agent = self._make_agent(saved)
@@ -106,7 +111,7 @@ class LLMAgentCostRestoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.total_output_tokens, 50)
         self.assertAlmostEqual(agent.total_cost_usd, 0.0042, places=6)
 
-    async def test_tokens_do_not_double_when_the_model_is_free(self):
+    async def test_tokens_do_not_double_when_the_model_is_free(self) -> None:
         """A local model leaves cost at zero while tokens still accumulate."""
         saved = {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.0}
         agent = self._make_agent(saved)
@@ -119,7 +124,7 @@ class LLMAgentCostRestoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.total_input_tokens, 100)
         self.assertEqual(agent.total_output_tokens, 50)
 
-    async def test_cost_accumulates_on_top_of_restored_baseline(self):
+    async def test_cost_accumulates_on_top_of_restored_baseline(self) -> None:
         """After restoring from persistence, new exchanges add to the running total."""
         saved = {"input_tokens": 200, "output_tokens": 80, "cost_usd": 0.01}
         agent = self._make_agent(saved)
@@ -139,7 +144,7 @@ class LLMAgentCostRestoreTest(unittest.IsolatedAsyncioTestCase):
 
 
 class PersistCostTest(unittest.TestCase):
-    def _make_agent(self):
+    def _make_agent(self) -> Any:
         from wactorz.agents.llm_agent import LLMAgent
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -151,7 +156,7 @@ class PersistCostTest(unittest.TestCase):
         agent.total_cost_usd = 0.0315
         return agent
 
-    def test_persist_cost_writes_all_fields(self):
+    def test_persist_cost_writes_all_fields(self) -> None:
         agent = self._make_agent()
         agent._persist_cost()
 
@@ -163,7 +168,7 @@ class PersistCostTest(unittest.TestCase):
         self.assertAlmostEqual(payload["cost_usd"], 0.0315, places=6)
         self.assertEqual(payload["name"], "cost-agent")
 
-    def test_persist_cost_rounds_to_six_decimals(self):
+    def test_persist_cost_rounds_to_six_decimals(self) -> None:
         agent = self._make_agent()
         agent.total_cost_usd = 1 / 3
         agent._persist_cost()
@@ -178,17 +183,12 @@ class PersistCostTest(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _make_kv_db(entries: list[dict]) -> object:
-    """Return a minimal db stub backed by in-memory SQLite with kv_store rows."""
-    conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE kv_store (agent TEXT, key TEXT, value TEXT)")
+def _make_kv_db(entries: list[dict[str, Any]]) -> WactorzDB:
+    """A real database in memory, holding these kv_store rows."""
+    db = WactorzDB(":memory:")
     for e in entries:
-        conn.execute(
-            "INSERT INTO kv_store (agent, key, value) VALUES (?, ?, ?)",
-            (e["agent"], e["key"], json.dumps(e["value"])),
-        )
-    conn.commit()
-    return types.SimpleNamespace(conn=conn)
+        db.kv_set(e["agent"], e["key"], e["value"])
+    return db
 
 
 def _close_installed_db(original: object) -> None:
@@ -205,36 +205,39 @@ def _close_installed_db(original: object) -> None:
     installed = runtime.db
     if installed is None or installed is original:
         return
+    if isinstance(installed, WactorzDB):
+        installed.close()
+        return
     conn = getattr(installed, "conn", None)
     if conn is not None:
         conn.close()
 
 
 class HistoricalCostTest(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         # Reset module state between tests
         self._orig_db = runtime.db
         self._orig_state = dict(runtime.state["agents"])
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         _close_installed_db(self._orig_db)
         runtime.db = self._orig_db
         runtime.state["agents"] = self._orig_state
 
-    def _live_names(self):
+    def _live_names(self) -> set[Any]:
         """Derive live_names from state["agents"] as snapshot() does when no registry."""
         return {a.get("name", "") for a in runtime.state["agents"].values()}
 
-    def test_returns_zero_when_db_is_none(self):
+    def test_returns_zero_when_db_is_none(self) -> None:
         runtime.db = None
         self.assertEqual(cost.historical_cost_usd(self._live_names()), 0.0)
 
-    def test_returns_zero_when_no_final_cost_rows(self):
+    def test_returns_zero_when_no_final_cost_rows(self) -> None:
         runtime.db = _make_kv_db([])
         runtime.state["agents"] = {}
         self.assertEqual(cost.historical_cost_usd(self._live_names()), 0.0)
 
-    def test_sums_costs_for_deleted_agents(self):
+    def test_sums_costs_for_deleted_agents(self) -> None:
         runtime.db = _make_kv_db(
             [
                 {
@@ -251,10 +254,11 @@ class HistoricalCostTest(unittest.TestCase):
         )
         runtime.state["agents"] = {}  # no live agents
 
+        cost.use_stored_totals(cost.read_stored_totals())
         total = cost.historical_cost_usd(self._live_names())
         self.assertAlmostEqual(total, 0.08, places=6)
 
-    def test_excludes_live_agent_costs(self):
+    def test_excludes_live_agent_costs(self) -> None:
         """Live agents report cost via MQTT heartbeats — don't double-count."""
         runtime.db = _make_kv_db(
             [
@@ -274,23 +278,24 @@ class HistoricalCostTest(unittest.TestCase):
             "live-agent": {"name": "live-agent", "cost_usd": 0.10},
         }
 
+        cost.use_stored_totals(cost.read_stored_totals())
         total = cost.historical_cost_usd(self._live_names())
         self.assertAlmostEqual(total, 0.04, places=6)
 
-    def test_ignores_malformed_rows(self):
-        conn = sqlite3.connect(":memory:")
-        conn.execute("CREATE TABLE kv_store (agent TEXT, key TEXT, value TEXT)")
-        conn.execute(
-            "INSERT INTO kv_store VALUES (?, ?, ?)", ("broken", "_final_cost", "not-valid-json{{{")
+    def test_ignores_malformed_rows(self) -> None:
+        db = _make_kv_db(
+            [{"agent": "ok", "key": "_final_cost", "value": {"name": "ok", "cost_usd": 0.02}}]
         )
-        conn.execute(
-            "INSERT INTO kv_store VALUES (?, ?, ?)",
-            ("ok", "_final_cost", json.dumps({"name": "ok", "cost_usd": 0.02})),
-        )
-        conn.commit()
-        runtime.db = types.SimpleNamespace(conn=conn)
+        # Written past kv_set, which would refuse it: a row an older version left.
+        with db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO kv_store (agent, key, value, updated) VALUES (?, ?, ?, 0)",
+                ("broken", "_final_cost", "not-valid-json{{{"),
+            )
+        runtime.db = db
         runtime.state["agents"] = {}
 
+        cost.use_stored_totals(cost.read_stored_totals())
         total = cost.historical_cost_usd(self._live_names())
         self.assertAlmostEqual(total, 0.02, places=6)
 
@@ -303,20 +308,20 @@ class HistoricalCostTest(unittest.TestCase):
 class _RoundTripKV:
     """Minimal kv_get/kv_set db stub with JSON round-trip, like WactorzDB."""
 
-    def __init__(self, store=None):
+    def __init__(self, store=None) -> None:
         self._kv = dict(store or {})
 
-    def kv_get(self, agent, key, default=None):
+    def kv_get(self, agent, key, default=None) -> Any | None:
         return self._kv.get((agent, key), default)
 
-    def kv_set(self, agent, key, value):
+    def kv_set(self, agent, key, value) -> None:
         # Mimic the real store's JSON serialization so callers can't mutate
         # what's "persisted" by holding a reference.
         self._kv[(agent, key)] = json.loads(json.dumps(value))
 
 
 class LifetimeCostLedgerTest(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self._orig_db = runtime.db
         self._orig_ledger = dict(cost.lifetime_cost)
         self._orig_loaded = cost.lifetime_loaded
@@ -324,44 +329,46 @@ class LifetimeCostLedgerTest(unittest.TestCase):
         cost.lifetime_loaded = False
         runtime.db = _RoundTripKV()
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         _close_installed_db(self._orig_db)
         runtime.db = self._orig_db
         cost.lifetime_cost.clear()
         cost.lifetime_cost.update(self._orig_ledger)
         cost.lifetime_loaded = self._orig_loaded
 
-    def test_records_and_totals_cost(self):
+    def test_records_and_totals_cost(self) -> None:
         cost.record_lifetime_cost("a1", 0.05)
         cost.record_lifetime_cost("a2", 0.03)
         self.assertAlmostEqual(cost.lifetime_cost_total(), 0.08, places=6)
 
-    def test_is_monotonic_high_water(self):
+    def test_is_monotonic_high_water(self) -> None:
         cost.record_lifetime_cost("a1", 0.05)
         cost.record_lifetime_cost("a1", 0.02)  # lower report — ignored
         self.assertAlmostEqual(cost.lifetime_cost_total(), 0.05, places=6)
         cost.record_lifetime_cost("a1", 0.09)  # higher — raises
         self.assertAlmostEqual(cost.lifetime_cost_total(), 0.09, places=6)
 
-    def test_survives_agent_disappearing(self):
+    def test_survives_agent_disappearing(self) -> None:
         """The core bug: a deleted / hard-killed agent must not drop the total."""
         cost.record_lifetime_cost("planner-1123da", 0.0365)
         # Agent vanishes (no more reports, never written to _final_cost).
         self.assertAlmostEqual(cost.lifetime_cost_total(), 0.0365, places=6)
 
-    def test_ignores_non_positive_and_invalid(self):
+    def test_ignores_non_positive_and_invalid(self) -> None:
         for bad in (0, -1.0, None, "x"):
             cost.record_lifetime_cost("a1", bad)
         self.assertEqual(cost.lifetime_cost_total(), 0.0)
 
-    def test_persists_to_db_and_reloads(self):
+    def test_persists_to_db_and_reloads(self) -> None:
         cost.record_lifetime_cost("a1", 0.07)
+        asyncio.run(db_writer.writer.settled())
         # Simulate a monitor restart: drop in-memory state, keep the db.
         cost.lifetime_cost.clear()
         cost.lifetime_loaded = False
+        asyncio.run(cost.load_lifetime())
         self.assertAlmostEqual(cost.lifetime_cost_total(), 0.07, places=6)
 
-    def test_no_db_is_safe(self):
+    def test_no_db_is_safe(self) -> None:
         runtime.db = None
         cost.lifetime_loaded = False
         cost.record_lifetime_cost("a1", 0.05)  # must not raise
@@ -374,7 +381,7 @@ class ResetActorCostTest(unittest.TestCase):
     delta = total_cost_usd - baseline goes negative (the "limit count stopped
     counting after a wipe" bug)."""
 
-    def test_zeroes_counters_and_baselines(self):
+    def test_zeroes_counters_and_baselines(self) -> None:
         class _Actor:
             total_cost_usd = 0.42
             total_input_tokens = 1000
@@ -390,7 +397,7 @@ class ResetActorCostTest(unittest.TestCase):
         self.assertEqual(a._last_persisted_usd, 0.0)
         self.assertEqual(a._last_period_cost_usd, 0.0)
 
-    def test_next_delta_is_positive_after_reset(self):
+    def test_next_delta_is_positive_after_reset(self) -> None:
         """The first new spend after a wipe must yield a positive accrual delta
         (was negative because the baseline kept the pre-wipe total)."""
 
@@ -405,7 +412,7 @@ class ResetActorCostTest(unittest.TestCase):
         a.total_cost_usd += 0.01  # one new LLM call after the wipe
         self.assertGreater(a.total_cost_usd - a._last_persisted_usd, 0)
 
-    def test_actor_without_cost_attrs_is_noop(self):
+    def test_actor_without_cost_attrs_is_noop(self) -> None:
         agent_reset.reset_actor_cost(object())  # must not raise
 
 
@@ -414,7 +421,7 @@ class SnapshotTotalsTest(unittest.TestCase):
     including remote / spawned agents that live in state but not in this
     process's registry."""
 
-    def setUp(self):
+    def setUp(self) -> None:
         self._orig_db = runtime.db
         self._orig_reg = runtime.registry
         self._orig_agents = dict(runtime.state["agents"])
@@ -425,7 +432,7 @@ class SnapshotTotalsTest(unittest.TestCase):
         cost.lifetime_loaded = True  # skip db hydrate
         runtime.state["agents"] = {}
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         _close_installed_db(self._orig_db)
         runtime.db = self._orig_db
         runtime.registry = self._orig_reg
@@ -434,16 +441,17 @@ class SnapshotTotalsTest(unittest.TestCase):
         cost.lifetime_cost.update(self._orig_ledger)
         cost.lifetime_loaded = self._orig_loaded
 
-    def test_sums_all_visible_agents_when_no_registry(self):
+    def test_sums_all_visible_agents_when_no_registry(self) -> None:
         runtime.registry = None
         runtime.state["agents"] = {
             "main": {"name": "main", "cost_usd": 0.0381},
             "reachy-mini": {"name": "reachy-mini", "cost_usd": 0.0213},
         }
+        cost.use_stored_totals(cost.read_stored_totals())
         snap = events.snapshot()
         self.assertAlmostEqual(snap["total_cost_usd"], 0.0594, places=6)
 
-    def test_includes_state_only_agent_missing_from_registry(self):
+    def test_includes_state_only_agent_missing_from_registry(self) -> None:
         """A spawned/remote agent shows on a card (state) but isn't in the local
         registry — it must still count toward the headline total."""
         local_main = types.SimpleNamespace(
@@ -457,12 +465,13 @@ class SnapshotTotalsTest(unittest.TestCase):
             "main": {"name": "main", "cost_usd": 0.0381, "messages_processed": 1},
             "reachy-mini": {"name": "reachy-mini", "cost_usd": 0.0213, "messages_processed": 3},
         }
+        cost.use_stored_totals(cost.read_stored_totals())
         snap = events.snapshot()
         # Old behaviour summed only registry actors -> 0.0381. Must be the full sum.
         self.assertAlmostEqual(snap["total_cost_usd"], 0.0594, places=6)
         self.assertEqual(snap["total_messages"], 4)
 
-    def test_includes_cost_living_on_actor_object_only(self):
+    def test_includes_cost_living_on_actor_object_only(self) -> None:
         """An agent's card shows cost from its live actor object (total_cost_usd)
         but state["cost_usd"] was never set by an MQTT metrics frame. The header
         must still count it."""
@@ -483,11 +492,12 @@ class SnapshotTotalsTest(unittest.TestCase):
             "main-id": {"name": "main", "cost_usd": 0.038124, "messages_processed": 1},
             "reachy-id": {"name": "reachy-mini", "messages_processed": 3},  # no cost_usd
         }
+        cost.use_stored_totals(cost.read_stored_totals())
         snap = events.snapshot()
         self.assertAlmostEqual(snap["total_cost_usd"], 0.059409, places=6)
         self.assertEqual(snap["total_messages"], 4)
 
-    def test_includes_cost_from_sqlite_final_cost(self):
+    def test_includes_cost_from_sqlite_final_cost(self) -> None:
         """Cost lives only in the persisted _final_cost row (no MQTT state, zero on
         the object) — still counts, matching the card's _actor_cost fallback."""
         runtime.db = _make_kv_db(
@@ -518,12 +528,13 @@ class SnapshotTotalsTest(unittest.TestCase):
         )
         runtime.registry = types.SimpleNamespace(all_actors=lambda: [main_a, reachy_a])
         runtime.state["agents"] = {"m": {"name": "main"}, "r": {"name": "reachy-mini"}}
+        cost.use_stored_totals(cost.read_stored_totals())
         snap = events.snapshot()
         # Must NOT double-count: _final_cost is used for the live sum, and
         # historical (also _final_cost) must skip names already counted.
         self.assertAlmostEqual(snap["total_cost_usd"], 0.059409, places=6)
 
-    def test_folds_in_live_actor_not_yet_in_state(self):
+    def test_folds_in_live_actor_not_yet_in_state(self) -> None:
         """Fresh-boot window: an actor exists but hasn't published a heartbeat
         into state yet — its cost still counts, with no double-count for those
         already in state."""
@@ -541,6 +552,7 @@ class SnapshotTotalsTest(unittest.TestCase):
         )
         runtime.registry = types.SimpleNamespace(all_actors=lambda: [in_state, not_yet])
         runtime.state["agents"] = {"main": {"name": "main", "cost_usd": 0.05}}
+        cost.use_stored_totals(cost.read_stored_totals())
         snap = events.snapshot()
         self.assertAlmostEqual(snap["total_cost_usd"], 0.07, places=6)
 
@@ -550,22 +562,22 @@ class SnapshotTotalsTest(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _payload(resp):
+def _payload(resp) -> Any:
     """Decode the JSON body of a real aiohttp ``web.json_response``."""
     return json.loads(resp.body)
 
 
 class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self._orig_registry = runtime.registry
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         runtime.registry = self._orig_registry
 
-    def _make_request(self, actor_id: str):
+    def _make_request(self, actor_id: str) -> "SimpleNamespace":
         return types.SimpleNamespace(match_info={"actor_id": actor_id})
 
-    async def test_returns_empty_list_when_registry_none(self):
+    async def test_returns_empty_list_when_registry_none(self) -> None:
         runtime.registry = None
 
         resp = await api_actors.actor_history_handler(self._make_request("any"))  # pyright: ignore[reportArgumentType]
@@ -573,7 +585,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_payload(resp), [])
         self.assertEqual(resp.status, 200)
 
-    async def test_returns_empty_list_when_actor_not_found(self):
+    async def test_returns_empty_list_when_actor_not_found(self) -> None:
         registry = MagicMock()
         registry.get.return_value = None
         runtime.registry = registry
@@ -582,7 +594,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(_payload(resp), [])
 
-    async def test_returns_only_user_and_assistant_turns(self):
+    async def test_returns_only_user_and_assistant_turns(self) -> None:
         history = [
             {"role": "user", "content": "hello"},
             {"role": "assistant", "content": "hi there"},
@@ -602,7 +614,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload[0]["role"], "user")
         self.assertEqual(payload[1]["role"], "assistant")
 
-    async def test_returns_empty_list_when_history_empty(self):
+    async def test_returns_empty_list_when_history_empty(self) -> None:
         actor = MagicMock()
         actor.recall.return_value = []
         registry = MagicMock()
@@ -613,7 +625,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(_payload(resp), [])
 
-    async def test_handles_actor_without_recall(self):
+    async def test_handles_actor_without_recall(self) -> None:
         """Actors without a recall() method (non-LLM) return empty history."""
         actor = object()  # plain object, no recall method
         registry = MagicMock()
@@ -633,13 +645,13 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
 class _SerializedKV:
     """Minimal kv_get/kv_set store standing in for WactorzDB."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.store = {}
 
-    def kv_set(self, agent, key, value):
+    def kv_set(self, agent, key, value) -> None:
         self.store[(agent, key)] = json.dumps(value, default=str)
 
-    def kv_get(self, agent, key, default=None):
+    def kv_get(self, agent, key, default=None) -> Any | None:
         raw = self.store.get((agent, key))
         if raw is None:
             return default
@@ -649,19 +661,18 @@ class _SerializedKV:
             return raw
 
 
-def _fixed_datetime(y, mo, d):
-    from datetime import datetime as _dt
+def _fixed_datetime(y, mo, d) -> Any:
 
-    class _DT(_dt):
+    class _DT(datetime):
         @classmethod
-        def now(cls, tz=None):
-            return _dt(y, mo, d, 12, 0, 0, tzinfo=tz)
+        def now(cls, tz=None) -> "datetime":
+            return datetime(y, mo, d, 12, 0, 0, tzinfo=tz)
 
     return _DT
 
 
 class GlobalCostAccumulationTest(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         # The cost functions live in `llm.cost` and resolve `get_db` and
         # `datetime` there; stubbing them on `llm_agent` would bind a different
         # name and silently miss.
@@ -672,17 +683,17 @@ class GlobalCostAccumulationTest(unittest.TestCase):
         self._p_db = patch.object(L, "get_db", lambda: self.db)
         self._p_db.start()
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         self._p_db.stop()
 
-    def test_accumulates_without_a_limit(self):
+    def test_accumulates_without_a_limit(self) -> None:
         """Regression: period spend must accrue even when no cap is configured."""
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
             self.L.accumulate_global_cost(0.50)
             info = self.L.get_global_cost_info()
         self.assertAlmostEqual(info["spend_usd"], 0.50, places=6)
 
-    def test_cap_set_mid_period_sees_prior_spend(self):
+    def test_cap_set_mid_period_sees_prior_spend(self) -> None:
         """Spend before a cap exists is still counted, so the cap can't be silently overshot."""
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 7, 1)):
             self.L.accumulate_global_cost(20.0)  # no cap yet
@@ -691,7 +702,7 @@ class GlobalCostAccumulationTest(unittest.TestCase):
         self.assertAlmostEqual(info["spend_usd"], 20.0, places=6)
         self.assertTrue(info["limit_reached"])
 
-    def test_day_rollover_starts_fresh(self):
+    def test_day_rollover_starts_fresh(self) -> None:
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
             self.L.set_cost_limit(10.0, "daily")
             self.L.accumulate_global_cost(3.0)
@@ -702,14 +713,14 @@ class GlobalCostAccumulationTest(unittest.TestCase):
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
             self.assertAlmostEqual(self.L.get_global_cost_info()["spend_usd"], 3.0, places=6)
 
-    def test_reset_zeroes_current_period(self):
+    def test_reset_zeroes_current_period(self) -> None:
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
             self.L.set_cost_limit(10.0, "daily")
             self.L.accumulate_global_cost(3.0)
             self.L.reset_global_cost()
             self.assertAlmostEqual(self.L.get_global_cost_info()["spend_usd"], 0.0, places=6)
 
-    def test_alltime_counter_survives_period_rollover(self):
+    def test_alltime_counter_survives_period_rollover(self) -> None:
         """All-time spend keeps accruing across months while the monthly bucket resets."""
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
             self.L.accumulate_global_cost(2.0)
@@ -720,20 +731,20 @@ class GlobalCostAccumulationTest(unittest.TestCase):
             self.assertAlmostEqual(self.L.get_global_cost_info()["spend_usd"], 1.5, places=6)
             self.assertAlmostEqual(self.L.get_global_alltime_cost(), 3.5, places=6)
 
-    def test_alltime_counter_never_below_period_spend(self):
+    def test_alltime_counter_never_below_period_spend(self) -> None:
         """Invariant the dashboard relies on: all-time floor >= this-period spend."""
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
             self.L.accumulate_global_cost(0.2157)
             info = self.L.get_global_cost_info()
         self.assertGreaterEqual(self.L.get_global_alltime_cost(), info["spend_usd"])
 
-    def test_reset_zeroes_alltime_too(self):
+    def test_reset_zeroes_alltime_too(self) -> None:
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
             self.L.accumulate_global_cost(3.0)
             self.L.reset_global_cost()
             self.assertAlmostEqual(self.L.get_global_alltime_cost(), 0.0, places=6)
 
-    def test_weekly_key_is_iso_week(self):
+    def test_weekly_key_is_iso_week(self) -> None:
         # 2026-01-01 is a Thursday → ISO week 2026-W01 (not the %W "W00" partial)
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 1, 1)):
             self.assertEqual(self.L._period_key("weekly"), "2026-W01")
@@ -741,7 +752,7 @@ class GlobalCostAccumulationTest(unittest.TestCase):
         with patch.object(self.L, "datetime", _fixed_datetime(2025, 12, 29)):
             self.assertEqual(self.L._period_key("weekly"), "2026-W01")
 
-    def test_planner_usage_feeds_period_spend(self):
+    def test_planner_usage_feeds_period_spend(self) -> None:
         from wactorz.agents.planner.agent import PlannerAgent
 
         agent = PlannerAgent(llm_provider=None)
@@ -754,7 +765,7 @@ class GlobalCostAccumulationTest(unittest.TestCase):
         self.assertAlmostEqual(deltas[0], 0.0123, places=6)
         self.assertAlmostEqual(deltas[1], 0.004, places=6)
 
-    def test_one_off_actuator_usage_feeds_period_spend(self):
+    def test_one_off_actuator_usage_feeds_period_spend(self) -> None:
         from wactorz.agents.one_off_actuator_agent import OneOffActuatorAgent
 
         agent = OneOffActuatorAgent(

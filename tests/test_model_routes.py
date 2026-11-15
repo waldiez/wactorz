@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The model routes: reading the store, and moving its pointers from the dashboard.
 
 Each move is the store's own, recorded as made by the dashboard, and refused in
@@ -8,8 +9,10 @@ name or version that is not stored, a 400 for a request that is not one.
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.core.artifacts import ArtifactStore
@@ -29,7 +32,9 @@ def store_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ArtifactSt
 
 
 @pytest.fixture(name="client")
-async def client_fixture(store: ArtifactStore) -> AsyncIterator[TestClient]:
+async def client_fixture(
+    store: ArtifactStore,
+) -> AsyncIterator[TestClient[web.Request, web.Application]]:
     client = TestClient(TestServer(build_app()))
     await client.start_server()
     yield client
@@ -37,7 +42,7 @@ async def client_fixture(store: ArtifactStore) -> AsyncIterator[TestClient]:
 
 
 async def test_the_list_gives_each_name_its_newest_version_and_pointers(
-    client: TestClient, store: ArtifactStore
+    client: TestClient[web.Request, web.Application], store: ArtifactStore
 ) -> None:
     store.move("active", "imu:2", by="cli")
 
@@ -50,7 +55,9 @@ async def test_the_list_gives_each_name_its_newest_version_and_pointers(
     assert imu["pointers"]["active"]["holds"] is True
 
 
-async def test_one_model_gives_every_version_with_what_was_said_of_it(client: TestClient) -> None:
+async def test_one_model_gives_every_version_with_what_was_said_of_it(
+    client: TestClient[web.Request, web.Application],
+) -> None:
     response = await client.get("/api/models/imu")
 
     assert response.status == 200
@@ -59,14 +66,16 @@ async def test_one_model_gives_every_version_with_what_was_said_of_it(client: Te
     assert body["pointers"] == {}
 
 
-async def test_a_model_that_is_not_stored_is_a_404(client: TestClient) -> None:
+async def test_a_model_that_is_not_stored_is_a_404(
+    client: TestClient[web.Request, web.Application],
+) -> None:
     response = await client.get("/api/models/nothing-here")
 
     assert response.status == 404
 
 
 async def test_setting_active_records_the_dashboard_and_the_reason(
-    client: TestClient, store: ArtifactStore
+    client: TestClient[web.Request, web.Application], store: ArtifactStore
 ) -> None:
     response = await client.post(
         "/api/models/imu/active", json={"version": 2, "reason": "  better recall  "}
@@ -83,7 +92,7 @@ async def test_setting_active_records_the_dashboard_and_the_reason(
 
 
 async def test_a_shadow_then_promoted_becomes_active_and_ends_the_trial(
-    client: TestClient, store: ArtifactStore
+    client: TestClient[web.Request, web.Application], store: ArtifactStore
 ) -> None:
     await client.post("/api/models/imu/active", json={"version": 1})
     await client.post("/api/models/imu/shadow", json={"version": 3})
@@ -96,7 +105,7 @@ async def test_a_shadow_then_promoted_becomes_active_and_ends_the_trial(
 
 
 async def test_rolling_back_returns_active_to_the_version_it_left(
-    client: TestClient, store: ArtifactStore
+    client: TestClient[web.Request, web.Application], store: ArtifactStore
 ) -> None:
     await client.post("/api/models/imu/active", json={"version": 1})
     await client.post("/api/models/imu/active", json={"version": 3})
@@ -108,13 +117,42 @@ async def test_rolling_back_returns_active_to_the_version_it_left(
     assert (pointer["version"], pointer["previous"]) == (1, 3)
 
 
-async def test_clearing_the_shadow_ends_the_trial(client: TestClient, store: ArtifactStore) -> None:
+async def test_clearing_the_shadow_ends_the_trial(
+    client: TestClient[web.Request, web.Application], store: ArtifactStore
+) -> None:
     await client.post("/api/models/imu/shadow", json={"version": 2})
 
     response = await client.delete("/api/models/imu/shadow")
 
     assert response.status == 200
     assert store.pointer("imu", "shadow") is None
+
+
+async def test_a_clear_keeps_its_reason(
+    client: TestClient[web.Request, web.Application], store: ArtifactStore
+) -> None:
+    await client.post("/api/models/imu/shadow", json={"version": 2})
+
+    response = await client.delete("/api/models/imu/shadow", json={"reason": " too noisy "})
+
+    assert response.status == 200
+    cleared = store.pointer_changes()[0][-1]
+    assert (cleared["change"], cleared["by"], cleared["reason"]) == (
+        "cleared",
+        "dashboard",
+        "too noisy",
+    )
+
+
+async def test_a_clear_with_a_reason_that_is_not_text_is_refused(
+    client: TestClient[web.Request, web.Application], store: ArtifactStore
+) -> None:
+    await client.post("/api/models/imu/shadow", json={"version": 2})
+
+    response = await client.delete("/api/models/imu/shadow", json={"reason": 3})
+
+    assert response.status == 400
+    assert store.pointer("imu", "shadow") is not None
 
 
 @pytest.mark.parametrize(
@@ -126,7 +164,10 @@ async def test_clearing_the_shadow_ends_the_trial(client: TestClient, store: Art
     ],
 )
 async def test_a_move_the_pointers_do_not_allow_now_is_a_409(
-    client: TestClient, method: str, path: str, body: dict | None
+    client: TestClient[web.Request, web.Application],
+    method: str,
+    path: str,
+    body: dict[str, Any] | None,
 ) -> None:
     response = await getattr(client, method)(path, json=body)
 
@@ -134,7 +175,9 @@ async def test_a_move_the_pointers_do_not_allow_now_is_a_409(
     assert (await response.json())["error"]
 
 
-async def test_setting_active_where_it_already_is_is_a_409(client: TestClient) -> None:
+async def test_setting_active_where_it_already_is_is_a_409(
+    client: TestClient[web.Request, web.Application],
+) -> None:
     await client.post("/api/models/imu/active", json={"version": 2})
 
     response = await client.post("/api/models/imu/active", json={"version": 2})
@@ -143,7 +186,9 @@ async def test_setting_active_where_it_already_is_is_a_409(client: TestClient) -
     assert (await response.json())["error"] == "imu:2 is already active"
 
 
-async def test_rolling_back_the_first_move_has_nowhere_to_go(client: TestClient) -> None:
+async def test_rolling_back_the_first_move_has_nowhere_to_go(
+    client: TestClient[web.Request, web.Application],
+) -> None:
     await client.post("/api/models/imu/active", json={"version": 2})
 
     response = await client.post("/api/models/imu/rollback")
@@ -152,7 +197,9 @@ async def test_rolling_back_the_first_move_has_nowhere_to_go(client: TestClient)
     assert "no earlier one" in (await response.json())["error"]
 
 
-async def test_a_version_that_is_not_stored_is_a_404(client: TestClient) -> None:
+async def test_a_version_that_is_not_stored_is_a_404(
+    client: TestClient[web.Request, web.Application],
+) -> None:
     response = await client.post("/api/models/imu/active", json={"version": 9})
 
     assert response.status == 404
@@ -171,14 +218,16 @@ async def test_a_version_that_is_not_stored_is_a_404(client: TestClient) -> None
     ],
 )
 async def test_a_request_that_is_not_one_is_a_400(
-    client: TestClient, path: str, body: object
+    client: TestClient[web.Request, web.Application], path: str, body: object
 ) -> None:
     response = await client.post(path, json=body)
 
     assert response.status == 400
 
 
-async def test_a_body_that_is_not_json_is_a_400(client: TestClient) -> None:
+async def test_a_body_that_is_not_json_is_a_400(
+    client: TestClient[web.Request, web.Application],
+) -> None:
     response = await client.post(
         "/api/models/imu/active", data=b"{nope", headers={"Content-Type": "application/json"}
     )
@@ -186,7 +235,9 @@ async def test_a_body_that_is_not_json_is_a_400(client: TestClient) -> None:
     assert response.status == 400
 
 
-async def test_a_long_reason_is_kept_to_a_sentence(client: TestClient) -> None:
+async def test_a_long_reason_is_kept_to_a_sentence(
+    client: TestClient[web.Request, web.Application],
+) -> None:
     response = await client.post(
         "/api/models/imu/active", json={"version": 2, "reason": "x" * 2000}
     )
@@ -195,7 +246,7 @@ async def test_a_long_reason_is_kept_to_a_sentence(client: TestClient) -> None:
 
 
 async def test_a_pointer_whose_version_holds_other_bytes_says_so(
-    client: TestClient, store: ArtifactStore
+    client: TestClient[web.Request, web.Application], store: ArtifactStore
 ) -> None:
     store.move("shadow", "imu:3", by="cli")
     # The bytes the pointer was set to, no longer the ones imu:3 holds: what an

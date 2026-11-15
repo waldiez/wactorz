@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The bridge from Home Assistant state changes to MQTT topics.
 
 Each state change is published to a topic per entity, or all to one topic, as

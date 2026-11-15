@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Turning a model's token counts into money, for libraries that report only tokens.
 
 LangChain and AG2 say how many tokens a call used and which model answered;

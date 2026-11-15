@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end smoke test for the monitor's HTTP surface.
 
 Builds the *real* app via ``build_app()`` and drives every read-only route with
@@ -17,6 +18,7 @@ from typing import Any
 from unittest import mock
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.web import Application
 
@@ -52,7 +54,7 @@ def _get_routes(app: Application) -> list[str]:
 
 
 @pytest.fixture(name="client")
-async def client_fixture() -> AsyncGenerator[TestClient, Any]:
+async def client_fixture() -> AsyncGenerator[TestClient[web.Request, web.Application], Any]:
     """The real app, with network-backed optional features pinned off.
 
     ``/api/tts`` genuinely synthesizes speech through Microsoft's edge-tts
@@ -78,7 +80,7 @@ async def client_fixture() -> AsyncGenerator[TestClient, Any]:
         pinned.stop()
 
 
-async def test_every_get_route_responds(client: TestClient) -> None:
+async def test_every_get_route_responds(client: TestClient[web.Request, web.Application]) -> None:
     """No GET route may raise — a 500 here means a handler blew up (e.g. a
     stale relative import after a module move)."""
     failures = []
@@ -89,7 +91,7 @@ async def test_every_get_route_responds(client: TestClient) -> None:
     assert not failures, "handlers raised:\n" + "\n".join(failures)
 
 
-async def test_an_uninstalled_optional_feature_degrades_instead_of_crashing(client):
+async def test_an_uninstalled_optional_feature_degrades_instead_of_crashing(client) -> None:
     """An optional feature that is not installed answers 503 with guidance.
 
     The client fixture pins TTS off, so this is the real dep-free behaviour
@@ -100,7 +102,7 @@ async def test_an_uninstalled_optional_feature_degrades_instead_of_crashing(clie
     assert "pip install" in await resp.text()
 
 
-async def test_core_api_payloads(client: TestClient) -> None:
+async def test_core_api_payloads(client: TestClient[web.Request, web.Application]) -> None:
     """The endpoints the dashboard needs on first paint return usable JSON."""
     assert (await client.get("/health")).status == 200
 
@@ -121,7 +123,9 @@ async def test_core_api_payloads(client: TestClient) -> None:
     assert cost.status == 200
 
 
-async def test_actor_routes_with_unknown_id(client: TestClient) -> None:
+async def test_actor_routes_with_unknown_id(
+    client: TestClient[web.Request, web.Application],
+) -> None:
     """Parametrised actor routes must 404/4xx cleanly, not crash, when the
     registry is empty."""
     for path in (
@@ -133,7 +137,9 @@ async def test_actor_routes_with_unknown_id(client: TestClient) -> None:
         assert resp.status < 500, f"{path} -> {resp.status}"
 
 
-async def test_registry_none_is_the_default(client: TestClient) -> None:
+async def test_registry_none_is_the_default(
+    client: TestClient[web.Request, web.Application],
+) -> None:
     """Guard the assumption this module rests on: these routes are exercised
     with no registry injected, which is the standalone/legacy path."""
     assert runtime.registry is None

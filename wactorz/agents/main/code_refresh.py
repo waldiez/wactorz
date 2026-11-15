@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Keeping the spawn registry in step with a program a node repaired.
 
 An agent whose code fails can be repaired by the LLM while it runs. On a node
@@ -43,11 +44,12 @@ from ...core.mqtt import (
     mqtt_client,
     session_kwargs,
 )
+from ...core.topics import NODES, node_topic, owner_of
 
 if TYPE_CHECKING:
     from .hosts import CodeRefreshHost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long a question stays open. A node answers in the time one MQTT round
 #: trip takes; this is long enough for one that is busy or briefly away, and
@@ -113,7 +115,7 @@ class CodeRefresh:
         # Signed on the way out, because it is a node control topic: see
         # `MainActor._publish_properties`.
         await host._mqtt_publish(
-            f"nodes/{node}/code_request",
+            node_topic(node, "code_request"),
             {"agent": agent_name, "token": token, "timestamp": time.time()},
             qos=1,
         )
@@ -148,8 +150,7 @@ class CodeRefresh:
         host = self.host
         if host is None:
             return False
-        entry = host._get_spawn_registry().get(agent_name)
-        return bool(entry) and (entry.get("node") or "") == node
+        return host._get_spawn_registry().at(agent_name, node) is not None
 
     # ── Answering ─────────────────────────────────────────────────────────
 
@@ -191,7 +192,7 @@ class CodeRefresh:
         # would let them cancel the exchange: main would have no question left
         # and would refuse the node's real answer a moment later. Dropped
         # without spending, the question stands and the right answer still lands.
-        node = topic.split("/")[1] if "/" in topic else ""
+        node = owner_of(topic, NODES)
         if data.get("agent") != asked["agent"] or node != asked["node"]:
             logger.warning(
                 "[%s] code_return quotes a token for %r on %r but names %r on %r — ignoring",
@@ -213,7 +214,7 @@ class CodeRefresh:
         if not isinstance(code, str) or not code.strip():
             return
 
-        entry = dict(host._get_spawn_registry().get(asked["agent"]) or {})
+        entry = host._get_spawn_registry().at(asked["agent"], asked["node"]) or {}
         if not entry or entry.get("code") == code:
             return
         entry["code"] = code
@@ -255,8 +256,8 @@ class CodeRefresh:
                     identifier=client_id("srv", install_id(), "coderefresh"),
                     **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                 ) as client:
-                    await client.subscribe("nodes/+/code_changed", qos=1)
-                    await client.subscribe("nodes/+/code_return", qos=1)
+                    await client.subscribe(node_topic("+", "code_changed"), qos=1)
+                    await client.subscribe(node_topic("+", "code_return"), qos=1)
                     logger.info("[%s] Subscribed to node code topics.", host.name)
                     last_error = None
                     async for message in client.messages:
@@ -290,5 +291,5 @@ class CodeRefresh:
             return
         if not isinstance(data, dict):
             return
-        node = topic.split("/")[1] if "/" in topic else ""
+        node = owner_of(topic, NODES)
         await self.note_change(node, str(data.get("agent") or ""))

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Issue the MQTT broker's TLS certificate: ``python -m wactorz.broker_certificates``.
 
 Run before a broker Wactorz provides starts -- by the add-on's ``run.sh`` and by
@@ -24,7 +25,7 @@ from .config import CONFIG, MODEL_CODE_NODE, RESERVED_NODE_NAMES
 from .core import broker_accounts, broker_tls
 from .core.mqtt_tls import SYSTEM_TRUST, client_context, generated_ca_path, tls_enabled
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def broker_names() -> list[str]:
@@ -111,6 +112,23 @@ def account_nodes() -> list[str]:
         else:
             usable.append(name)
     return usable
+
+
+def node_is_under_access_list(node: str) -> bool:
+    """Whether this server wrote an access list that holds ``node`` to its own topics.
+
+    True for a node with an account on a broker Wactorz writes the files for. On
+    any other broker the rules, if there are any, are not this server's to know.
+    """
+    if not (CONFIG.node_accounts and CONFIG.mqtt_broker_dir):
+        return False
+    named = {target.name for target in CONFIG.deploy_targets} | {MODEL_CODE_NODE}
+    return (
+        bool(node)
+        and node in named
+        and node.lower() not in RESERVED_NODE_NAMES
+        and broker_accounts.name_error(node) is None
+    )
 
 
 def full_access_accounts() -> list[str]:

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`/agents stop|restart` must mean what they say.
 
 Each verb routes through `apply_command`, which is where the rules live: a stop

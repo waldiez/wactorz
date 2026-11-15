@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 test_supervisor.py — Logical tests for the Wactorz supervision tree.
 

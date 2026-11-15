@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Housekeeping runs on a timer, off the loop, and cannot take the loop with it.
 
 The reason this exists at all is that SQLite folds its WAL back inline, on
@@ -11,6 +12,7 @@ import asyncio
 import sqlite3
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -21,7 +23,7 @@ from wactorz.core.persistence.db import WactorzDB
 
 
 @pytest.fixture(autouse=True)
-def _clean_registry():
+def _clean_registry() -> "Iterator[None]":
     """The module holds process-wide state; no test may leak into the next."""
     maintenance._JOBS.clear()
     maintenance._task = None
@@ -97,7 +99,7 @@ class TestStartAndStop:
     async def test_a_cancelled_loop_stays_cancelled(self) -> None:
         """It must not swallow the cancellation and run a job anyway.
 
-        The failure this guards is subtle: `wait_for` on Python 3.10 can return
+        The failure this guards is subtle: `wait_for` on Python 3.11 can return
         from inside its own CancelledError handling, so a loop written with it
         would start a job *after* being cancelled — putting a thread on the
         connection lock during shutdown.
@@ -184,7 +186,7 @@ class TestWhatAgentsKeep:
     """`kv_store` is not pruned, so the rotation says who keeps the most, and warns."""
 
     @pytest.fixture(name="db")
-    def db_fixture(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def db_fixture(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> "Iterator[WactorzDB]":
         with WactorzDB(str(tmp_path / "w.db")) as database:
             monkeypatch.setattr(maintenance, "get_db", lambda: database)
             monkeypatch.setattr(maintenance, "_warned_kv", set())

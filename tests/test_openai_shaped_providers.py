@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OpenAI and NVIDIA NIM: the request each sends, and how each recovers.
 
 Both speak the Chat Completions format, but differ in what they send about

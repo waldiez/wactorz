@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Suite-wide fixtures.
 
 The point of the fixture below is that a test run must not depend on the machine
@@ -8,6 +9,7 @@ confusing rather than loud: the test looks wrong, not the environment.
 
 import pathlib
 import sys
+from collections import OrderedDict
 from collections.abc import Iterator
 from dataclasses import replace
 from typing import Any
@@ -16,11 +18,21 @@ import pytest
 
 from wactorz import config, llm_factory
 from wactorz.agents import llm_agent
-from wactorz.core import mqtt
+from wactorz.core import mqtt, pip
 from wactorz.core.persistence.stores import Stores
 from wactorz.ext import tts as tts_extension
 from wactorz.node import state as node_state
+from wactorz.web import cost as web_cost
+from wactorz.web import db_writer, throttle
+from wactorz.web import questions as web_questions
 from wactorz.web import runtime as web_runtime
+from wactorz.web import withdrawals as web_withdrawals
+
+
+@pytest.fixture(autouse=True)
+def _no_pending_package_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each test a fresh interpreter's package-restart state."""
+    monkeypatch.setattr(pip, "_RESTART_REQUIRED", set())
 
 
 @pytest.fixture(autouse=True)
@@ -79,6 +91,23 @@ def _no_ambient_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     the default.
     """
     monkeypatch.setattr(config, "CONFIG", replace(config.CONFIG, api_key=""))
+
+
+@pytest.fixture(autouse=True)
+def _a_fresh_db_writer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each test a writer of its own, so nothing one queued is written in another."""
+    monkeypatch.setattr(db_writer, "writer", db_writer.DbWriter())
+    monkeypatch.setattr(web_cost, "_stored", web_cost.StoredTotals())
+
+
+@pytest.fixture(autouse=True)
+def _a_fresh_key_throttle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each test an allowance of its own for wrong keys.
+
+    The running server's throttle is one object per process and every test client
+    calls from the same address, so wrong keys in one test would refuse the next.
+    """
+    monkeypatch.setattr(throttle, "throttle", throttle.LoginThrottle())
 
 
 #: The settings that put broker connections on TLS.
@@ -262,6 +291,22 @@ def _no_leaked_tombstones(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setattr(web_runtime, "deleted_agent_ids", [])
     monkeypatch.setattr(web_runtime, "hard_resetting", False)
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test with no system started, and nothing held for one to decide.
+
+    Which profile started is latched once, process-wide, and the books and
+    withdrawals heard before then are held for it. A test that runs a system
+    leaves the latch set and could leave something held, and a later test on
+    the same worker would then see its messages admitted, or held, by a rule
+    it did not choose.
+    """
+    monkeypatch.setattr(web_runtime, "started_with_main", None)
+    monkeypatch.setattr(web_questions, "_held", OrderedDict())
+    monkeypatch.setattr(web_questions, "_admitted", {})
+    monkeypatch.setattr(web_withdrawals, "_held", OrderedDict())
 
 
 @pytest.fixture(autouse=True)

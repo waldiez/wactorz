@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Behaviour of the REST routes, with no key configured.
 
 Auth is covered separately; these exercise what each route does once a request
@@ -8,9 +9,12 @@ covers the monitor app, whose lifecycle verbs are registered under both the
 """
 
 from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.interfaces.chat.rest import RESTInterface
@@ -122,7 +126,9 @@ def actor_fixture() -> _Actor:
 
 
 @pytest.fixture(name="main_and_client")
-async def main_and_client_fixture(actor: _Actor) -> AsyncGenerator[tuple[_Main, TestClient], None]:
+async def main_and_client_fixture(
+    actor: _Actor,
+) -> AsyncGenerator[tuple[_Main, TestClient[web.Request, web.Application]], None]:
     main, iface = _make(actor, map_actor=_MapActor())
     client = TestClient(TestServer(iface.build_app()))
     await client.start_server()
@@ -131,23 +137,31 @@ async def main_and_client_fixture(actor: _Actor) -> AsyncGenerator[tuple[_Main, 
 
 
 @pytest.fixture(name="client")
-async def client_fixture(main_and_client: tuple[_Main, TestClient]) -> TestClient:
+async def client_fixture(
+    main_and_client: tuple[_Main, TestClient[web.Request, web.Application]],
+) -> TestClient[web.Request, web.Application]:
     return main_and_client[1]
 
 
 class TestBodiesThatAreNotObjects:
     @pytest.mark.parametrize("path", BODY_ENDPOINTS)
-    async def test_a_json_list_is_a_client_error(self, client: TestClient, path: str) -> None:
+    async def test_a_json_list_is_a_client_error(
+        self, client: TestClient[web.Request, web.Application], path: str
+    ) -> None:
         # Reading a named field off a list has no answer; that is the caller's
         # mistake, not a server fault.
         assert (await client.post(path, json=[1, 2])).status == 400
 
     @pytest.mark.parametrize("path", BODY_ENDPOINTS)
-    async def test_a_bare_string_is_a_client_error(self, client: TestClient, path: str) -> None:
+    async def test_a_bare_string_is_a_client_error(
+        self, client: TestClient[web.Request, web.Application], path: str
+    ) -> None:
         assert (await client.post(path, json="hello")).status == 400
 
     @pytest.mark.parametrize("path", BODY_ENDPOINTS)
-    async def test_malformed_json_is_a_client_error(self, client: TestClient, path: str) -> None:
+    async def test_malformed_json_is_a_client_error(
+        self, client: TestClient[web.Request, web.Application], path: str
+    ) -> None:
         resp = await client.post(
             path, data="{not json", headers={"Content-Type": "application/json"}
         )
@@ -155,7 +169,9 @@ class TestBodiesThatAreNotObjects:
 
 
 class TestChat:
-    async def test_a_message_reaches_the_agent(self, client: TestClient) -> None:
+    async def test_a_message_reaches_the_agent(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         resp = await client.post("/chat", json={"message": "hi"})
         assert resp.status == 200
         assert (await resp.json())["response"] == "echo:hi"
@@ -171,19 +187,27 @@ class TestChat:
 
         assert orchestrator.channels == ["rest"]
 
-    async def test_an_empty_message_is_refused(self, client: TestClient) -> None:
+    async def test_an_empty_message_is_refused(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         assert (await client.post("/chat", json={"message": ""})).status == 400
 
-    async def test_the_agent_name_defaults_to_main(self, client: TestClient) -> None:
+    async def test_the_agent_name_defaults_to_main(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         resp = await client.post("/chat", json={"message": "hi"})
         assert (await resp.json())["agent"] == "main"
 
-    async def test_main_named_explicitly_is_asked_directly(self, client: TestClient) -> None:
+    async def test_main_named_explicitly_is_asked_directly(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         resp = await client.post("/chat", json={"message": "hi", "agent_name": "main"})
 
         assert (await resp.json())["response"] == "echo:hi"
 
-    async def test_another_agent_is_reached_through_mains_mention(self, client: TestClient) -> None:
+    async def test_another_agent_is_reached_through_mains_mention(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # The route a user typing "@weather ..." takes, so the agent is found,
         # spawned from the catalogue, or asked on its node the same way.
         resp = await client.post(
@@ -195,7 +219,9 @@ class TestChat:
         assert body["agent"] == "weather-agent"
 
     @pytest.mark.parametrize("name", ["two words", "@weather", " main", ["main"], 7, 0, False, []])
-    async def test_a_name_that_is_not_one_is_refused(self, client: TestClient, name: Any) -> None:
+    async def test_a_name_that_is_not_one_is_refused(
+        self, client: TestClient[web.Request, web.Application], name: Any
+    ) -> None:
         # A space would move part of the name into the message.
         resp = await client.post("/chat", json={"message": "hi", "agent_name": name})
 
@@ -204,43 +230,59 @@ class TestChat:
 
 class TestCommands:
     async def test_a_known_command_is_forwarded(
-        self, main_and_client: tuple[_Main, TestClient]
+        self, main_and_client: tuple[_Main, TestClient[web.Request, web.Application]]
     ) -> None:
         main, client = main_and_client
         resp = await client.post("/agents/command", json={"target": "a1", "command": "stop"})
         assert resp.status == 200
         assert main.commands[0][0] == "a1"
 
-    async def test_an_unknown_command_is_refused(self, client: TestClient) -> None:
+    async def test_an_unknown_command_is_refused(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         resp = await client.post("/agents/command", json={"target": "a1", "command": "explode"})
         assert resp.status == 400
 
-    async def test_a_command_with_no_target_is_refused(self, client: TestClient) -> None:
+    async def test_a_command_with_no_target_is_refused(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         assert (await client.post("/agents/command", json={"command": "stop"})).status == 400
 
 
 class TestActorRoutes:
-    async def test_listing_reports_the_actor(self, client: TestClient) -> None:
+    async def test_listing_reports_the_actor(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         payload = await (await client.get("/actors")).json()
         assert [a["name"] for a in payload] == ["worker"]
 
-    async def test_idle_is_reported_as_initializing(self, client: TestClient) -> None:
+    async def test_idle_is_reported_as_initializing(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         payload = await (await client.get("/actors/a1")).json()
         assert payload["state"] == "initializing"
 
-    async def test_an_unknown_actor_is_404(self, client: TestClient) -> None:
+    async def test_an_unknown_actor_is_404(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         assert (await client.get("/actors/nope")).status == 404
 
-    async def test_a_message_is_delivered(self, main_and_client: tuple[_Main, TestClient]) -> None:
+    async def test_a_message_is_delivered(
+        self, main_and_client: tuple[_Main, TestClient[web.Request, web.Application]]
+    ) -> None:
         main, client = main_and_client
         resp = await client.post("/actors/a1/message", json={"content": "do it"})
         assert resp.status == 200
         assert main.sent[0]["text"] == "do it"
 
-    async def test_an_empty_message_is_refused(self, client: TestClient) -> None:
+    async def test_an_empty_message_is_refused(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         assert (await client.post("/actors/a1/message", json={"content": ""})).status == 400
 
-    async def test_metrics_report_the_counters(self, client: TestClient) -> None:
+    async def test_metrics_report_the_counters(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         payload = await (await client.get("/actors/a1/metrics")).json()
         assert payload["messages_received"] == 9
         assert payload["heartbeats"] == 4
@@ -252,7 +294,11 @@ class TestLifecycle:
         [("start", "start"), ("stop", "stop")],
     )
     async def test_a_verb_runs_the_actors_own_command(
-        self, actor: _Actor, client: TestClient, verb: str, command: str
+        self,
+        actor: _Actor,
+        client: TestClient[web.Request, web.Application],
+        verb: str,
+        command: str,
     ) -> None:
         # Routed through apply_command so supervision is released properly,
         # rather than calling stop() behind the supervisor's back.
@@ -261,7 +307,7 @@ class TestLifecycle:
         assert actor.commands == [command]
 
     async def test_stop_does_not_unregister(
-        self, main_and_client: tuple[_Main, TestClient], actor: _Actor
+        self, main_and_client: tuple[_Main, TestClient[web.Request, web.Application]], actor: _Actor
     ) -> None:
         """Stop parks the actor for a later start; delete is the route that removes."""
         main, client = main_and_client
@@ -271,7 +317,7 @@ class TestLifecycle:
         assert main._registry.unregistered == []
 
     async def test_a_protected_actor_can_still_be_stopped(
-        self, client: TestClient, actor: _Actor
+        self, client: TestClient[web.Request, web.Application], actor: _Actor
     ) -> None:
         actor.protected = True
 
@@ -281,7 +327,7 @@ class TestLifecycle:
         assert actor.commands == ["stop"]
 
     async def test_an_essential_actor_cannot_be_stopped(
-        self, client: TestClient, actor: _Actor
+        self, client: TestClient[web.Request, web.Application], actor: _Actor
     ) -> None:
         actor.essential = True
 
@@ -289,13 +335,13 @@ class TestLifecycle:
         assert actor.commands == []
 
     async def test_a_refused_command_reports_conflict(
-        self, client: TestClient, actor: _Actor
+        self, client: TestClient[web.Request, web.Application], actor: _Actor
     ) -> None:
         actor.refuse = True
         assert (await client.post("/actors/a1/stop")).status == 409
 
     async def test_delete_also_unregisters(
-        self, main_and_client: tuple[_Main, TestClient], actor: _Actor
+        self, main_and_client: tuple[_Main, TestClient[web.Request, web.Application]], actor: _Actor
     ) -> None:
         main, client = main_and_client
         resp = await client.delete("/actors/a1")
@@ -306,7 +352,7 @@ class TestLifecycle:
         assert main._registry.unregistered == ["a1"]
 
     async def test_a_protected_actor_cannot_be_deleted(
-        self, main_and_client: tuple[_Main, TestClient], actor: _Actor
+        self, main_and_client: tuple[_Main, TestClient[web.Request, web.Application]], actor: _Actor
     ) -> None:
         main, client = main_and_client
         actor.protected = True
@@ -320,7 +366,7 @@ class TestLifecycle:
         assert main._registry.unregistered == []
 
     async def test_deleting_an_unknown_actor_does_not_unregister(
-        self, main_and_client: tuple[_Main, TestClient]
+        self, main_and_client: tuple[_Main, TestClient[web.Request, web.Application]]
     ) -> None:
         main, client = main_and_client
         assert (await client.delete("/actors/nope")).status == 404
@@ -328,10 +374,12 @@ class TestLifecycle:
 
 
 class TestProbesAndSnapshots:
-    async def test_health(self, client: TestClient) -> None:
+    async def test_health(self, client: TestClient[web.Request, web.Application]) -> None:
         assert (await (await client.get("/health")).json())["status"] == "ok"
 
-    async def test_the_ha_map_snapshot_is_served(self, client: TestClient) -> None:
+    async def test_the_ha_map_snapshot_is_served(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         payload = await (await client.get("/ha-map")).json()
         assert payload["type"] == "home_assistant_map_update"
 
@@ -344,6 +392,108 @@ class TestProbesAndSnapshots:
         finally:
             await client.close()
 
+    @pytest.mark.parametrize(
+        ("map_actor", "status"),
+        [
+            (SimpleNamespace(recall=lambda _key, _default: {"devices": []}), 200),
+            (SimpleNamespace(recall=lambda _key, _default: "not a snapshot"), 404),
+            (SimpleNamespace(), 404),
+        ],
+        ids=["remembered", "remembered as something else", "neither kept nor remembered"],
+    )
+    async def test_a_snapshot_is_read_from_memory_when_the_agent_keeps_none(
+        self, map_actor: Any, status: int
+    ) -> None:
+        async with _serving(_make(_Actor(), map_actor=map_actor)[1]) as client:
+            assert (await client.get("/ha-map")).status == status
+
+
+@asynccontextmanager
+async def _serving(iface: RESTInterface) -> AsyncIterator[TestClient[web.Request, web.Application]]:
+    client = TestClient(TestServer(iface.build_app()))
+    await client.start_server()
+    try:
+        yield client
+    finally:
+        await client.close()
+
+
+class TestAnActorThatIsNotThere:
+    async def test_a_message_to_it_is_404(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
+        assert (await client.post("/actors/nope/message", json={"content": "hi"})).status == 404
+
+    async def test_its_metrics_are_404(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
+        assert (await client.get("/actors/nope/metrics")).status == 404
+
+    async def test_a_state_other_than_idle_is_reported_as_it_is(
+        self,
+        client: TestClient[web.Request, web.Application],
+        actor: _Actor,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(actor, "get_status", lambda: {"state": "running"})
+        assert (await (await client.get("/actors/a1")).json())["state"] == "running"
+
+    async def test_one_its_delete_already_unregistered_is_not_unregistered_again(self) -> None:
+        main, iface = _make(_Actor())
+
+        async def _delete_itself(command: str) -> bool:
+            main._registry.actor = None
+            return True
+
+        actor = main._registry.actor
+        assert actor is not None
+        actor.apply_command = _delete_itself  # pyright: ignore[reportAttributeAccessIssue]
+        async with _serving(iface) as client:
+            assert (await client.delete("/actors/a1")).status == 200
+        assert main._registry.unregistered == []
+
+
+class TestWithoutARegistry:
+    """Main not registered anywhere: nothing is listed, and every actor is not found."""
+
+    @pytest.fixture(name="bare")
+    async def bare_fixture(self) -> AsyncIterator[TestClient[web.Request, web.Application]]:
+        main, iface = _make(_Actor(), map_actor=_MapActor())
+        main._registry = None  # pyright: ignore[reportAttributeAccessIssue]
+        async with _serving(iface) as client:
+            yield client
+
+    async def test_nothing_is_listed(self, bare: TestClient[web.Request, web.Application]) -> None:
+        assert await (await bare.get("/actors")).json() == []
+        assert await (await bare.get("/agents")).json() == []
+
+    async def test_a_registry_main_joins_after_the_app_is_built_is_read(self) -> None:
+        # The routes read main's registry when a request arrives, so an
+        # interface built before main is registered answers once it is.
+        main, iface = _make(_Actor())
+        registry = main._registry
+        main._registry = None  # pyright: ignore[reportAttributeAccessIssue]
+        async with _serving(iface) as client:
+            assert (await client.get("/actors/a1")).status == 404
+            main._registry = registry
+            assert (await client.get("/actors/a1")).status == 200
+            assert [a["name"] for a in await (await client.get("/actors")).json()] == ["worker"]
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("GET", "/actors/a1"),
+            ("GET", "/actors/a1/metrics"),
+            ("POST", "/actors/a1/stop"),
+            ("DELETE", "/actors/a1"),
+            ("GET", "/ha-map"),
+        ],
+    )
+    async def test_an_actor_is_not_found(
+        self, bare: TestClient[web.Request, web.Application], method: str, path: str
+    ) -> None:
+        assert (await bare.request(method, path)).status == 404
+
 
 class TestMonitorStopRoute:
     """The monitor's stop verb, registered under both spellings like every route."""
@@ -351,7 +501,7 @@ class TestMonitorStopRoute:
     @pytest.fixture(name="monitor_client")
     async def monitor_client_fixture(
         self, monkeypatch: pytest.MonkeyPatch, actor: _Actor
-    ) -> AsyncGenerator[TestClient, None]:
+    ) -> AsyncGenerator[TestClient[web.Request, web.Application], None]:
         monkeypatch.setattr(monitor_runtime, "registry", _Registry(actor))
         client = TestClient(TestServer(build_monitor_app()))
         await client.start_server()
@@ -360,7 +510,7 @@ class TestMonitorStopRoute:
 
     @pytest.mark.parametrize("path", ["/api/actors/a1/stop", "/actors/a1/stop"])
     async def test_stop_runs_through_apply_command_on_both_spellings(
-        self, monitor_client: TestClient, actor: _Actor, path: str
+        self, monitor_client: TestClient[web.Request, web.Application], actor: _Actor, path: str
     ) -> None:
         resp = await monitor_client.post(path)
         assert resp.status == 200
@@ -368,7 +518,7 @@ class TestMonitorStopRoute:
         assert actor.commands == ["stop"]
 
     async def test_an_essential_actor_is_refused_and_not_stopped(
-        self, monitor_client: TestClient, actor: _Actor
+        self, monitor_client: TestClient[web.Request, web.Application], actor: _Actor
     ) -> None:
         actor.essential = True
         resp = await monitor_client.post("/api/actors/a1/stop")

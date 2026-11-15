@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Re-registering a name must actually stop the instance it replaces.
 
 The old instance's message loop, heartbeat and any MQTT subscriptions are

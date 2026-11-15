@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Retention: deleting what has been kept long enough.
 
 One job in the maintenance rotation (:mod:`wactorz.core.persistence.maintenance`),

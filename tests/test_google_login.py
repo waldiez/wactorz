@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import unittest
 from unittest import mock
 
@@ -5,7 +6,7 @@ from wactorz.interfaces import google_login
 
 
 class GoogleLoginTest(unittest.IsolatedAsyncioTestCase):
-    async def test_skips_when_unconfigured(self):
+    async def test_skips_when_unconfigured(self) -> None:
         cal = mock.Mock()
         cal.config.client_id.return_value = ""
         cal.config.client_secret.return_value = ""
@@ -25,7 +26,7 @@ class GoogleLoginTest(unittest.IsolatedAsyncioTestCase):
         cal.authorize_direct.assert_not_awaited()
         gm.authorize_direct.assert_not_awaited()
 
-    async def test_authorizes_selected_service(self):
+    async def test_authorizes_selected_service(self) -> None:
         cal = mock.Mock()
         cal.config.client_id.return_value = "cid"
         cal.config.client_secret.return_value = "secret"
@@ -43,7 +44,7 @@ class GoogleLoginTest(unittest.IsolatedAsyncioTestCase):
         cal.authorize_direct.assert_awaited_once()
         gm.authorize_direct.assert_not_awaited()  # gmail not selected
 
-    async def test_returns_nonzero_on_failure(self):
+    async def test_returns_nonzero_on_failure(self) -> None:
         cal = mock.Mock()
         cal.config.client_id.return_value = "cid"
         cal.config.client_secret.return_value = "secret"

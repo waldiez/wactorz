@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The deploy supervises the runner, or says plainly that it could not.
 
 `nohup` does not survive a reboot, so a node that quietly fell back to it looks

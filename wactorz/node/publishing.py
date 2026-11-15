@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Everything this node sends to the broker, and the queue it waits in.
 
 Publishing is queued rather than awaited so a stalled broker never pushes back
@@ -33,7 +34,7 @@ from ..core.mqtt_publisher import MQTTPublisher
 from ..core.mqtt_tls import client_context, tls_enabled
 from ..core.node_publications import PublicationSigner
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How many messages may wait in memory before telemetry starts giving way, and
 #: which topics are the telemetry that gives way. Both from the server's
@@ -118,7 +119,7 @@ class NodePublisher:
         #: Created in :meth:`run`, inside the event loop that will own it.
         self._queue: asyncio.Queue[QueueItem] | None = None
         #: Messages the cap discarded, for the log.
-        self.dropped = 0
+        self.dropped: int = 0
         #: Taken from the queue and not yet accepted by the client. Held so a
         #: broker that goes away mid-send costs a retry rather than the message.
         self._inflight: QueueItem | None = None
@@ -129,6 +130,9 @@ class NodePublisher:
 
     @property
     def queue(self) -> asyncio.Queue[QueueItem] | None:
+        """The queue of messages waiting to go out; None until :meth:`run` has made it, on its
+        own loop.
+        """
         return self._queue
 
     # ── Enqueuing ─────────────────────────────────────────────────────────────
@@ -262,7 +266,9 @@ class NodePublisher:
         answered = threading.Event()
         outcome: dict[str, Any] = {}
 
-        def _on_connect(_client: Any, _data: Any, _flags: Any, reason: Any, _props: Any = None):
+        def _on_connect(
+            _client: Any, _data: Any, _flags: Any, reason: Any, _props: Any = None
+        ) -> None:
             outcome["reason"] = reason
             answered.set()
 
@@ -358,4 +364,7 @@ class NodePublisher:
             close_mqtt_client(client, "Publisher")
 
     def stop(self) -> None:
+        """Ask the publish loop to end; it does after the message it is sending, and closes its
+        client.
+        """
         self._running = False

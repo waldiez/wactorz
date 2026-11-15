@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Spawning agents the model asked for in its reply.
 
 The model writes a `<spawn>` block and this executes it. The guard that matters
@@ -25,7 +26,8 @@ from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.placement import Placement
 from wactorz.agents.main.spawns import SpawnService, _parse_spawn_config
-from wactorz.agents.mixins import agent_type
+from wactorz.agents.mixins import agent_type, installed_packages
+from wactorz.core.actor import ActorMetrics
 
 _SPAWN_FAILED = "spawn failed"
 
@@ -93,6 +95,10 @@ class _Main:
         main.nodes = NodeManager(main, main.manifests)
         main.spawns = SpawnService(main)
         main.placement = Placement(main)
+        main.metrics = ActorMetrics()
+        #: What the spawn registry is read from: empty, so no name runs elsewhere.
+        setattr(main, "_persistence_api", None)
+        setattr(main, "_persistent_state", {})
         setattr(main, "_registry", registry if registry is not None else _Registry())
 
         self.configs: list[dict[str, Any]] = []
@@ -463,3 +469,22 @@ class TestParseSpawnConfig:
 )
 def test_the_kind_of_agent_a_config_describes(config: dict[str, Any], kind: str) -> None:
     assert agent_type(config) == kind
+
+
+@pytest.mark.parametrize(
+    ("config", "packages"),
+    [
+        ({}, []),
+        # A model's "no dependencies" is `null`, not an absent key.
+        ({"install": None}, []),
+        ({"install": []}, []),
+        ({"install": ["a", "b"]}, ["a", "b"]),
+        ({"install": "a, b"}, ["a", "b"]),
+        ({"install": "a b"}, ["a", "b"]),
+        ({"install": ""}, []),
+    ],
+)
+def test_installed_packages_from_every_form_the_config_may_hold(
+    config: dict[str, Any], packages: list[str]
+) -> None:
+    assert installed_packages(config) == packages

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The app image comes in two flavours, built from one Dockerfile.
 
 `default` is small: Wactorz and its integrations. `ultra` adds what vision
@@ -9,9 +10,11 @@ other, since they name the flavours separately and would drift apart by hand.
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
+from packaging.version import Version
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = (ROOT / "Dockerfile").read_text(encoding="utf-8")
@@ -62,7 +65,7 @@ def _python(flavour: str) -> tuple[int, int]:
     return int(found.group(1)), int(found.group(2))
 
 
-def _workflow(name: str) -> dict:
+def _workflow(name: str) -> dict[str, Any]:
     return yaml.safe_load((ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8"))
 
 
@@ -73,7 +76,7 @@ class TestTheDockerfile:
 
     @pytest.mark.parametrize("flavour", FLAVOURS)
     def test_each_flavour_starts_from_a_pinned_python(self, flavour: str) -> None:
-        assert _python(flavour) >= (3, 10)
+        assert _python(flavour) >= (3, 11)
 
     def test_the_small_image_stays_small(self) -> None:
         assert _system_packages("default") == {"curl"}
@@ -107,7 +110,6 @@ class TestTheDockerfile:
 class TestTheLockedPyTorch:
     """On Linux the PyPI build is the CUDA one, with every NVIDIA library behind it."""
 
-    # Read as text: Python 3.10 has no TOML reader, and the suite runs there.
     def test_linux_takes_the_cpu_build(self) -> None:
         settings = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
@@ -148,6 +150,37 @@ class TestTheLockedPyTorch:
     def test_the_ultra_install_is_told_where_that_build_is(self) -> None:
         assert "--extra-index-url https://download.pytorch.org/whl/cpu" in DOCKERFILE
         assert "pip install --no-cache-dir --require-hashes $indexes" in DOCKERFILE
+
+
+class TestTheLockedReachy:
+    def test_reachy_cannot_downgrade_the_shared_starlette_below_security_fixes(self) -> None:
+        locked = (ROOT / "uv.lock").read_text(encoding="utf-8")
+        versions = re.findall(r'^name = "starlette"\nversion = "([^"]+)"', locked, re.MULTILINE)
+
+        assert versions
+        assert all(Version("1.3.1") <= Version(version) < Version("2") for version in versions)
+
+    def test_reachy_is_opt_in_and_its_native_dependencies_resolve_without_building(self) -> None:
+        settings = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        locked = (ROOT / "uv.lock").read_text(encoding="utf-8")
+        metadata = re.search(
+            r'^\[\[tool\.uv\.dependency-metadata\]\]\nname = "pygobject"\n'
+            r'version = "3\.46\.0"\nrequires-dist = \["pycairo>=1\.16\.0"\]',
+            settings,
+            re.MULTILINE,
+        )
+        assert metadata is not None
+        for name in ("reachy-mini", "deepgram-sdk", "pygobject", "pycairo"):
+            assert re.search(rf'^name = "{name}"$', locked, re.MULTILINE), name
+        assert re.search(
+            r'^name = "pygobject"\nversion = "3\.46\.0"\nsource = \{[^\n]*\}\n'
+            r'dependencies = \[\n    \{ name = "pycairo"(?:,| \})',
+            locked,
+            re.MULTILINE | re.DOTALL,
+        )
+        all_extra = re.search(r"^all = \[(.*?)^\]", settings, re.MULTILINE | re.DOTALL)
+        assert all_extra is not None
+        assert "reachy" not in all_extra.group(1)
 
 
 class TestBuildingAndPublishing:

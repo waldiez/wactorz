@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Accessibility checks with axe, on the page as the browser lays it out.
 
 The rule is the frontend unit tests' (``frontend/src/__tests__/axe.ts``): a

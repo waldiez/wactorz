@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A sibling crash must not resurrect an actor that was deliberately stopped.
 
 ONE_FOR_ALL and REST_FOR_ONE restart siblings of the crashed actor. Both walked

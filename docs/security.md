@@ -65,6 +65,10 @@ social channels — Discord and Telegram use a restricted entry point that refus
 spawning, deletion, code and automation, at the action rather than by inspecting
 the text, so it cannot be talked around.
 
+Installed packages are a second way in. A package can register extensions, agents and
+pipelines as entry points, and loading one runs its code in the server, so only those named
+in `WACTORZ_EXTENSIONS` are loaded. See [Extensions](extensions.md#enabling-a-package).
+
 If you need agents that cannot do this, run Wactorz in a container with only the
 credentials that deployment needs, and do not mount what it should not reach.
 
@@ -134,6 +138,12 @@ the broker. Anything that can publish to it can drive Wactorz.
   so rotate the shared password once the last one has moved. A node's agents
   share its account: the boundary is the machine, not the agent. See "An account
   per node" in `remote-nodes.md`.
+- **Two installs on one broker drive each other unless one has a namespace.**
+  `WACTORZ_NAMESPACE` moves an install's own topics, and its nodes' access list, under
+  one word of its own, so another install's nodes cannot reach its agents. Main says in
+  chat when another install shares its topics. On a broker Wactorz does not run there
+  is no node access list, and the namespace keeps installs apart by convention only.
+  See "Two installs on one broker" in `remote-nodes.md`.
 - **`/deploy` trusts a node's SSH host key the first time it connects.** The key is
   recorded in `<WACTORZ_STATE_DIR>/known_hosts`, or wherever `DEPLOY_KNOWN_HOSTS`
   points, and a later change fails the connection. The first connection is the

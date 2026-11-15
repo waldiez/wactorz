@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Models kept once by content, named by version, on main.
 
 An artifact is a file someone put in the store on purpose, for agents to load.
@@ -12,6 +13,7 @@ import io
 import json
 import logging
 import os
+import sys
 import tarfile
 import threading
 from pathlib import Path
@@ -90,6 +92,16 @@ class TestAdding:
         assert store.resolve("imu-detector:1").metadata == {"dataset": "imu-2026", "auc": 0.93}
         assert artifact.metadata["auc"] == 0.93
 
+    def test_metadata_too_large_to_travel_with_every_pin_is_refused(
+        self, store: ArtifactStore, model: Path
+    ) -> None:
+        card = "x" * artifacts_module.METADATA_MAX_BYTES
+
+        with pytest.raises(ArtifactError, match="put larger things inside the artifact"):
+            store.add(model, "imu-detector", metadata={"card": card})
+
+        assert store.names() == []
+
     def test_metadata_that_is_not_json_is_refused(self, store: ArtifactStore, model: Path) -> None:
         with pytest.raises(ArtifactError, match="metadata"):
             store.add(model, "imu-detector", metadata={"when": object()})
@@ -130,9 +142,11 @@ class TestFormats:
         assert store.add(path, "m").format == expected
 
     def test_an_ending_that_does_not_say_must_be_named(
-        self, store: ArtifactStore, tmp_path: Path
+        self, store: ArtifactStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # A .pt holds a state_dict or a whole module, and only one runs code.
+        # Without torch a state_dict is stored unread, so these bytes need not be one.
+        monkeypatch.setitem(sys.modules, "torch", None)
         path = tmp_path / "model.pt"
         path.write_bytes(b"x")
 

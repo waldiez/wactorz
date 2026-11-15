@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The deck's palette, which the model chooses from the *document's* own content.
 
 So a crafted document decides what `theme_colors` holds. The deck is built in

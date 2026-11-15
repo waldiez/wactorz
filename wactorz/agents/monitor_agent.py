@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """MonitorActor — System health observer and user notifier.
 
 Responsibilities:
@@ -29,22 +30,36 @@ from typing import Any
 import psutil
 
 from ..core.actor import Actor, ActorState, Message, MessageType
+from ..core.mqtt import install_id
+from ..core.topics import agent_topic, system_topic
 from .lookup import find_main_actor
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # How long a critical notification is suppressed before re-notifying (seconds)
 _NOTIFY_COOLDOWN = 120.0
 
+#: The field of the health message that names the install sending it, so that
+#: another install on the same topics can be told apart (`agents.main.installs`).
+HEALTH_INSTALL_FIELD = "install"
+
 
 class MonitorActor(Actor):
+    """Watches the other actors: who has gone quiet, who reported errors, and how the host is
+    doing.
+
+    Every check interval it pings the actors, alerts on one silent past the heartbeat timeout and
+    on the errors agents report, and publishes the system's health and the host's load. Main is
+    told of what needs a person.
+    """
+
     def __init__(
         self,
         check_interval: float = 15.0,
         heartbeat_timeout: float = 60.0,
         auto_restart: bool = False,  # kept for API compat, ignored
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         kwargs.setdefault("name", "monitor")
         super().__init__(**kwargs)
         self.check_interval = check_interval
@@ -55,7 +70,7 @@ class MonitorActor(Actor):
         self._alert_state: dict[str, bool] = {}
 
         # Error event registry: actor_id -> latest error event dict
-        self._error_registry: dict[str, dict] = {}
+        self._error_registry: dict[str, dict[str, Any]] = {}
         # Cooldown: actor_id -> last time we notified main
         self._last_notified: dict[str, float] = {}
 
@@ -69,7 +84,8 @@ class MonitorActor(Actor):
         except Exception:  # noqa: S110  # host stats are skipped without it; see _publish_host_stats
             pass
 
-    async def on_start(self):
+    async def on_start(self) -> None:
+        """Count every actor as seen now, prime the CPU reading, and start the monitoring loop."""
         if self._registry:
             now = time.time()
             for actor in self._registry.all_actors():
@@ -91,7 +107,10 @@ class MonitorActor(Actor):
 
     # ── Message handling ───────────────────────────────────────────────────
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
+        """Take any message from an actor as a sign it is alive, and an error event forwarded
+        from an agent as an error to track.
+        """
         # Any message from an actor counts as a liveness signal
         if msg.sender_id and msg.sender_id != self.actor_id:
             self._last_seen[msg.sender_id] = time.time()
@@ -109,7 +128,7 @@ class MonitorActor(Actor):
 
     # ── Monitor loop ───────────────────────────────────────────────────────
 
-    async def _monitor_loop(self):
+    async def _monitor_loop(self) -> None:
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
                 await asyncio.sleep(self.check_interval)
@@ -124,7 +143,7 @@ class MonitorActor(Actor):
             except Exception:
                 logger.exception("[%s] Monitor loop error", self.name)
 
-    async def _ping_all_actors(self):
+    async def _ping_all_actors(self) -> None:
         if not self._registry:
             return
         for actor in self._registry.all_actors():
@@ -134,7 +153,7 @@ class MonitorActor(Actor):
                 except Exception:
                     logger.debug("[%s] Could not reach %s", self.name, actor.name)
 
-    async def _check_all_actors(self):
+    async def _check_all_actors(self) -> None:
         if not self._registry:
             return
         now = time.time()
@@ -169,7 +188,7 @@ class MonitorActor(Actor):
 
     # ── Error event handling ───────────────────────────────────────────────
 
-    async def _handle_error_event(self, event: dict):
+    async def _handle_error_event(self, event: dict[str, Any]) -> None:
         """Observer-only: classify severity, fire MQTT alert, notify user.
         The Supervisor is the single restart authority — never call
         actor.stop() / actor.start() here.
@@ -246,7 +265,7 @@ class MonitorActor(Actor):
             for actor_id in [k for k in tracked if k not in keep]:
                 tracked.pop(actor_id, None)
 
-    async def _check_error_registry(self):
+    async def _check_error_registry(self) -> None:
         """Notify user when a previously degraded agent has recovered."""
         for actor_id, event in list(self._error_registry.items()):
             actor = self._find_actor(actor_id)
@@ -268,7 +287,7 @@ class MonitorActor(Actor):
         agent_name: str,
         message: str,
         severity: str = "warning",
-    ):
+    ) -> None:
         now = time.time()
         cooldown = self._last_notified.get(actor_id, 0)
         if (now - cooldown) < _NOTIFY_COOLDOWN and severity != "info":
@@ -300,7 +319,7 @@ class MonitorActor(Actor):
 
     # ── Alerting ───────────────────────────────────────────────────────────
 
-    async def _fire_heartbeat_alert(self, actor: Actor, gap: float):
+    async def _fire_heartbeat_alert(self, actor: Actor, gap: float) -> None:
         alert = {
             "actor_id": actor.actor_id,
             "name": actor.name,
@@ -310,7 +329,7 @@ class MonitorActor(Actor):
             "severity": "warning" if gap < 120 else "critical",
         }
         logger.warning("[%s] ALERT: %s unresponsive for %.0fs", self.name, actor.name, gap)
-        await self._mqtt_publish(f"agents/{actor.actor_id}/alert", alert)
+        await self._mqtt_publish(agent_topic(actor.actor_id, "alert"), alert)
 
         _infra = {
             "monitor",
@@ -329,9 +348,9 @@ class MonitorActor(Actor):
                 severity="warning",
             )
 
-    async def _fire_error_alert(self, event: dict):
+    async def _fire_error_alert(self, event: dict[str, Any]) -> None:
         await self._mqtt_publish(
-            f"agents/{event.get('actor_id', 'unknown')}/alert",
+            agent_topic(event.get("actor_id", "unknown"), "alert"),
             {
                 "actor_id": event.get("actor_id"),
                 "name": event.get("name"),
@@ -351,12 +370,13 @@ class MonitorActor(Actor):
                 return a
         return None
 
-    async def _publish_system_health(self):
+    async def _publish_system_health(self) -> None:
         if not self._registry:
             return
         now = time.time()
         actors = self._registry.all_actors()
         health = {
+            HEALTH_INSTALL_FIELD: install_id(),
             "timestamp": now,
             "total_actors": len(actors),
             "running": sum(1 for a in actors if a.state == ActorState.RUNNING),
@@ -375,9 +395,9 @@ class MonitorActor(Actor):
                 for a in actors
             ],
         }
-        await self._mqtt_publish("system/health", health)
+        await self._mqtt_publish(system_topic("health"), health)
 
-    async def _publish_host_stats(self):
+    async def _publish_host_stats(self) -> None:
         proc = self._proc
         if proc is None:
             # No process handle means no host stats; the rest of the monitor's
@@ -399,6 +419,6 @@ class MonitorActor(Actor):
                 "mem_total_mb": mem_total_mb,
                 "timestamp": time.time(),
             }
-            await self._mqtt_publish("system/host", stats)
+            await self._mqtt_publish(system_topic("host"), stats)
         except Exception as e:
             logger.debug("[%s] host stats error: %s", self.name, e)

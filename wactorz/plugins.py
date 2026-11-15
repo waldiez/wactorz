@@ -1,10 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
 """The agents a deployment brings of its own, found and built in one place.
 
 A developer with their own actor class or a function declared with
 :func:`wactorz.agent` makes it part of the system without forking ``app.py``:
 
-- as a ``wactorz.agents`` entry point in their package, so ``pip install``
-  is the whole of the registration;
+- as a ``wactorz.agents`` entry point in their package, loaded once the package
+  is named in ``WACTORZ_EXTENSIONS`` (see :mod:`wactorz.installed`);
 - named in ``WACTORZ_AGENTS``, a comma-separated list of ``package.module:attr``
   targets, for a deployment configured rather than packaged;
 - passed to :func:`wactorz.run`, for a script.
@@ -16,10 +17,7 @@ a spawn config can be written by the model, and resolving an arbitrary import
 path from it would run whatever that path reached.
 """
 
-from __future__ import annotations
-
 import importlib
-import importlib.metadata
 import inspect
 import logging
 from collections.abc import Iterable, Iterator
@@ -27,11 +25,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import installed
 from .agents.function_agent import AgentSpec, FunctionAgent, agent_name_from, spec_of
 from .config import CONFIG
-from .core.actor import Actor
+from .core.actor import Actor, declared_topics
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The entry-point group a package lists its agents under.
 ENTRY_POINT_GROUP = "wactorz.agents"
@@ -39,6 +38,15 @@ ENTRY_POINT_GROUP = "wactorz.agents"
 MODULE_TYPE = "module"
 #: The environment variable naming targets to load, comma or space separated.
 ENV_VAR = "WACTORZ_AGENTS"
+
+#: The library agents the package itself brings, found on main and on every
+#: node alike, so a spawn naming one by target is built wherever it lands.
+#: None starts with the system: each waits in the catalogue to be asked for.
+BUILT_IN_TARGETS = (
+    "wactorz.agents.recorder_agent:RecorderAgent",
+    "wactorz.agents.train_agent:TrainAgent",
+    "wactorz.agents.drift_agent:DriftAgent",
+)
 
 
 @dataclass
@@ -71,6 +79,7 @@ class AgentPlugin:
         llm_provider: Any = None,
         options: dict[str, Any] | None = None,
         mixin: type | None = None,
+        actor_id: str | None = None,
         **_ignored: Any,
     ) -> Actor:
         """The actor, built the way the catalogue builds a native one.
@@ -83,10 +92,15 @@ class AgentPlugin:
         adds something to every agent it runs -- a node, which routes its
         commands and keeps its state its own way -- without the agent's author
         knowing where it will run.
+
+        ``actor_id`` is the id the spawn registry keeps for the agent. A class
+        whose own ``__init__`` does not take one is given it once built, so the
+        agent runs under the id main keeps whatever its author wrote.
         """
         if self.kind == "function":
             spec: AgentSpec = self.obj
             return spec.build(
+                actor_id=actor_id,
                 name=name,
                 persistence_dir=persistence_dir,
                 llm_provider=llm_provider,
@@ -97,13 +111,19 @@ class AgentPlugin:
         kwargs: dict[str, Any] = {"name": name or self.name}
         if persistence_dir is not None:
             kwargs["persistence_dir"] = persistence_dir
-        accepted = _accepted_parameters(cls)
-        if llm_provider is not None and (accepted is None or "llm_provider" in accepted):
+        named, open_ended = _init_parameters(cls)
+        if llm_provider is not None and "llm_provider" in named:
             kwargs["llm_provider"] = llm_provider
         for key, value in (options or {}).items():
-            if accepted is None or key in accepted:
+            if open_ended or key in named:
                 kwargs[key] = value
-        return cls(**kwargs)
+        if actor_id and "actor_id" in named:
+            kwargs["actor_id"] = actor_id
+        actor = cls(**kwargs)
+        if actor_id and actor.actor_id != actor_id:
+            actor.actor_id = actor_id
+            actor.stable_id = True
+        return actor
 
     @property
     def models(self) -> dict[str, Any]:
@@ -159,27 +179,40 @@ def targets() -> list[str]:
     it may place there. A plugin registered in code under no path is left out:
     nothing elsewhere could name it.
     """
-    return sorted({plugin.target for plugin in discover().values() if plugin.target})
+    found = [*discover().values(), *built_in().values()]
+    return sorted({plugin.target for plugin in found if plugin.target})
 
 
-def _accepted_parameters(cls: type) -> set[str] | None:
-    """The keyword names ``cls.__init__`` takes, or None when it takes anything."""
-    try:
-        params = inspect.signature(cls).parameters.values()
-    except (TypeError, ValueError):
-        return None
-    if any(p.kind is p.VAR_KEYWORD for p in params):
-        return None
-    return {p.name for p in params}
+def _init_parameters(cls: type) -> tuple[set[str], bool]:
+    """The parameters building ``cls`` names, and whether it takes keywords it does not name.
 
-
-def _topics(value: Any) -> tuple[str, ...]:
-    """``value`` as a tuple of topics: one string, several, or none."""
-    if not value:
-        return ()
-    if isinstance(value, str):
-        return (value,)
-    return tuple(str(t) for t in value)
+    An ``__init__`` taking ``**kwargs`` usually hands them on to its base's, and
+    ``Actor.__init__`` refuses what it does not know. So the names are gathered
+    along the class's bases, ``__init__`` by ``__init__``, until one that takes
+    no more than it names: what the system has to offer (``llm_provider``,
+    ``actor_id``) is passed only when one of them names it. The second value
+    says whether the ``__init__`` that runs takes ``**kwargs``, so that a spawn's
+    options reach it whether or not it names them: they are what the spawn
+    asked for, and a key nothing takes should fail rather than vanish.
+    """
+    named: set[str] = set()
+    open_ended: bool | None = None
+    for klass in cls.__mro__:
+        init = vars(klass).get("__init__")
+        if init is None or klass is object:
+            continue
+        try:
+            params = list(inspect.signature(init).parameters.values())[1:]
+        except (TypeError, ValueError):
+            # Nothing to read: let options through, and nothing unnamed.
+            return named, True
+        named.update(p.name for p in params if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD))
+        takes_more = any(p.kind is p.VAR_KEYWORD for p in params)
+        if open_ended is None:
+            open_ended = takes_more
+        if not takes_more:
+            break
+    return named, bool(open_ended)
 
 
 def _first_line(text: str | None) -> str:
@@ -237,8 +270,8 @@ def plugin_from(obj: Any, target: str = "") -> AgentPlugin:
             autostart=bool(getattr(obj, "AUTOSTART", True)),
             input_schema=dict(getattr(obj, "INPUT_SCHEMA", {}) or {}),
             output_schema=dict(getattr(obj, "OUTPUT_SCHEMA", {}) or {}),
-            subscribes=_topics(getattr(obj, "SUBSCRIBES", ())),
-            publishes=_topics(getattr(obj, "PUBLISHES", ())),
+            subscribes=declared_topics(getattr(obj, "SUBSCRIBES", ())),
+            publishes=declared_topics(getattr(obj, "PUBLISHES", ())),
         )
     raise NotAnAgentError(target or obj)
 
@@ -331,7 +364,7 @@ def clear() -> None:
 
 
 def discover(*, env: str | None = None, refresh: bool = False) -> dict[str, AgentPlugin]:
-    """Every plugin, by name: entry points, then ``WACTORZ_AGENTS``, then registered.
+    """Every plugin a deployment brings, by name: entry points, then ``WACTORZ_AGENTS``, then registered.
 
     Found once and kept; ``refresh`` looks again. A target that cannot be
     imported or is not an agent is logged and left out, so one bad entry does
@@ -375,23 +408,49 @@ def discover(*, env: str | None = None, refresh: bool = False) -> dict[str, Agen
 
 def _entry_points() -> list[Any]:
     try:
-        return list(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))
+        return installed.entry_points(ENTRY_POINT_GROUP)
     except Exception as exc:  # pragma: no cover - a broken installation
         logger.warning("[plugins] Could not read %s entry points: %s", ENTRY_POINT_GROUP, exc)
         return []
 
 
+_built_in: dict[str, AgentPlugin] | None = None
+
+
+def built_in() -> dict[str, AgentPlugin]:
+    """The library agents the package itself brings, by name.
+
+    Apart from `discover`, which is what a deployment brings and is shown as
+    its own: these are in the catalogue like the packaged recipes, are built on
+    any node, and start only when asked for.
+    """
+    global _built_in
+    if _built_in is not None:
+        return dict(_built_in)
+    found: dict[str, AgentPlugin] = {}
+    for target in BUILT_IN_TARGETS:
+        try:
+            plugin = plugin_from(resolve_target(target), target)
+        except Exception:  # pragma: no cover - the package's own module
+            logger.exception("[plugins] %s, the package's own, could not be loaded", target)
+            continue
+        plugin.autostart = False
+        found[plugin.name] = plugin
+    _built_in = found
+    return dict(found)
+
+
 def for_name(name: str) -> AgentPlugin | None:
-    """The plugin called ``name``, or None."""
-    return discover().get(name)
+    """The plugin called ``name``, the deployment's or the package's own, or None."""
+    return discover().get(name) or built_in().get(name)
 
 
 def for_target(target: str) -> AgentPlugin | None:
-    """The plugin registered for ``target``, or None: only these may be spawned by path."""
+    """The plugin for ``target``, or None: only these may be spawned by path."""
     wanted = target.strip()
     if not wanted:
         return None
-    for plugin in discover().values():
+    for plugin in [*discover().values(), *built_in().values()]:
         if plugin.target == wanted:
             return plugin
     return None

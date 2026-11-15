@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One slow browser must not stall the broker.
 
 The regression this pins: ``broadcast`` awaited ``send_str`` for every client in
@@ -13,6 +14,8 @@ knowing it.
 
 import asyncio
 import json
+from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from aiohttp import ClientSession, ClientWSTimeout, web
@@ -49,7 +52,7 @@ class _FastSocket:
 
 
 @pytest.fixture(autouse=True)
-def _clean_clients():
+def _clean_clients() -> "Iterator[None]":
     original = set(runtime.ws_clients)
     runtime.ws_clients.clear()
     yield
@@ -149,7 +152,7 @@ class TestTheWriterFailsSafely:
     ) -> None:
         """Building a resync reads the database, so it can fail."""
 
-        def boom(*_a: object, **_k: object) -> dict:
+        def boom(*_a: object, **_k: object) -> dict[str, Any]:
             raise RuntimeError("database gone")
 
         monkeypatch.setattr(ws.events, "snapshot", boom)

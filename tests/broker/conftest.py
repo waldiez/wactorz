@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A real main and a real node, in this process, joined only by a real broker.
 
 Every other test refuses broker connections, so the contract between main and a
@@ -47,7 +48,7 @@ async def until(condition: Callable[[], object], what: str, timeout: float = WAI
 
     try:
         await asyncio.wait_for(poll(), timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail(f"within {timeout:g}s, never: {what}")
 
 

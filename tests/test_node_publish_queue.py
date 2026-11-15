@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A node's publish queue is bounded, and gives way in a stated order.
 
 Unbounded, a broker outage on a node that keeps publishing grows the queue until
@@ -98,8 +99,6 @@ class TestTheCap:
         assert runner.dropped == 1
 
     async def test_publishing_never_blocks(self, runner: Any) -> None:
-        # `wait_for`, not `asyncio.timeout`: the latter is 3.11+ and this
-        # project supports 3.10.
         runner._queue = asyncio.Queue(maxsize=1)
 
         async def publish_many() -> None:
@@ -356,7 +355,9 @@ class TestDrainingTheQueue:
         # sent — an impossible topic, a payload past the protocol's size — would
         # otherwise stop everything behind it for ever.
         class _Picky(self._Client):
-            def publish(self, topic: str, _payload: Any, qos: int = 0, retain: bool = False):
+            def publish(
+                self, topic: str, _payload: Any, qos: int = 0, retain: bool = False
+            ) -> None:
                 if topic.startswith("bad/"):
                     raise ValueError("payload too large")
                 self.sent.append((topic, qos))

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """REST endpoints for system-level state: health, cost, config, and feeds.
 
 Everything here is about the deployment as a whole rather than an individual
@@ -5,18 +6,25 @@ actor. ``config_handler`` is also where each extension's non-secret browser
 config is merged in.
 """
 
-import json
+import asyncio
 import logging
+import math
 import time
+from typing import Any
 
 from aiohttp import web
 from aiohttp.web import Response
 
+from .. import installed
 from ..agents.llm.cost import get_global_cost_info, reset_global_cost, set_cost_limit
-from . import cost, origins, probes, runtime
+from . import cost, origins, panels, probes, questions, runtime
 from .metrics import known_nodes
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
+
+#: Rows ``GET /api/chats`` sends when not told, and the most it sends.
+DEFAULT_CHAT_ROWS = 200
+MAX_CHAT_ROWS = 1000
 
 
 async def readiness_handler(_request: web.Request) -> Response:
@@ -45,7 +53,7 @@ async def nodes_handler(_request: web.Request) -> Response:
 
 async def cost_handler(_request: web.Request) -> Response:
     """Return spend and message totals for the cost widget."""
-    return web.json_response(get_global_cost_info())
+    return web.json_response(await asyncio.to_thread(get_global_cost_info))
 
 
 async def cost_limit_handler(request: web.Request) -> Response:
@@ -58,7 +66,7 @@ async def cost_limit_handler(request: web.Request) -> Response:
             return web.json_response(
                 {"error": "period must be daily, weekly, or monthly"}, status=400
             )
-        set_cost_limit(limit_usd, period)
+        await asyncio.to_thread(set_cost_limit, limit_usd, period)
         return web.json_response({"ok": True, "limit_usd": limit_usd, "period": period})
     except Exception as exc:
         # Our own words, not the exception's. A caller needs to know what to
@@ -74,15 +82,11 @@ async def cost_limit_handler(request: web.Request) -> Response:
 async def cost_reset_handler(_request: web.Request) -> Response:
     """Zero the current spend period without touching the lifetime ledger."""
     try:
-        info = reset_global_cost()
-        # Clear the in-memory lifetime ledger so max() doesn't pin the display
-        # to pre-reset values for the rest of this process lifetime.
-        cost.lifetime_cost.clear()
-        if runtime.db is not None:
-            try:
-                runtime.db.kv_delete("_system", cost.LIFETIME_LEDGER_KEY)
-            except Exception:
-                logger.debug("[api] Could not clear the lifetime ledger", exc_info=True)
+        info = await asyncio.to_thread(reset_global_cost)
+        # Cleared in memory now, and in SQLite after any save already queued, so
+        # neither a save before the reset nor one after it is lost or undone.
+        cost.reset_lifetime()
+        await cost.settled_totals()
         return web.json_response({"ok": True, **info})
     except Exception:
         # A failure here is the database's, not the caller's, and a sqlite
@@ -91,27 +95,105 @@ async def cost_reset_handler(_request: web.Request) -> Response:
         return web.json_response({"error": "Could not reset the cost ledger"}, status=500)
 
 
+def with_question(row: dict[str, Any]) -> dict[str, Any]:
+    """``row``, with the question it is when the ledger still knows it.
+
+    A chat-log row keeps only the words an agent sent, so a question comes
+    back without its buttons; the ledger has the rest. The row then says which
+    question, from which agent, offering what, and the pick once there is one.
+    """
+    if row.get("role") != "assistant":
+        return row
+    asked = questions.asked_in(
+        str(row.get("agent_name", "")), str(row.get("content", "")), float(row.get("ts") or 0.0)
+    )
+    if asked is None:
+        return row
+    agent_id, question = asked
+    return {
+        **row,
+        "question": {
+            "id": question.id,
+            "agent_id": agent_id,
+            "text": question.text,
+            "options": list(question.options),
+            "answer": question.answer,
+        },
+    }
+
+
 async def chat_log_handler(request: web.Request) -> Response:
     """GET /api/chats — query the persistent chat_log table.
 
     Query params:
-      agent   — filter by agent name
+      agent_id — one agent's history, by its id
+      agent   — filter by agent name: every agent that went by it
       role    — filter by role (user | assistant)
       since   — Unix timestamp float, only return rows newer than this
       limit   — max rows to return (default 200, max 1000)
+
+    A row that is a question the ledger knows carries it as ``question``.
     """
     if runtime.db is None:
         return web.json_response([], status=200)
     try:
         agent = request.rel_url.query.get("agent")
+        agent_id = request.rel_url.query.get("agent_id")
         role = request.rel_url.query.get("role")
-        since = float(request.rel_url.query["since"]) if "since" in request.rel_url.query else None
-        limit = min(int(request.rel_url.query.get("limit", 200)), 1000)
-        rows = runtime.db.query_chat_log(agent_name=agent, role=role, since=since, limit=limit)
-        return web.json_response(rows)
+        since = _since(request.rel_url.query.get("since"))
+        limit = _chat_limit(request.rel_url.query.get("limit"))
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    try:
+        rows = await asyncio.to_thread(
+            runtime.db.query_chat_log,
+            agent_name=agent,
+            agent_id=agent_id,
+            role=role,
+            since=since,
+            limit=limit,
+        )
+        return web.json_response([with_question(row) for row in rows])
     except Exception:
         logger.exception("[api] chat log query failed")
         return web.json_response({"error": "Could not read the chat log"}, status=500)
+
+
+class _BadChatQueryError(ValueError):
+    """A query value ``GET /api/chats`` cannot use, and why."""
+
+    @classmethod
+    def not_a_limit(cls) -> "_BadChatQueryError":
+        return cls(f"'limit' is a whole number from 1 (at most {MAX_CHAT_ROWS} are sent)")
+
+    @classmethod
+    def not_a_time(cls) -> "_BadChatQueryError":
+        return cls("'since' is Unix seconds")
+
+
+def _chat_limit(raw: str | None) -> int:
+    """How many rows to send: at most ``MAX_CHAT_ROWS``. SQLite reads a negative limit as none."""
+    if raw is None or raw == "":
+        return DEFAULT_CHAT_ROWS
+    try:
+        value = int(raw)
+    except ValueError:
+        raise _BadChatQueryError.not_a_limit() from None
+    if value < 1:
+        raise _BadChatQueryError.not_a_limit()
+    return min(value, MAX_CHAT_ROWS)
+
+
+def _since(raw: str | None) -> float | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        raise _BadChatQueryError.not_a_time() from None
+    if not math.isfinite(value):
+        raise _BadChatQueryError.not_a_time()
+    return value
 
 
 async def config_handler(request: web.Request) -> Response:
@@ -128,7 +210,7 @@ async def config_handler(request: web.Request) -> Response:
 
     ws_url = f"{protocol}://{ws_host}/ws"
 
-    payload: dict = {
+    payload: dict[str, Any] = {
         # Which Wactorz this is. The dashboard is served from the same wheel, but
         # a browser can hold an old page for a long time, so the version it shows
         # is the running one rather than the one it was built from.
@@ -157,6 +239,8 @@ async def config_handler(request: web.Request) -> Response:
         # with no key there is nothing to sign out of at all.
         "auth": {"canSignOut": bool(CONFIG.api_key) and not origins.from_supervisor(request)},
         "ws_url": ws_url,
+        # Names of packages left out at start, so the page can say how to load one.
+        "extensions": {"blocked": installed.blocked(), "panels": panels.listed(request.app)},
     }
     # Merge each extension's non-secret browser config (e.g. tts availability),
     # namespaced by extension name.
@@ -165,83 +249,66 @@ async def config_handler(request: web.Request) -> Response:
 
 
 async def feed_handler(_request: web.Request) -> Response:
-    """Return recent chat events for the UI feed, with REAL persisted timestamps.
+    """Recent chat turns for the activity feed, oldest first, each at the time it happened.
 
-    Previously this read from kv_store.conversation_history, which is just a
-    JSON list with no timestamps — so each entry got `i` (the loop index) as
-    its timestamp and the frontend re-dated them to "now - i*delta", causing
-    timestamps to reset on every page reload / restart.
-
-    Now we read from the chat_log table, which has a real `ts REAL` column
-    written at the moment each turn happens. Falls back to the legacy
-    kv_store path only if chat_log is empty (e.g. a freshly upgraded DB
-    where nothing has been written yet) so existing users still see their
-    pre-upgrade history on first launch.
+    Read from the chat log, whose rows carry a real time; a database with no
+    chat log rows yet falls back to the conversations agents kept, with times
+    made up in order (`_feed_items`). Read on a thread: the database is a file.
     """
     if runtime.db is None:
         return web.json_response([])
     try:
-        # Primary path — persistent chat_log with real timestamps.
-        try:
-            rows = runtime.db.query_chat_log(limit=50)
-        except Exception as exc:
-            logger.warning("[feed] chat_log query failed: %s", exc)
-            rows = []
-
-        if rows:
-            # query_chat_log returns newest-first; the frontend expects
-            # chronological (oldest-first) so the latest message ends up
-            # at the bottom of the feed.
-            rows = list(reversed(rows))
-            items = [
-                {
-                    "type": "chat",
-                    "label": str(r.get("content", "")),
-                    "agentName": r.get("agent_name", ""),
-                    "role": r.get("role", ""),
-                    "timestamp": float(r.get("ts", 0.0)),  # REAL Unix time, not an index
-                    "_seq": i,
-                    "_agent": r.get("agent_name", ""),
-                }
-                for i, r in enumerate(rows)
-            ]
-            return web.json_response(items)
-
-        # Fallback — legacy kv_store path. Keeps old DBs displaying *something*
-        # until new chat turns start populating chat_log. Synthesises a
-        # timestamp by anchoring the last entry to "now" and walking backwards
-        # in 1-second steps, so at least entries are ordered consistently.
-        kv_rows = runtime.db.conn.execute(
-            "SELECT agent, value FROM kv_store WHERE key='conversation_history'"
-        ).fetchall()
-        items = []
-        now = time.time()
-        for agent_name, value in kv_rows:
-            try:
-                history = json.loads(value)
-                visible = [
-                    m
-                    for m in history
-                    if isinstance(m, dict) and m.get("role") in ("user", "assistant")
-                ]
-                n = len(visible)
-                for i, msg in enumerate(visible):
-                    items.append(
-                        {
-                            "type": "chat",
-                            "label": str(msg.get("content", "")),
-                            "agentName": agent_name,
-                            "role": msg.get("role", ""),
-                            # Synthesised but at least monotonic and anchored
-                            # to a real wall-clock value, not a bare index.
-                            "timestamp": now - (n - 1 - i),
-                            "_seq": i,
-                            "_agent": agent_name,
-                        }
-                    )
-            except Exception:  # noqa: S110  # synthesised sample rows; a gap is not worth a log
-                pass
-        return web.json_response(items[-50:])
+        return web.json_response(await asyncio.to_thread(_feed_items))
     except Exception as exc:
         logger.warning("[feed] handler failed: %s", exc)
         return web.json_response([])
+
+
+def _feed_items() -> list[dict[str, Any]]:
+    """The feed's rows from the database. Run on a thread."""
+    db = runtime.db
+    if db is None:
+        return []
+    try:
+        rows = db.query_chat_log(limit=50)
+    except Exception as exc:
+        logger.warning("[feed] chat_log query failed: %s", exc)
+        rows = []
+    if rows:
+        # Newest first from the query; the feed shows the latest at the bottom.
+        return [
+            {
+                "type": "chat",
+                "label": str(r.get("content", "")),
+                "agentName": r.get("agent_name", ""),
+                "role": r.get("role", ""),
+                "timestamp": float(r.get("ts", 0.0)),
+                "_seq": i,
+                "_agent": r.get("agent_name", ""),
+            }
+            for i, r in enumerate(reversed(rows))
+        ]
+    # What agents kept has no times: anchored to now and walked back a second a
+    # turn, so the order at least holds.
+    items: list[dict[str, Any]] = []
+    now = time.time()
+    for agent_name, history in db.kv_values("conversation_history"):
+        if not isinstance(history, list):
+            continue
+        visible = [
+            m for m in history if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+        ]
+        n = len(visible)
+        items.extend(
+            {
+                "type": "chat",
+                "label": str(msg.get("content", "")),
+                "agentName": agent_name,
+                "role": msg.get("role", ""),
+                "timestamp": now - (n - 1 - i),
+                "_seq": i,
+                "_agent": agent_name,
+            }
+            for i, msg in enumerate(visible)
+        )
+    return items[-50:]

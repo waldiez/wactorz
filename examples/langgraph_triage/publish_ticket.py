@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Publish a few support tickets for the graph to triage."""
 
 import asyncio

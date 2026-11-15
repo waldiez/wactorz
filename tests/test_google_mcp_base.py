@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The shared Google client: hosted MCP first, the REST API when that is refused.
 
 Google's hosted MCP servers answer tool calls with PERMISSION_DENIED for any
@@ -732,7 +733,7 @@ class TestCallbackServer:
             async with http.get(f"{base}/oauth/callback?code=c1&state=s1") as right:
                 assert "authentication complete" in await right.text()
 
-        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.10/3.11.
+        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.11.
         done, _ = await asyncio.wait({waiting}, timeout=5)
         assert waiting in done
         assert waiting.result() == ("c1", "s1")

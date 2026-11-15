@@ -1,6 +1,5 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /* ── AgentFlow Cards ─────────────────────────────────────────────────── */
 .af-cards-grid {
@@ -72,6 +71,13 @@
   font-size: 13px;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.af-card-node {
+  font-size: 11px;
+  color: var(--af-text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

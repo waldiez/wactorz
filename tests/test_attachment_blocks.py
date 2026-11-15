@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a model is shown when a turn carries attachments.
 
 The rule that shapes this: a file can be small enough to upload and still too

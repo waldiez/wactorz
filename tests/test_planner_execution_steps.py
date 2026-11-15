@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Running a one-shot plan: the agents it needs, each step, and the answer.
 
 A step names an agent. If the plan also carries a spawn config and that agent is

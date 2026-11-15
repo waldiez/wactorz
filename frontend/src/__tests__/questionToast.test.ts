@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi } from "vitest";
 import { questionToast } from "../ui/questionToast";
@@ -11,6 +10,7 @@ function message(over: Partial<ChatMessage> = {}): ChatMessage {
         id: "q1",
         from: "installer",
         to: "user",
+        threadId: "installer",
         content: "'probe' needs a package. Install?",
         timestampMs: 0,
         agentId: "installer-id",

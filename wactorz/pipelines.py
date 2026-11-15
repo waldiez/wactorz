@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A pipeline: agents that work together, declared in one place.
 
 The planner builds one from a request; this is the same thing written down by
@@ -29,7 +30,6 @@ the outside world without saying so; that is what a first step is for.
 
 from __future__ import annotations
 
-import importlib.metadata
 import logging
 import time
 from collections.abc import Iterable, Iterator
@@ -37,13 +37,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import plugins
+from . import installed, plugins
 from .agents.rule_agent import RuleConfig
 from .config import CONFIG
 from .core.topic_bus import topic_matches
+from .core.topics import pipeline_topic
 from .plugins import AgentPlugin
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The entry-point group a package lists its pipelines under.
 ENTRY_POINT_GROUP = "wactorz.pipelines"
@@ -70,10 +71,11 @@ class Pipeline:
     @property
     def tick_topic(self) -> str:
         """Where the schedule, if any, publishes its tick."""
-        return f"pipelines/{self.name}/tick"
+        return pipeline_topic(self.name, "tick")
 
     @property
     def schedule_name(self) -> str:
+        """The name of the schedule agent that ticks this pipeline."""
         return f"{self.name}-schedule"
 
     @property
@@ -184,10 +186,12 @@ class PipelineError(ValueError):
 
     @classmethod
     def no_name(cls) -> PipelineError:
+        """The error for a pipeline declared without a name."""
         return cls("a pipeline needs a name")
 
     @classmethod
     def empty(cls, name: str) -> PipelineError:
+        """The error for a pipeline ``name`` declared with neither steps nor rules."""
         return cls(f"pipeline {name!r} has neither steps nor rules")
 
 
@@ -196,10 +200,12 @@ class NotAPipelineError(TypeError):
 
     @classmethod
     def holds(cls, target: str, item: Any) -> NotAPipelineError:
+        """The error for a ``target`` whose value ``item`` is not a :class:`Pipeline`."""
         return cls(f"{target} holds {item!r}, which is not a Pipeline")
 
     @classmethod
     def is_not(cls, target: str) -> NotAPipelineError:
+        """The error for a ``target`` that names something other than a :class:`Pipeline`."""
         return cls(f"{target} is not a Pipeline")
 
 
@@ -348,7 +354,7 @@ def _from_object(obj: Any, target: str) -> dict[str, Pipeline]:
 
 def _entry_points() -> list[Any]:
     try:
-        return list(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))
+        return installed.entry_points(ENTRY_POINT_GROUP)
     except Exception as exc:  # pragma: no cover - a broken installation
         logger.warning("[pipelines] Could not read %s entry points: %s", ENTRY_POINT_GROUP, exc)
         return []

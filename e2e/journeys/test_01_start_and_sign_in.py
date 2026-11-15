@@ -1,6 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
 """An install that has just started: it wants the key, and then shows what it runs."""
 
-from harness import backend, browser, logs
+from harness import backend, browser, logs, waiting
 from harness.probe import Rest
 from harness.run import Run
 
@@ -30,6 +31,12 @@ def test_the_api_answers_nobody_without_the_key(app: backend.Backend) -> None:
     stranger = Rest(app.url)
 
     assert stranger.raw("GET", "/api/actors").status == 401
+    # The wrong key on the form above costs this address a moment, the right key included.
+    waiting.until(
+        lambda: app.rest.raw("GET", "/api/actors").status != 429,
+        timeout=10,
+        what="the wait after a wrong key to pass",
+    )
     assert app.rest.raw("GET", "/api/actors").status == 200
 
 

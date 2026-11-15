@@ -1,10 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
 """The supervisor's crash detection: a FAILED state, an error storm, heartbeat silence.
 
 And what it leaves alone: an actor stopped or deleted on purpose. Needs no
 broker, no LLM and no database.
 """
-
-# pylint: disable=missing-function-docstring,missing-class-docstring
 
 import asyncio
 import logging

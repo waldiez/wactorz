@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Guessing the key has to get expensive, and stay cheap for a typo.
 
 One shared key and no accounts means guessing is the whole attack surface of

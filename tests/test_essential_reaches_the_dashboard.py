@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The flags an agent publishes have to survive the trip to the browser.
 
 A heartbeat carries `protected` and `essential`; the dashboard decides from them

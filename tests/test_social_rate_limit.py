@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Per-sender throttling for the social channels.
 
 Every inbound message costs at least an intent classification plus a completion,

@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Write the GitHub release notes for one version from CHANGELOG.md.
 
     python3 scripts/release_notes.py 0.7.0 --url https://github.com/waldiez/wactorz

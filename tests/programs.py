@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Catalogue programs compiled the way a DynamicAgent compiles them.
 
 A catalogue program runs as source exec'd into a namespace of its own rather

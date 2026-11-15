@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Results that can be awaited without doing anything.
 
 Several agent API calls are synchronous but get `await`ed anyway by generated
@@ -42,14 +43,14 @@ def _itself(value: Any) -> Any:
     yield  # makes this a generator, so awaiting it completes without suspending
 
 
-class AwaitableList(list):
+class AwaitableList(list[Any]):
     """A list that awaits to itself."""
 
     def __await__(self) -> Any:
         return _itself(self)
 
 
-class AwaitableDict(dict):
+class AwaitableDict(dict[str, Any]):
     """A dict that awaits to itself."""
 
     def __await__(self) -> Any:

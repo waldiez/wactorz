@@ -1,7 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
 """OllamaProvider — a local model over HTTP."""
 
 import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 import aiohttp
@@ -10,7 +12,7 @@ from ..attachments import NO_DOCUMENTS, UNREADABLE
 from ..base import LLMProvider, ToolCall, ToolCompletion, _ollama_options
 from ..openai_shape import _openai_tools, _parse_tool_arguments
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 _OLLAMA_TIMEOUT = aiohttp.ClientTimeout(total=600, sock_connect=10)
@@ -20,7 +22,7 @@ _OLLAMA_STREAM_TIMEOUT = aiohttp.ClientTimeout(sock_connect=10, sock_read=120)
 class OllamaProvider(LLMProvider):
     """Local LLM via Ollama."""
 
-    def __init__(self, model: str = "llama3", base_url: str = "http://localhost:11434"):
+    def __init__(self, model: str = "llama3", base_url: str = "http://localhost:11434") -> None:
         self.model = model
         self.base_url = base_url
 
@@ -34,8 +36,8 @@ class OllamaProvider(LLMProvider):
         return True
 
     @staticmethod
-    def _chat_messages(messages: list[dict], system: str = "") -> list[dict]:
-        out: list[dict] = []
+    def _chat_messages(messages: list[dict[str, Any]], system: str = "") -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
         for m in messages:
             content = m.get("content") if isinstance(m, dict) else m
             if isinstance(content, list):
@@ -73,7 +75,9 @@ class OllamaProvider(LLMProvider):
             return out
         return [{"role": "system", "content": system}, *out]
 
-    async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+    async def _complete(
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         payload = {
             "model": self.model,
             "messages": self._chat_messages(messages, system),
@@ -94,7 +98,7 @@ class OllamaProvider(LLMProvider):
 
     async def _complete_with_tools(
         self,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
@@ -157,7 +161,9 @@ class OllamaProvider(LLMProvider):
             assistant_message=assistant_message,
         )
 
-    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
+    async def _stream(
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> AsyncIterator[str | dict[str, Any]]:
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         payload = {
             "model": self.model,

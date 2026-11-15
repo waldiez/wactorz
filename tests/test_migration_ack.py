@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A migration completes when the target says the agent started, not before.
 
 The source stops the agent but keeps its state, so until the target confirms,
@@ -17,6 +18,7 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import SWEEP_INTERVAL_S, TOKEN_TTL_S, Migration
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 
 
 class _Main:
@@ -45,7 +47,11 @@ class _Main:
         setattr(main, "_mqtt_publish", _publish)
         setattr(main, "_spawn_remote", _spawn_remote)
         setattr(main, "_save_to_spawn_registry", self.saved.append)
-        setattr(main, "_get_spawn_registry", lambda: {"collector": {"name": "collector"}})
+        setattr(
+            main,
+            "_get_spawn_registry",
+            lambda: SpawnRegistry.from_names({"collector": {"name": "collector"}}),
+        )
         setattr(main, "_inject_llm_bridge_code", lambda cfg: cfg)
         setattr(main, "_queue_notification", self.notifications.append)
         self.actor = main

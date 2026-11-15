@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Agents to export."""
 
 from .catalog_agent import CatalogAgent

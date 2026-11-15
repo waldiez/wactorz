@@ -19,7 +19,7 @@
 ## Checklist
 
 - [ ] Tests pass (`make test`)
-- [ ] Lint passes (`make lint` and `make lint-py`)
+- [ ] Lint passes (`make lint`)
 - [ ] Added / updated tests for new behaviour
 - [ ] Docs updated if public API changed
 - [ ] CHANGELOG.md entry added (under `[Unreleased]`)

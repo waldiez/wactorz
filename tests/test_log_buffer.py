@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The in-memory log buffer: bounded, redacted, and inert toward other handlers.
 
 Three regressions these pin:

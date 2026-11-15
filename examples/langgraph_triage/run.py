@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Start Wactorz with the triage graph.
 
 Without a model the graph classifies by keywords. Name one to have it read

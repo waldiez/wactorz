@@ -1,10 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end: an extension's actor_decorator enriches the /api/actors payload.
 
 Proves the seam is wired through the real handler — the monitor applies whatever
 decorators extensions register, without knowing what they add.
 """
-
-# pylint: disable=missing-function-docstring
 
 import json
 import sys
@@ -63,7 +62,7 @@ def registry_and_ext_fixture(
 
 
 async def test_actors_handler_applies_registered_decorator(
-    registry_and_ext: pytest.FixtureDef,
+    registry_and_ext: pytest.FixtureDef[Any],
 ) -> None:
     req = SimpleNamespace(app=SimpleNamespace())
     resp = await api_actors.actors_handler(req)  # type: ignore[arg-type]

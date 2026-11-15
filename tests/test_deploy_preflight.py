@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A deploy proves the node can talk to the broker before it reports success.
 
 "Runner started" used to be the last thing a deploy said. It meant one thing: the
@@ -223,7 +224,7 @@ class TestTheAccountFromTheServer:
 
 
 class _Client:
-    """Stands in for `aiomqtt.Client`, recording how the check connected."""
+    """Stands in for the client class the factory builds, recording how the check connected."""
 
     def __init__(self) -> None:
         self.kwargs: dict[str, Any] = {}
@@ -267,7 +268,7 @@ class TestTheOneConnectionTheCheckOpens:
                 ),
             )
         client = _Client()
-        monkeypatch.setattr("aiomqtt.Client", client)
+        monkeypatch.setattr("wactorz.core.mqtt.Client", client)
 
         await InstallerAgent._connect_once("rpi", "per-node", "rpi")
 
@@ -285,7 +286,7 @@ class TestTheOneConnectionTheCheckOpens:
             replace(CONFIG, mqtt_host="10.0.0.1", mqtt_username="", mqtt_password=""),
         )
         client = _Client()
-        monkeypatch.setattr("aiomqtt.Client", client)
+        monkeypatch.setattr("wactorz.core.mqtt.Client", client)
 
         await InstallerAgent._connect_once("rpi", "", "rpi")
 

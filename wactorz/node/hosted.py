@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a node adds to any agent it runs, whatever the agent's own class.
 
 A node runs two kinds of agent: generated code (`NodeAgent`, a
@@ -26,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 from ..agents.function_agent import FunctionAgent
 from ..core import agent_reset
 from ..core.actor import Actor, ReplyError, ask_through, forbidden
+from ..core.manifests import AgentManifest
 from ..core.state_codec import decode_state
 from .state import JsonState, agent_state, flush_states
 
@@ -38,7 +40,7 @@ if TYPE_CHECKING:
 else:
     _Base = object
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class NodeHosted(_Base):
@@ -68,7 +70,7 @@ class NodeHosted(_Base):
 
     # ── State ─────────────────────────────────────────────────────────────────
 
-    def _apply_initial_state(self, config: dict) -> None:
+    def _apply_initial_state(self, config: dict[str, Any]) -> None:
         """Take the state this agent starts with, from a migration or from disk.
 
         Two cases have to be told apart. A plain start or restart has no
@@ -115,10 +117,14 @@ class NodeHosted(_Base):
         flush_states()
 
     def persist(self, key: str, value: Any) -> None:
+        """Remember ``value`` under ``key``, and write it to the node's state file for the
+        agent's next start.
+        """
         self._persistent_state[key] = value
         self._state_file.save(self._persistent_state, changed=(key,))
 
     def recall(self, key: str, default: Any = None) -> Any:
+        """What is remembered under ``key``, or ``default`` when nothing is."""
         return self._persistent_state.get(key, default)
 
     def _own_state(self) -> dict[str, Any]:
@@ -165,7 +171,17 @@ class NodeHosted(_Base):
 
     @property
     def node(self) -> str:
+        """The name of the node this agent runs on."""
         return self._node
+
+    async def _send_manifest(self, manifest: AgentManifest) -> None:
+        """Send ``manifest`` naming this node, and that a task reaches it on the node's own topic.
+
+        Whatever kind of agent this is, so a node that resolves an address from
+        the manifests it hears (`wactorz.core.agent_directory`) knows where every
+        agent of a node of this release runs, and how to send to it.
+        """
+        await super()._send_manifest({**manifest, "node": self._node, "tasks_by_node": True})
 
     # ── Tasks, which arrive on a topic rather than in a mailbox ───────────────
 
@@ -197,13 +213,23 @@ class NodeHosted(_Base):
             return True
         return False
 
-    # ── Commands, which main may send straight to the agent ───────────────────
+    # ── Commands, which reach an agent here through its node ──────────────────
+
+    async def _command_listener(self) -> None:
+        """Listen for nothing: an agent on a node is stopped and started by the node.
+
+        Main asks the node (`nodes/<node>/stop`, a spawn), which owns the
+        bookkeeping a stop needs here: the node's registry, its heartbeat, the
+        state file. A connection of the agent's own for commands would be one
+        more per agent on the broker, on a topic a node's broker account is not
+        let read.
+        """
 
     async def apply_command(self, command: str) -> bool:
         """Carry out a command, through the node that is running this agent.
 
-        A stop or a delete may arrive on `agents/<id>/commands` without passing
-        through the node's control plane. Done by the agent alone, a stop would
+        A stop or a delete asked of the agent itself does not pass through the
+        node's control plane. Done by the agent alone, a stop would
         leave it in the node's registry -- still in its heartbeat, still refusing
         a respawn without `replace` -- and a delete would leave its state file
         and retained topics behind, which is what makes a deleted agent come

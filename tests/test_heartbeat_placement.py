@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Where an agent runs follows its heartbeat, back home included.
 
 Every heartbeat says where its agent runs: a node's name, or "" for this

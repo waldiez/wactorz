@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Third-party integrations: services (Home Assistant, Google, Gmail) and agent
 libraries (LangChain and LangGraph, AG2).
 

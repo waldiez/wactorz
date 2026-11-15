@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a reset clears from a running agent, wherever it runs.
 
 A reset of the stored history, state or counters is half done while the agent

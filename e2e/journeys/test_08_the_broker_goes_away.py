@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The broker stops and comes back: the page says so, and so does an agent it cannot reach."""
 
 import time

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """MQTT-topic → live-state transitions.
 
 ``parse_topic`` decodes each broker message into mutations of
@@ -11,13 +12,13 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from ..agents.llm.cost import get_global_alltime_cost
 from ..core import outbound
 from ..core.questions import QUESTIONS_LEAF
-from . import cost, runtime
+from ..core.topics import AGENTS, NODES, SYSTEM, own_topic_parts
+from . import chat, cost, runtime
 from . import questions as question_ledger
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 #: Most agents tracked in live state at once. Entries are created on any
@@ -37,6 +38,13 @@ MAX_FEED_ENTRIES = 100
 #: will not remove it, because a patch only adds and updates. Kept here so the
 #: REST and WebSocket delete paths cannot spell it differently.
 DELETE_AGENT_FRAME = "delete_agent"
+
+#: The state of an agent the server knows of but has not heard from: started,
+#: no heartbeat or status yet. Every other state is one the agent reported (or a
+#: command it accepted), so "running" keeps meaning ready, reachable over MQTT.
+STARTING = "starting"
+#: What an agent stopped on purpose reports, and what it is listed as.
+STOPPED = "stopped"
 
 
 def _evict_stalest() -> None:
@@ -62,19 +70,33 @@ def _evict_stalest() -> None:
     )
 
 
-def update_agent(agent_id: str, key: str, data) -> None:
+def _known_name(agent_id: str) -> str:
+    """The name to file a newly seen agent under until it says its own.
+
+    A metric or a status can arrive before an agent's first heartbeat, which is
+    what names it here. An agent of this process is named by the registry; any
+    other, an agent on a node, by the start of its id until it is heard from.
+    """
+    actor = runtime.registry.get(agent_id) if runtime.registry is not None else None
+    return actor.name if actor is not None else agent_id[:8]
+
+
+def update_agent(agent_id: str, key: str, data: Any) -> None:
     """Merge one field of an agent's live state, re-admitting it if respawned."""
     if runtime.hard_resetting or runtime.is_deleted(agent_id):
         return
     if agent_id not in runtime.state["agents"]:
         runtime.state["agents"][agent_id] = {
             "agent_id": agent_id,
-            "name": agent_id[:8],
+            "name": _known_name(agent_id),
             "first_seen": time.time(),
             # Set here as well as below: eviction ranks on it, and an entry
             # without one sorts as infinitely stale — so a new arrival would be
             # the first thing dropped, including itself.
             "last_update": time.time(),
+            # A metric can open the entry before the first heartbeat, and says
+            # nothing about whether the agent is ready.
+            "state": STARTING,
         }
         _evict_stalest()
     runtime.state["agents"][agent_id][key] = data
@@ -117,6 +139,24 @@ def record_heartbeat(agent_id: str, data: Any) -> None:
             ag["node"] = data["node"]
         else:
             ag.pop("node", None)
+
+
+def list_stopped_here() -> None:
+    """Give an entry to each actor of this process that is stopped and has none.
+
+    An agent put back stopped when the process starts never runs, so it sends no
+    heartbeat, and a heartbeat is what opens an entry: without one it would be
+    missing from every snapshot. What it would report is read from the actor
+    itself, in the shape a heartbeat has.
+    """
+    if runtime.registry is None:
+        return
+    for actor in runtime.registry.all_actors():
+        if (
+            getattr(getattr(actor, "state", None), "value", None) == STOPPED
+            and actor.actor_id not in runtime.state["agents"]
+        ):
+            record_heartbeat(actor.actor_id, actor._build_heartbeat())
 
 
 def rebuild_from_registry(registry: Any) -> int:
@@ -192,12 +232,14 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
     except Exception:
         data = payload_str
 
-    parts = topic.split("/")
-    if parts[0] == "system" and len(parts) >= 2:
+    parts = own_topic_parts(topic)
+    if parts is None:
+        return None
+    if parts[0] == SYSTEM and len(parts) >= 2:
         return _on_system(parts[1], data)
-    if parts[0] == "agents" and len(parts) >= 3:
+    if parts[0] == AGENTS and len(parts) >= 3:
         return _on_agent(parts[1], parts[2], data, payload_str)
-    if parts[0] == "nodes" and len(parts) >= 3 and parts[2] == "heartbeat":
+    if parts[0] == NODES and len(parts) >= 3 and parts[2] == "heartbeat":
         return _on_node_heartbeat(parts[1], data)
     return None
 
@@ -222,7 +264,7 @@ def _add_alert(alert: Any) -> None:
         runtime.state["alerts"].pop()
 
 
-def _on_agent(agent_id: str, metric: str, data: Any, payload_str: str) -> dict[str, Any]:
+def _on_agent(agent_id: str, metric: str, data: Any, payload_str: str) -> dict[str, Any] | None:
     """One ``agents/<id>/<metric>`` message: the agent's comings and goings, then its leaf."""
     # A withdrawn manifest is an agent saying it no longer exists. It is the
     # one removal signal every ending publishes — an actor that ends itself,
@@ -237,11 +279,7 @@ def _on_agent(agent_id: str, metric: str, data: Any, payload_str: str) -> dict[s
     # stop window putting it back; a respawn re-admits itself on its first
     # status.
     if metric == "manifest" and not payload_str.strip():
-        runtime.state["agents"].pop(agent_id, None)
-        question_ledger.forget(agent_id)
-        runtime.mark_deleted(agent_id)
-        logger.info("[MQTT] Agent %s withdrew its manifest — removing.", agent_id[:8])
-        return {"type": DELETE_AGENT_FRAME, "agent_id": agent_id}
+        return withdraw(agent_id)
 
     if metric == "status" and isinstance(data, dict) and runtime.is_deleted(agent_id):
         _readmit_if_respawned(agent_id, data)
@@ -263,6 +301,24 @@ def _on_agent(agent_id: str, metric: str, data: Any, payload_str: str) -> dict[s
     if frame is not None:
         return frame
     return {"type": "agent", "agent_id": agent_id, "metric": metric, "data": data}
+
+
+def withdraw(agent_id: str) -> dict[str, Any] | None:
+    """Take ``agent_id`` off the dashboard, its withdrawal having stood; the frame that says so.
+
+    The state is cleared every time, and the frame made only the first: one
+    withdrawal is heard more than once (main settles a held one and clears the
+    manifest itself; one main missed is replayed to it), and a card goes once.
+    None when the agent was already gone.
+    """
+    gone_already = runtime.is_deleted(agent_id) and agent_id not in runtime.state["agents"]
+    runtime.state["agents"].pop(agent_id, None)
+    question_ledger.forget(agent_id)
+    runtime.mark_deleted(agent_id)
+    if gone_already:
+        return None
+    logger.info("[MQTT] Agent %s withdrew its manifest — removing.", agent_id[:8])
+    return {"type": DELETE_AGENT_FRAME, "agent_id": agent_id}
 
 
 def _readmit_if_respawned(agent_id: str, data: dict[str, Any]) -> None:
@@ -416,8 +472,24 @@ def _on_chat(agent_id: str, data: Any) -> dict[str, Any]:
     frame: dict[str, Any] = {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}
     if message["content"]:
         add_log({"type": "chat", "agent_id": agent_id, **message})
-        frame["_push_chat"] = {"type": "chat", **message}
+        frame["_push_chat"] = {
+            "type": "chat",
+            **message,
+            "thread_id": _thread_id(agent_id, message),
+        }
     return frame
+
+
+def _thread_id(agent_id: str, message: dict[str, Any]) -> str:
+    """The id of the agent whose thread ``message``, heard on ``agent_id``'s topic, is in.
+
+    Usually that agent's own. A voice agent relays a user's words as from the
+    user to another agent, and those are in that agent's thread.
+    """
+    owner = message["to"] if message["from"] == "user" else message["from"]
+    if owner == _name_of(agent_id):
+        return agent_id
+    return chat.agent_id_of(str(owner))
 
 
 def _on_answer(agent_id: str, data: Any) -> None:
@@ -516,11 +588,9 @@ def node_online(last_seen: float, threshold: float = 45.0) -> bool:
 def snapshot(include_totals: bool = True) -> dict[str, Any]:
     """Render the dashboard state for a websocket client.
 
-    Everything here reads from ``runtime.state`` — in memory, cheap — **except**
-    the two headline totals, which are the only part that touches the database.
-    Resolving them costs one query per agent whose cost is not in an MQTT frame
-    (``best_cost`` falls through to the ``_final_cost`` row), plus two full scans
-    of ``kv_store``.
+    Everything here is read from memory: ``runtime.state``, and for the headline
+    totals what the database last held (`cost.stored_totals`), which a caller
+    refreshes on a thread (`cost.refresh_totals`) when it needs it current.
 
     ``include_totals=False`` omits them, for callers on a hot path. The browser
     keeps whatever it last received: ``WSClient._applyStatePatch`` assigns each
@@ -538,6 +608,7 @@ def snapshot(include_totals: bool = True) -> dict[str, Any]:
         }
     for nd in runtime.state["nodes"].values():
         nd["online"] = node_online(nd.get("last_seen", 0))
+    list_stopped_here()
 
     if not include_totals:
         return {
@@ -561,10 +632,10 @@ def snapshot(include_totals: bool = True) -> dict[str, Any]:
             actors_by_id[a.actor_id] = a
             actors_by_name[a.name] = a
 
-    live_names: set = set()
+    live_names: set[Any] = set()
     live_cost = 0.0
     live_msgs = 0
-    seen_ids: set = set()
+    seen_ids: set[Any] = set()
     for aid, ag in runtime.state["agents"].items():
         seen_ids.add(aid)
         name = ag.get("name", "")
@@ -592,10 +663,7 @@ def snapshot(include_totals: bool = True) -> dict[str, Any]:
     # the counter accrued its spend at call time). Use it as a third floor so the
     # headline never drops below money already spent — and so it can never read
     # lower than the "this period" spend shown beside it.
-    try:
-        alltime_cost = get_global_alltime_cost()
-    except Exception:
-        alltime_cost = 0.0
+    alltime_cost = cost.stored_totals().alltime
     total_cost = max(
         live_cost + cost.historical_cost_usd(live_names),
         cost.lifetime_cost_total(),

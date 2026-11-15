@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """REST endpoints for actors: listing, inspection, and control.
 
 Read paths render the live registry (plus MQTT-reported state) into the
@@ -6,8 +7,8 @@ message to it.
 """
 
 import asyncio
-import json
 import logging
+from typing import Any
 
 from aiohttp import web
 from aiohttp.web import Response
@@ -15,10 +16,10 @@ from aiohttp.web import Response
 from ..core.actor import forbidden
 from . import chat, cost, events, lifecycle, runtime, ws
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
-def _actor_payload(ag: dict) -> dict:
+def _actor_payload(ag: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": ag.get("agent_id", ""),
         "name": ag.get("name", ""),
@@ -77,13 +78,17 @@ async def delete_actor_handler(request: web.Request) -> Response:
     if record.get("protected"):
         return web.json_response({"error": "actor is protected"}, status=403)
     routed = await lifecycle.delete_agent(actor_id)
+    if routed == lifecycle.REFUSED_PROTECTED:
+        # The record above is built from heartbeats; the live actor has the last word.
+        return web.json_response({"error": "actor is protected"}, status=403)
+    await cost.settled_totals()
     await ws.broadcast(
         {"type": events.DELETE_AGENT_FRAME, "agent_id": actor_id, "state": events.snapshot()}
     )
     return web.Response(status=200, text=f"stopping ({routed})")
 
 
-def _remote_entry(actor_id: str) -> tuple[str, dict] | tuple[None, None]:
+def _remote_entry(actor_id: str) -> tuple[str, dict[str, Any]] | tuple[None, None]:
     """The MQTT-reported record for an agent that is not in the local registry.
 
     Agents living on a runner node never appear in the local registry — the read
@@ -143,13 +148,15 @@ async def _lifecycle_handler(request: web.Request, command: str, status: str) ->
         return web.json_response({"error": f"{command} is not allowed for this actor"}, status=403)
 
     routed = await lifecycle.run_command(target, command, "rest-api")
-    if routed == "refused":
-        return web.json_response({"error": f"{command} was refused"}, status=409)
-    if not routed:
-        # Reached only for a remote agent with no broker to reach it through.
+    if routed.route == "refused":
+        return web.json_response({"error": routed.detail or f"{command} was refused"}, status=409)
+    if not routed.done:
+        # Reached only for an agent elsewhere with nothing to reach it through.
         # 503 rather than 200: the command went nowhere, and a caller that was
         # told otherwise would have no way to find that out.
-        return web.json_response({"error": f"{command} could not be delivered"}, status=503)
+        return web.json_response(
+            {"error": routed.detail or f"{command} could not be delivered"}, status=503
+        )
     return web.json_response({"status": status})
 
 
@@ -209,7 +216,13 @@ async def actors_handler(request: web.Request) -> Response:
         from ..ext import collect_actor_decorators
 
         decorators = collect_actor_decorators(request.app)
+        # Read once, off the event loop: the cards themselves are built here, from
+        # live state the loop owns.
+        stored = await asyncio.to_thread(cost.final_costs)
         result = []
+        # A stopped actor with no entry yet gets one, so that it is listed as
+        # stopped and not as starting.
+        events.list_stopped_here()
         for actor in runtime.registry.all_actors():
             if runtime.is_deleted(actor.actor_id):
                 continue
@@ -217,14 +230,16 @@ async def actors_handler(request: web.Request) -> Response:
             payload = {
                 "id": actor.actor_id,
                 "name": actor.name,
-                "state": ag.get("state", "unknown"),
+                # An agent of this process is listed from the moment it is
+                # registered; until it reports, it is starting.
+                "state": ag.get("state", events.STARTING),
                 "protected": bool(getattr(actor, "protected", False)),
                 "mem": ag.get("mem"),
                 "task": ag.get("task"),
                 "messagesProcessed": ag.get("messages_processed")
                 if ag.get("messages_processed") is not None
                 else getattr(getattr(actor, "metrics", None), "messages_processed", None),
-                "costUsd": cost.actor_cost(actor, ag),
+                "costUsd": cost.actor_cost(actor, ag, stored),
             }
             for decorate in decorators:
                 decorate(actor, payload)
@@ -242,6 +257,17 @@ async def actor_handler(request: web.Request) -> Response:
     return web.json_response(_actor_payload(ag))
 
 
+def _stored_history(actor_id: str) -> list[Any]:
+    """The conversation SQLite kept for ``actor_id``, which may be a name such as "main". Run on a thread."""
+    if runtime.db is None:
+        return []
+    try:
+        history = runtime.db.kv_get(actor_id, "conversation_history", [])
+    except Exception:
+        return []
+    return history if isinstance(history, list) else []
+
+
 async def actor_history_handler(request: web.Request) -> Response:
     """Return an actor's persisted conversation history."""
     actor_id = request.match_info["actor_id"]
@@ -253,20 +279,11 @@ async def actor_history_handler(request: web.Request) -> Response:
         actor = runtime.registry.get(actor_id) or runtime.registry.find_by_name(actor_id)
 
     if actor is not None and hasattr(actor, "recall"):
-        history = actor.recall("conversation_history", [])
-    elif runtime.db is not None:
-        # Actor not in registry (deleted or name-only lookup) — read from SQLite.
-        # actor_id might be a display name (e.g. "main") — try it directly.
-        try:
-            row = runtime.db.conn.execute(
-                "SELECT value FROM kv_store WHERE agent=? AND key='conversation_history'",
-                (actor_id,),
-            ).fetchone()
-            history = json.loads(row[0]) if row else []
-        except Exception:
-            history = []
+        # A thread too: the conversation is kept in SQLite, behind the store's lock.
+        history = await asyncio.to_thread(actor.recall, "conversation_history", [])
     else:
-        history = []
+        # Not in the registry (deleted, or looked up by name): what SQLite kept.
+        history = await asyncio.to_thread(_stored_history, actor_id)
 
     visible = [m for m in history if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
     return web.json_response(visible)

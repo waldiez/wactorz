@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """QoS 1 that does not fit in memory waits on disk and comes back; old commands do not.
 
 A QoS 1 message published while the queue is full is already in the SQLite
@@ -178,7 +179,7 @@ class TestRefilling:
         real = pub._read_rows
         calls: list[int] = []
 
-        def flaky(ids: list[int]) -> list[tuple] | None:
+        def flaky(ids: list[int]) -> list[tuple[Any, ...]] | None:
             calls.append(len(ids))
             return None if len(calls) == 1 else real(ids)
 
@@ -219,7 +220,7 @@ class TestAPublishDuringARefill:
         release = threading.Event()
         real = pub._read_rows
 
-        def slow(ids: list[int]) -> list[tuple] | None:
+        def slow(ids: list[int]) -> list[tuple[Any, ...]] | None:
             reading.set()
             release.wait(5)
             return real(ids)
@@ -357,11 +358,12 @@ class TestCommandExpiry:
         assert _stored_topics(pub) == ["nodes/rpi/desired_state"]
         pub._close_db()
 
-    def test_an_old_task_for_an_agent_is_not_replayed(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("topic", ["agents/by-name/lights/task", "agents/at/rpi/lights/task"])
+    def test_an_old_task_for_an_agent_is_not_replayed(self, tmp_path: Path, topic: str) -> None:
         # The rest of the control plane: a task from an hour ago is not one to do now.
         pub = MQTTPublisher(db_path=str(tmp_path / "outbox.db"))
         pub._init_db()
-        self._store(pub, "agents/by-name/lights", MQTTPublisher.COMMAND_EXPIRY_S + 60)
+        self._store(pub, topic, MQTTPublisher.COMMAND_EXPIRY_S + 60)
 
         pub._expire()
 

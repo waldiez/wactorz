@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The reactive-pipeline path: modes, per-step outcomes, and the rule it leaves.
 
 A pipeline request produces persistent agents rather than one answer, so what

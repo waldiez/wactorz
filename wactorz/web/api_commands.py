@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """``GET /api/commands``: the slash commands the dashboard's chat can send.
 
 Each way to type a command, with what it does, for the chat box to offer as

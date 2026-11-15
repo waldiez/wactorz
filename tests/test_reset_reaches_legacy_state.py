@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A wipe has to reach an agent's state in memory as well as on disk.
 
 An actor without a persistence store holds its state in `_persistent_state` and

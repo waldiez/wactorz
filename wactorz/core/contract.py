@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shared app-state keys between core and extensions.
 
 Core provides its keys on the aiohttp app before ``setup_all()`` runs;
@@ -9,8 +10,10 @@ Only *generic* keys live here. Extension-specific keys (identity minter, etc.)
 belong to the extension that owns them, not to core.
 """
 
+from typing import Any
+
 from aiohttp import web
 
 # The live ActorRegistry, set by the web layer before setup_all() so extensions
 # can reach it. Holds None in standalone/legacy MQTT mode.
-ACTOR_REGISTRY: web.AppKey = web.AppKey("actor_registry", object)
+ACTOR_REGISTRY: web.AppKey[Any] = web.AppKey("actor_registry", object)

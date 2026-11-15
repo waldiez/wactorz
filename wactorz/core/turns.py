@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which chat turn, and which agent, the code running now belongs to.
 
 A turn is one message a person sent and everything done to answer it: main
@@ -26,6 +27,8 @@ import uuid
 from collections.abc import Awaitable, Callable, Iterator
 from typing import TypeVar
 
+from .topics import task_target
+
 _turn: contextvars.ContextVar[str] = contextvars.ContextVar("wactorz_turn", default="")
 _agent: contextvars.ContextVar[str] = contextvars.ContextVar("wactorz_agent", default="")
 
@@ -36,8 +39,8 @@ TURN_KEY = "_turn"
 
 
 def is_task_topic(topic: str) -> bool:
-    """Whether ``topic`` carries a task to an agent by name, as nodes receive them."""
-    return topic.startswith("agents/by-name/") and topic.endswith("/task")
+    """Whether ``topic`` carries a task to an agent, as nodes receive them."""
+    return task_target(topic) is not None
 
 
 def turn_of(payload: object) -> str:

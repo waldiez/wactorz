@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The `X-Ingress-Path` header decides how the page addresses its own backend.
 
 Home Assistant's Supervisor sets it when proxying the add-on. Any peer on the

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every actor can subscribe to topics and keep rolling windows, not only generated ones.
 
 A native agent used to open a broker connection of its own for each topic it
@@ -7,6 +8,7 @@ subscribes with one call and the connection is closed when the actor stops.
 """
 
 import asyncio
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -54,7 +56,7 @@ class FakeClient:
 class FakeBroker:
     def __init__(self) -> None:
         self.connections: list[FakeClient] = []
-        self.queue: asyncio.Queue = asyncio.Queue()
+        self.queue: asyncio.Queue[Any] = asyncio.Queue()
 
     def __call__(self, _host: str, _port: int, **_kwargs: Any) -> FakeClient:
         client = FakeClient(self)
@@ -145,7 +147,6 @@ class TestSubscribe:
     async def test_a_plain_function_is_run_off_the_event_loop(
         self, broker: FakeBroker, probe: Probe
     ) -> None:
-        import threading
 
         threads: list[str] = []
 

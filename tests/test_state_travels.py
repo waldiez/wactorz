@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A date, a set or a tuple in an agent's state goes wherever the agent goes.
 
 A node keeps an agent's state as JSON, and a migration carries it as JSON, in
@@ -25,7 +26,7 @@ from wactorz.node.state import JsonState
 
 #: What an agent might remember, in each kind JSON cannot hold on its own.
 VALUES: dict[str, Any] = {
-    "last_seen": dt.datetime(2026, 10, 11, 9, 30, 15, tzinfo=dt.timezone.utc),
+    "last_seen": dt.datetime(2026, 10, 11, 9, 30, 15, tzinfo=dt.UTC),
     "since": dt.date(2026, 1, 1),
     "quiet_from": dt.time(22, 0),
     "cooldown": dt.timedelta(minutes=5),

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
 # Wactorz entry point — starts the Python backend.
 
 set -e

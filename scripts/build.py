@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Build script for Wactorz — produces a PyPI-ready wheel and sdist.
 
 Usage:
@@ -15,11 +16,12 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).parent.parent
 
 
-def run(cmd: list[str], **kwargs) -> None:
+def run(cmd: list[str], **kwargs: Any) -> None:
     print(f"  $ {' '.join(cmd)}")
     result = subprocess.run(cmd, **kwargs)
     if result.returncode != 0:

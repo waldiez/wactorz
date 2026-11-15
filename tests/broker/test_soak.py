@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A main and a node kept busy for a while, watched for anything that only grows.
 
 The other tests here show that each thing works once. This one does the same

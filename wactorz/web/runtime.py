@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shared mutable state for the monitor server.
 
 Single home for the state every monitor module needs: the actor registry and
@@ -12,7 +13,9 @@ are the only names safe to alias-import.
 
 import asyncio
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from ..core.topics import agent_topic, model_topic, node_topic, system_topic
 
 if TYPE_CHECKING:
     import aiomqtt
@@ -26,11 +29,11 @@ MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
 WS_PORT = 8888
 MQTT_TOPICS = [
-    "agents/#",
-    "system/#",
-    "nodes/#",
+    agent_topic("#"),
+    system_topic("#"),
+    node_topic("#"),
     # Where each model's pointers stand, retained by main: models/<name>/<pointer>.
-    "models/+/+",
+    model_topic("+", "+"),
     "homeassistant/state_changes/#",
 ]
 
@@ -65,7 +68,7 @@ mqtt_connected: bool = False
 server_task: "asyncio.Task[None] | None" = None
 
 # ── Live snapshot (mutated in place — never rebound) ─────────────────────────
-state = {
+state: dict[str, Any] = {
     "agents": {},
     "nodes": {},
     "alerts": [],
@@ -73,7 +76,7 @@ state = {
     "log_feed": [],
 }
 
-ws_clients: set = set()
+ws_clients: set[Any] = set()
 
 # ── Deleted-agent tombstones ─────────────────────────────────────────────────
 # IDs that have been explicitly deleted — block re-admission from stale heartbeats.
@@ -81,9 +84,14 @@ ws_clients: set = set()
 # Stored as a list of (agent_id, deleted_at_ts) tuples so we can re-admit on
 # a NEWER status event (which is what a deliberate respawn produces) while
 # still ignoring stale retained messages from the deleted instance.
-deleted_agent_ids: list = []
+deleted_agent_ids: list[Any] = []
 DELETED_IDS_MAX = 1024
 hard_resetting: bool = False
+
+#: Whether the system this server shows runs main: None until it has started,
+#: then latched, so a main that is restarting is waited for rather than taken
+#: for a profile that runs none (`wactorz.web.mqtt.system_started`).
+started_with_main: bool | None = None
 
 
 def mark_deleted(agent_id: str) -> None:
@@ -121,19 +129,19 @@ def undelete(agent_id: str) -> bool:
 # ── Injection points (app.py calls these at boot) ────────────────────────────
 
 
-def set_registry(value) -> None:
+def set_registry(value: "ActorRegistry | None") -> None:
     """Inject the actor registry (direct mode)."""
     global registry
     registry = value
 
 
-def set_system(value) -> None:
+def set_system(value: "ActorSystem | None") -> None:
     """Inject the actor system, whose state the readiness probe reports."""
     global system
     system = value
 
 
-def set_db(value) -> None:
+def set_db(value: "WactorzDB | None") -> None:
     """Inject the persistence DB handle."""
     global db
     db = value

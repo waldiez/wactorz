@@ -18,14 +18,14 @@ _Technical Reference & Developer Guide_
 9. [Reactive Pipelines](#9-reactive-pipelines)
 10. [TopicBus — Reactive Pub/Sub Coordination](#10-topicbus--reactive-pubsub-coordination)
 11. [Code Safety & Validation](#11-code-safety--validation)
-12. [LLM Cost Tracking](#10-llm-cost-tracking)
-13. [Interfaces](#11-interfaces)
-14. [MQTT Topic Reference](#12-mqtt-topic-reference)
-15. [Built-in Specialist Agents](#13-built-in-specialist-agents)
-16. [Catalog Agent — Pre-built Recipe Library](#14-catalog-agent--pre-built-recipe-library)
-17. [Remote Nodes & Edge Deployment](#15-remote-nodes--edge-deployment)
-18. [Installation & Configuration](#16-installation--configuration)
-19. [Troubleshooting](#17-troubleshooting)
+12. [LLM Cost Tracking](#12-llm-cost-tracking)
+13. [Interfaces](#13-interfaces)
+14. [MQTT Topic Reference](#14-mqtt-topic-reference)
+15. [Built-in Specialist Agents](#15-built-in-specialist-agents)
+16. [Catalog Agent — Pre-built Recipe Library](#16-catalog-agent--pre-built-recipe-library)
+17. [Remote Nodes & Edge Deployment](#17-remote-nodes--edge-deployment)
+18. [Installation & Configuration](#18-installation--configuration)
+19. [Troubleshooting](#19-troubleshooting)
 20. [File Structure](#appendix-file-structure)
 
 ---
@@ -291,12 +291,6 @@ async def handle_task(agent, payload):
 
 Wactorz has a four-layer error handling system. Errors are first-class events, not just log lines.
 
-## UPDATE: Section 6 — Health Monitoring & Error Recovery
- 
-Replace the existing "Layer 1" content with this expanded version that includes the self-healing layers:
- 
----
- 
 ### Layer 1 — DynamicAgent: 5-Layer Self-Healing
  
 See [Section 11 — Code Safety & Validation](#11-code-safety--validation) for the full breakdown. In summary:
@@ -754,33 +748,113 @@ python -m wactorz --llm gemini --gemini-model gemini-2.5-pro
 python -m wactorz --interface discord --discord-token YOUR_TOKEN
 ```
 
-**CLI commands:**
+**Chat commands.** What main answers, as its `/help` lists them; the terminal chat passes
+them to main too. A social channel such as Discord runs only the everyday ones
+([Interfaces](interfaces.md)).
 
-| Command | Description |
-|---------|-------------|
-| `/agents` | List all running agents with type and status |
-| `/nodes` | List remote nodes with online/offline status and their agents |
-| `/rules` | List all active pipeline rules |
-| `/rules delete <id>` | Stop and delete a pipeline rule by its ID |
+<!-- commands:start: written by scripts/sync_command_docs.py from the commands' forms -->
+
+#### Agents
+
+| Command | What it does |
+|---|---|
+| `/agents` | List all known agents with descriptions and schemas |
+| `/agents <keyword>` | Filter agents by capability keyword |
+| `/agents copy <agent> <node>` | Run a second agent of that name, from its config, on another node (alongside) |
+| `/agents delete <agent>` | The same as /delete |
+| `/agents remove <agent>` | The same as /delete |
+| `/agents restart <agent>` | Restart an agent, local or remote, state preserved |
+| `/agents stop <agent>` | The same as /stop |
+| `/capabilities` | The same as /agents |
+| `/delete <agent>` | Stop an agent and remove it from the spawn registry |
+| `/packages` | List the packages agents may install without asking |
+| `/packages allow <package> …` | Add packages to that list |
+| `/packages forget <package> …` | Take off packages you added |
+| `/start <agent>` | Start a stopped agent back up |
+| `/stop <agent>` | Stop an agent, keeping its state (reversible) |
+| `@agent-name <msg>` | Send a message directly to a named agent |
+| `@catalog list` | List available catalog recipes |
+| `@catalog spawn <name>` | Spawn a catalog agent |
+
+#### Nodes
+
+| Command | What it does |
+|---|---|
+| `/deploy <node>` | Deploy a node from DEPLOY_TARGETS; bare, list them (SSH credentials come from the environment, not chat) |
+| `/migrate <agent> <node> [--force]` | Move an agent to a different node (state preserved) |
+| `/nodes` | List local + remote nodes and their agents |
+| `/nodes remove <node>` | Stop all agents on a node and remove it |
+| `/nodes restart <node>` | Restart the runner process on a node |
+| `/nodes run <node> <command>` | Run a shell command on a node over SSH, as typed |
+| `/nodes shutdown <node>` | Stop all agents and shut down a node |
+
+#### Models
+
+| Command | What it does |
+|---|---|
+| `/artifacts` | List the models kept on main (wactorz-artifacts) |
+| `/artifacts <name>` | Every version of one model |
+| `/artifacts activate <name:version> [reason]` | Make a version the one agents serve |
+| `/artifacts clear active\|shadow <name> [reason]` | Unset a pointer |
+| `/artifacts judge <name:version> <value>[,<value>...] [label source]` | The label values that count as what a detector should flag (a classifier or regressor: wactorz-artifacts judge --kind ... --field ...) |
+| `/artifacts judge <name:version> none` | Judge it on nothing |
+| `/artifacts policy <name> <field>=<value> ...` | Metric, margin, min_days, min_labelled, significant, automatic |
+| `/artifacts policy <name> none` | Unset the policy |
+| `/artifacts promote <name> [reason]` | Make the shadow version active |
+| `/artifacts shadow <name:version> [reason]` | Try a version beside the active one |
+
+#### Pipelines & Plans
+
+| Command | What it does |
+|---|---|
+| `/clear-plans` | Clear the plan cache |
+| `/plans` | List pending pipeline proposals (dry-run) |
+| `/plans approve <id>` | Execute a proposed pipeline |
+| `/plans reject <id>` | Discard a proposed pipeline |
+| `/plans show <id>` | Inspect a proposal's full code |
+| `/rules` | List active pipeline rules |
+| `/rules delete <id>` | Stop agents and remove a rule |
+| `pipeline! <task>` | Bypass approval and execute immediately (power users) |
+
+#### Memory
+
+| Command | What it does |
+|---|---|
 | `/memory` | Show stored user facts and conversation summary |
-| `/memory clear` | Wipe all stored memory |
-| `/memory forget <key>` | Remove a specific stored fact |
-| `/webhook <service> <url>` | Store a notification webhook URL |
-| `/topics` | List known MQTT topics and their publishing agents |
-| `/artifacts [name]` | List the models kept on main with `wactorz-artifacts`, or every version of one. Main's model is told the same list, so an agent it writes names a model that is there |
-| `/artifacts activate <name:version> [reason]` | Make a version the one agents serve: what a spawn naming the model without a version gets. Activating an earlier version is the rollback |
-| `/artifacts shadow <name:version> [reason]` | Mark a version to try beside the active one; refused for the active version itself |
-| `/artifacts promote <name> [reason]` | Make the shadow version active and clear `shadow` |
-| `/artifacts clear active\|shadow <name>` | Unset a pointer; with `active` unset the bare name means the newest version again |
-| `/cost` | Show per-agent token usage and cost breakdown |
-| `/clear` | Clear the main agent's conversation history |
-| `/clear-plans` | Wipe the planner's plan cache |
-| `/deploy <node-name>` | Bootstrap a configured remote node via SSH (see `DEPLOY_TARGETS`) |
-| `/deploy-pkg <node> <pkg...>` | Install pip packages on a configured remote node, allowing them first |
-| `/packages [allow\|forget <pkg...>]` | Show, add to or take from the packages installed without asking |
-| `/migrate <agent> <node> [--force]` | Move a running agent to a different node. Refused when its state cannot travel as JSON; `--force` moves it without those keys |
-| `/help` | Show all available commands |
-| `@agent-name` | Route your next message directly to a specific agent |
+| `/memory clear` | Wipe all memory |
+| `/memory forget <key>` | Remove one stored fact |
+
+#### Notifications
+
+| Command | What it does |
+|---|---|
+| `/webhook` | List stored webhook URLs |
+| `/webhook <service> <url>` | Store a webhook URL for a service, such as discord or telegram |
+
+#### System & diagnostics
+
+| Command | What it does |
+|---|---|
+| `/bus` | TopicBus registry: contracts, data flows, wiring pairs |
+| `/help` | Show this help |
+| `/mqtt` | MQTT publisher status (connected, queue depth, outbox) |
+| `/registry` | Diagnostic: compare live registry, spawn registry, manifest cache |
+| `/topics` | List MQTT topics published by known agents |
+| `/topics <keyword>` | Filter topics by keyword |
+
+<!-- commands:end -->
+
+Beside the table:
+
+- `/artifacts` names the models kept on main with `wactorz-artifacts`; main's model is told
+  the same list, so an agent it writes names a model that is there. `activate` sets what a
+  spawn naming the model without a version gets, and activating an earlier version is the
+  rollback. `shadow` is refused for the active version itself. With `active` cleared, the
+  bare name means the newest version again.
+- `/migrate` is refused when an agent's state cannot travel as JSON; `--force` moves it
+  without those keys.
+- The terminal chat also takes `/deploy-pkg <node> <package> …`, which installs packages on
+  a configured node, allowing them first, and `quit` or `exit`.
 
 ### REST API
 
@@ -882,7 +956,8 @@ The dashboard starts alongside wactorz by default at `http://localhost:8888`; us
 | `agents/{id}/metrics` | Token usage, cost, tasks completed after each LLM call |
 | `agents/{id}/completed` | Task completion notification with result preview |
 | `agents/{id}/actuations` | Fired by `HomeAssistantActuatorAgent` on each HA service call |
-| `agents/by-name/{name}/task` | Address a task to an agent by name (used by remote agents) |
+| `agents/at/{node}/{name}/task` | A task for the agent called `name` on `node`; only that node subscribes |
+| `agents/by-name/{name}/task` | A task for an agent by name alone, for a node from before tasks went by node; every node subscribes |
 | `agents/{id}/manifest` | Retained capability manifest — publishes, subscribes, schemas, observed samples |
 | `agents/{name}/data/{key}` | Agent-published world state (retained, via SharedStateHub) |
 | `system/health` | Global health snapshot every 15s — running/stopped/failed counts |
@@ -1090,7 +1165,7 @@ Slides that received a real PDF image skip NIM generation. Slides without one fa
 
 ## 17. Remote Nodes & Edge Deployment
 
-Wactorz can run agents on any machine on your network — Raspberry Pi, VM, cloud server, or any device with Python 3.10+. An edge node runs the same package, started in a different role.
+Wactorz can run agents on any machine on your network — Raspberry Pi, VM, cloud server, or any device with Python 3.11+. An edge node runs the same package, started in a different role.
 
 ### How It Works
 
@@ -1257,42 +1332,44 @@ Each takes `node_name` or `host`. Only main may ask for any of them: another age
 
 ## 18. Installation & Configuration
 
+The [installation guide](development.md) is the full version of this section, with upgrading, and [Windows](windows.md) covers Windows.
+
 ### Quick Start
+
+Wactorz needs Python 3.11 or later.
 
 ```bash
 git clone https://github.com/waldiez/wactorz
 cd wactorz
-python -m venv myenv
+python3 -m venv .venv
 
 # Windows
-myenv\Scripts\activate
+.venv\Scripts\activate
 # Mac/Linux
-source myenv/bin/activate
+source .venv/bin/activate
 
 pip install -e ".[all]"
 
-# Set your LLM key
-export ANTHROPIC_API_KEY=sk-ant-...
+# Set your LLM key (or set it in .env, copied from .env.template)
+export LLM_API_KEY=sk-ant-...
 
 # Optional: Home Assistant
 export HA_URL=http://homeassistant.local:8123
 export HA_TOKEN=your_long_lived_token
 
 # Start
-python -m wactorz
+wactorz
 ```
 
 ### MQTT Broker
 
-Wactorz requires an MQTT broker. The simplest option is Mosquitto running locally:
+Wactorz requires an MQTT broker. For one on this machine only, run Mosquitto in Docker with the configuration its image ships for that:
 
 ```bash
-# Windows (after installing Mosquitto)
-mosquitto -v
-
-# Docker
-docker run -it -p 1883:1883 eclipse-mosquitto
+docker run -d --name mosquitto -p 127.0.0.1:1883:1883 eclipse-mosquitto:2.1.2-alpine mosquitto -c /mosquitto-no-auth.conf
 ```
+
+It accepts anonymous clients, so keep it on `127.0.0.1`. The repository's Docker Compose stack runs a broker with accounts instead (`docker compose up -d`, with `MQTT_PASSWORD` set in `.env`).
 
 By default Wactorz connects to `localhost:1883`. Override with `--mqtt-broker` and `--mqtt-port`.
 
@@ -1385,6 +1462,8 @@ wactorz/
 ├── remote_runner.py                           Shim: the module path the single-file runner had
 ├── reset.py                                   `wactorz-reset` CLI — clears persisted state
 ├── artifacts_cli.py                           `wactorz-artifacts` CLI — models kept on main, by name and version
+├── data/                                      Readings as Parquet: the layout, the writer, the loader, retention, `wactorz-data`
+├── train/                                     The `train` step: a recipe fitted in a child process, stored, moved by a margin, `wactorz-train`
 │
 ├── core/
 │   ├── actor.py                               Base Actor — mailbox, lifecycle, heartbeat, spawn, supervisor
@@ -1401,6 +1480,8 @@ wactorz/
 │   ├── monitor_agent.py                       MonitorAgent — heartbeat, error registry, recovery
 │   ├── installer_agent.py                     InstallerAgent — pip install locally + SSH deploy to remote nodes
 │   ├── catalog_agent.py                       CatalogAgent — pre-built recipe library, spawns agents by name
+│   ├── recorder_agent.py                      RecorderAgent — keeps readings of streams as Parquet, on main or on a node
+│   ├── train_agent.py                         TrainAgent — trains a version of a model from recorded readings, on a task
 │   ├── scheduled_agent.py                     ScheduledAgent — first-class time triggers (daily/weekly/cron/once)
 │   ├── one_off_actuator_agent.py              OneOffActuatorAgent — ephemeral one-shot HA actuator
 │   ├── home_assistant_agent.py                HomeAssistantAgent — HA automation CRUD (LLM-backed, intent routing)

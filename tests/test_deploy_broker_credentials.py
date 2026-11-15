@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Broker credentials reach an edge node out of band, and never through an argv.
 
 The runner reads ``MQTT_USERNAME``/``MQTT_PASSWORD`` from its own environment

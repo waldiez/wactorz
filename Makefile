@@ -1,9 +1,9 @@
-.PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py \
-		check fmt fmt-py lint lint-py lint-ci tool-image image image-smoke image-scan lock audit test-py-versions test-broker soak format clean \
+.PHONY: help lint-licenses fmt-licenses dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py \
+		typecheck typecheck-py typecheck-frontend verifytypes fmt fmt-py fmt-frontend lint lint-py lint-frontend lint-ci tool-image image image-smoke image-scan lock audit test-py-versions test-broker soak format clean \
         up down logs shell mqtt-certs \
-        run run-py test test-py test-py-tracked typecheck-tracked python-path test-frontend coverage coverage-py coverage-frontend ci \
+        run test test-py test-py-tracked typecheck-tracked python-path test-frontend coverage coverage-py coverage-frontend ci \
         e2e e2e-setup e2e-clean \
-        install install-py install-docs install-dev install-frontend docs-serve docs-build publish
+        install install-py install-docs install-dev install-frontend docs-serve docs-build docs-check publish
 
 # ── Windows shell setup ──────────────────────────────────────────────────────
 # Recipes below use POSIX shell syntax (grep/awk/mkdir -p/rm -rf/source/trap/
@@ -84,9 +84,6 @@ help: ## Show this help
 run: ## Start the Python backend via run.sh
 	./run.sh
 
-run-py: ## Explicitly start the Python backend
-	./run.sh
-
 dev-backend: ## Start the backend in dev mode (Python REST on :8080)
 	WACTORZ_DEV_MODE=1 ./run.sh
 
@@ -136,25 +133,47 @@ build-frontend: ## Build Vite frontend and sync to installed package
 	  cp -r static/app/ "$$INST/"; \
 	fi
 
-check: ## Typecheck the frontend (fast)
+typecheck: typecheck-py typecheck-frontend ## Type-check everything (Python + frontend)
+
+typecheck-py: ## Type-check Python (basedpyright)
+	$(PYTHON) -m basedpyright
+
+# The least type completeness the package may have, as `make verifytypes` scores it.
+# A ratchet: raised as the score rises, never lowered to pass a branch.
+VERIFYTYPES_FLOOR := 100.00
+
+verifytypes: ## Score the package's public types as its users' type checkers read them (fails below the floor, or without py.typed)
+	$(PYTHON) scripts/verify_types.py --floor $(VERIFYTYPES_FLOOR)
+
+typecheck-frontend: ## Type-check the frontend (fast)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run typecheck
 
-fmt: ## Format TypeScript
-	cd $(FRONTEND_DIR) && $(PKG_MGR) run fmt 2>/dev/null || $(PKG_MGR) x prettier --write "src/**/*.ts"
+fmt: fmt-licenses fmt-py fmt-frontend ## Format everything (Python + frontend + license lines)
 
-format: fmt ## Format TypeScript
+format: fmt ## Format everything (Python + frontend)
+
+fmt-frontend: ## Format the frontend (prettier)
+	cd $(FRONTEND_DIR) && $(PKG_MGR) run fmt
 
 fmt-py: ## Format Python (ruff format + safe autofixes) — run this to pass the gate
 	$(PYTHON) -m ruff format wactorz tests scripts e2e examples
 	$(PYTHON) -m ruff check wactorz tests scripts e2e examples --fix
 
-lint: ## Full frontend lint (typecheck + prettier + eslint)
+lint: lint-py lint-frontend lint-licenses ## Lint everything (Python + frontend + license lines)
+
+lint-licenses: ## Check that every source file, and the built dashboard, opens with the license line
+	$(PYTHON) scripts/license_notices.py
+
+fmt-licenses: ## Write the license line into every source file missing it
+	$(PYTHON) scripts/license_notices.py --fix
+
+lint-frontend: ## Lint the frontend (typecheck + prettier + eslint + markdownlint)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run lint
 
 lint-py: ## Lint Python — gated ruff + basedpyright (fail) + advisory ruff families (report only)
 	$(PYTHON) -m ruff check wactorz tests scripts e2e examples
 	$(PYTHON) -m ruff format --check wactorz tests scripts e2e examples
-	@echo "── advisory (non-blocking): not-yet-gated families ──"
+	@echo "── advisory (non-blocking): complexity, C90 ──"
 	-$(PYTHON) -m ruff check wactorz --extend-select C90 --statistics
 	@echo "── gated: basedpyright (basic) ──"
 	$(PYTHON) -m basedpyright
@@ -163,6 +182,11 @@ lint-py: ## Lint Python — gated ruff + basedpyright (fail) + advisory ruff fam
 # A function rather than a nested `$(MAKE) tool-image`: a recipe line naming
 # $(MAKE) runs even under `make -n`, so a dry run would start the containers.
 tool-image = $(shell sed -n 's/^FROM \(.*\) AS $(1)$$/\1/p' ci/tools/Dockerfile)
+
+# The broker the tests, the soak and the image smoke test start: compose.yaml's,
+# so the stack and every test run one release, and Dependabot moves it in one
+# pull request (the compose updater owns both compose files).
+broker-image = $(shell sed -n 's/^ *image: \(eclipse-mosquitto:.*\)$$/\1/p' compose.yaml)
 
 # The shell scripts shellcheck reads. The add-ons' run.sh start with bashio's
 # shebang, which shellcheck cannot place, so they are named as bash.
@@ -225,7 +249,7 @@ image: ## Build the app image as CI does (the Debian upgrade stage never cached)
 
 image-smoke: ## Smoke-test IMAGE beside a broker: /health and /ready on both servers, no root, no set-id; an ultra image also imports what it adds
 	$(require-image)
-	scripts/image-smoke.sh "$(IMAGE)" "$(call tool-image,mosquitto)"
+	scripts/image-smoke.sh "$(IMAGE)" "$(broker-image)"
 
 # Fixable CRITICAL and HIGH findings fail. One that cannot be fixed here yet, such
 # as a new Debian fix the pinned base has not picked up, is accepted in
@@ -245,8 +269,8 @@ image-scan: ## Scan IMAGE for fixable CRITICAL/HIGH vulnerabilities (accepted on
 		--skip-db-update --ignorefile /trivyignore.yaml --table-mode detailed --show-suppressed --exit-code 1 \
 		$(SCAN_ARGS) "$(IMAGE)"
 
-tool-image: ## Print the pinned image of a CI tool, NAME=zizmor|shellcheck|trivy|hadolint|mosquitto (ci/tools/Dockerfile)
-	@echo "$(call tool-image,$(NAME))"
+tool-image: ## Print the pinned image of a CI tool, NAME=zizmor|shellcheck|trivy|hadolint (ci/tools/Dockerfile), or mosquitto (compose.yaml)
+	@echo "$(if $(filter mosquitto,$(NAME)),$(broker-image),$(call tool-image,$(NAME)))"
 
 # ── Docker stack ────────────────────────────────────────────────────────────
 
@@ -309,28 +333,8 @@ lock: ## Re-resolve uv.lock after changing dependencies in pyproject.toml (needs
 	$(require-uv)
 	uv lock
 
-# Advisories the audit passes over, each with the reason. Pillow fixes these in
-# 13.0, which needs Python 3.11, so the lock keeps 12.3 for Python 3.10 alone and
-# no fixed release exists there; every other Python, the images included, locks
-# 13. The last five are the same case: two more for Pillow 12.3, then three for
-# filelock, fixed in 4.2.1, which needs 3.11 too, so 3.10 keeps the 4.0 line
-# (only torch, an optional dependency, pulls it in). Remove them when Python 3.10
-# is dropped or a fix reaches it.
-AUDIT_IGNORE := GHSA-65qm-jvmh-6pqg GHSA-vx6w-vv9f-6gvg GHSA-58r4-6rv3-gfh8 \
-	GHSA-q45j-58j2-45rg GHSA-462x-pgg6-55fp GHSA-8g5g-8vmr-9782 \
-	GHSA-c6hw-5grf-ff96 GHSA-p4wg-p73j-c528 GHSA-pchr-8j38-3x4p \
-	GHSA-rfgq-q3w2-pmv2 GHSA-w889-685w-c8fh GHSA-xgh8-jp6q-p5x8 \
-	GHSA-xvh5-g6gv-559v GHSA-27h8-gf7j-v5hc GHSA-f2g6-542v-9j58 \
-	GHSA-fc9g-5qg7-mf45 GHSA-j4m9-6w36-pw47 GHSA-jg86-v3jv-hrpm \
-	GHSA-74r2-7ff9-mjj2 GHSA-4558-3h8r-v8xp GHSA-gg2r-wvfm-q9rx \
-	GHSA-cp9v-662q-vvx9 GHSA-332p-7hrc-92wf GHSA-4rr5-89j8-mwwm \
-	GHSA-5xm2-6676-qcp9 GHSA-22hg-r758-rrw9 GHSA-254f-3936-288h \
-	GHSA-7mwm-ghpf-9vrm GHSA-4rm8-3hmm-39fg GHSA-9v9v-9qvf-h2hj \
-	GHSA-g4qv-2jxx-769h GHSA-p8hx-v2p6-rp84 GHSA-3j72-p6qg-6xp7 \
-	GHSA-g842-9rc4-69pw GHSA-78g4-xqwv-q3g8 GHSA-24rc-8hj2-v98c \
-	GHSA-g7cr-3p24-7wf7 GHSA-mrfp-p49p-3hf2 GHSA-v9pv-5gc8-w2m6 \
-	GHSA-654x-cwwv-5j9c GHSA-5x8w-8jj5-q52h \
-	GHSA-v4x8-3wr5-3wq8 GHSA-9vhv-jxww-xfm5 GHSA-567q-5qvw-pf92
+# Advisories the audit passes over, each listed here with the reason it is accepted.
+AUDIT_IGNORE :=
 
 audit: ## Known vulnerabilities in the locked dependencies (needs uv)
 	$(require-uv)
@@ -372,10 +376,10 @@ test-py: ## Run Python tests (pytest)
 	$(PYTHON) -m pytest tests -n auto
 
 # The Python versions `test-py-versions` runs on: those pyproject.toml supports,
-# as CI's matrix. Narrow it for a quicker look, e.g. PYTHONS="3.10 3.11", the two
-# whose asyncio differs most. Opt-in only: nothing else runs it, since each
+# as CI's matrix. Narrow it for a quicker look, e.g. PYTHONS="3.11 3.14", the
+# oldest and newest. Opt-in only: nothing else runs it, since each
 # version takes about as long as `make test-py`.
-PYTHONS ?= 3.10 3.11 3.12 3.13 3.14
+PYTHONS ?= 3.11 3.12 3.13 3.14
 
 test-py-versions: ## Run the Python tests on each supported version (PYTHONS=...), in throwaway uv environments (needs uv)
 	$(require-uv)
@@ -388,8 +392,11 @@ test-py-versions: ## Run the Python tests on each supported version (PYTHONS=...
 # A real main and a real node, in one process, joined only by a real mosquitto
 # started for the run: the contract between them, exercised rather than pinned.
 # The ordinary suite refuses every broker connection, so these are skipped there.
-test-broker: ## Run the main-and-node tests over a real mosquitto, started for the run (needs Docker)
-	scripts/test-broker.sh "$(call tool-image,mosquitto)" "$(PYTHON)" -q
+# Twice: as an install with no namespace, then with one, where every topic of
+# Wactorz's own and every node rule moves under it.
+test-broker: ## Run the main-and-node tests over a real mosquitto, without a namespace and with one (needs Docker)
+	scripts/test-broker.sh "$(broker-image)" "$(PYTHON)" -q
+	WACTORZ_NAMESPACE=lab scripts/test-broker.sh "$(broker-image)" "$(PYTHON)" -q
 
 # The same main and node, kept busy for DURATION seconds: agents spawned, asked
 # and deleted over and over, with what is left behind compared after every
@@ -398,7 +405,7 @@ test-broker: ## Run the main-and-node tests over a real mosquitto, started for t
 DURATION ?= 300
 soak: ## Keep a main and a node busy over a real mosquitto for DURATION seconds and fail on anything that only grows (needs Docker)
 	WACTORZ_SOAK_SECONDS=$(DURATION) WACTORZ_SOAK_REPORT=$(SOAK_REPORT) \
-		scripts/test-broker.sh "$(call tool-image,mosquitto)" "$(PYTHON)" -q -s -k soak
+		scripts/test-broker.sh "$(broker-image)" "$(PYTHON)" -q -s -k soak
 
 test-frontend: ## Run frontend tests (vitest)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run test
@@ -418,8 +425,13 @@ e2e-setup: install-frontend ## One-time: install Playwright, the browser the e2e
 	$(PYTHON) -m pip install -e ".[e2e]"
 	$(PYTHON) -m playwright install chromium
 
+# On disk rather than the system's temp directory, which can be a small tmpfs.
+# Overridable: a socket under here must stay short of the platform's path limit.
+E2E_TMPDIR ?= $(CURDIR)/e2e/out/tmp
+
 e2e: ## Run the end-to-end journeys (needs Docker; `make e2e-setup` once)
-	$(PYTHON) -m pytest -c e2e/pytest.ini --rootdir e2e e2e/journeys
+	@mkdir -p "$(E2E_TMPDIR)"
+	TMPDIR="$(E2E_TMPDIR)" $(PYTHON) -m pytest -c e2e/pytest.ini --rootdir e2e e2e/journeys
 
 e2e-clean: ## Delete what failed e2e runs kept (logs, traces, state)
 	@# A run that passes removes its own directory; one that fails keeps it.
@@ -447,6 +459,9 @@ docs-serve: ## Build docs + serve locally on :8001
 
 docs-build: ## Build full docs site (markdown→HTML + typedoc) into static/docs/
 	$(PYTHON) -W ignore::UserWarning:pdoc scripts/build_docs.py --full
+
+docs-check: ## Check that static/docs matches a clean build of docs/ (what CI runs)
+	$(PYTHON) scripts/build_docs.py --check
 
 publish: ## Build wheel + sdist and upload to PyPI (requires twine + API token)
 	$(PYTHON) scripts/build.py --upload

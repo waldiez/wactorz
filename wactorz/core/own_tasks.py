@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Telling the system's tasks from a host's, on a loop the two share.
 
 A program that embeds Wactorz lends it an event loop: a notebook's, a web

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An actor's and a store's state directories are made when written to, not when built.
 
 Building an object is not the moment to touch the disk: a test, or a script that

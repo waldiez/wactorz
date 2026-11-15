@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the state migration does to the data it finds, and what it leaves alone.
 
 `tests/test_migration_versions.py` covers the version bookkeeping. This covers
@@ -13,7 +14,7 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -111,7 +112,7 @@ class TestConversationHistory:
         assert value == stored
 
     def test_a_database_without_the_table_is_not_an_error(self, bare: BareDB) -> None:
-        _upgrade_conversation_history(bare, None)
+        _upgrade_conversation_history(cast(WactorzDB, bare), None)
 
 
 class TestMigrateState2:

@@ -1,9 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
 import json
 import logging
 import re
 import shutil
 import time
+from collections.abc import Iterator
 from typing import Any, ClassVar
 
 from wactorz.config import CONFIG
@@ -15,10 +17,11 @@ from ..core.integrations.home_assistant.ha_helper import (
     normalize_ha_ws_url,
 )
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
+from ..core.topics import agent_topic
 from .home_assistant_actuator_agent import ActuatorAction
 from .llm_agent import LLMProvider, accumulate_global_cost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # Import-time marker: appears once at startup so it is unambiguous which
 # version of this module the running process loaded.
@@ -395,22 +398,27 @@ class OneOffActuatorAgent(Actor):
         kwargs.setdefault("name", f"one-off-actuator-{task_id[-8:]}")
         super().__init__(**kwargs)
         self.request = request
-        self.conversation_context = list(conversation_context or [])[-4:]
+        self.conversation_context: list[dict[str, Any]] = list(conversation_context or [])[-4:]
         self.llm = llm_provider
         self.task_id = task_id
         self.reply_to_id = reply_to_id
         # None = trusted caller (dashboard/CLI), every domain allowed. A set
         # restricts execution to those domains; see SOCIAL_ACTUATE_DOMAINS.
-        self.allowed_domains = frozenset(allowed_domains) if allowed_domains is not None else None
-        self.total_input_tokens = 0
-        self.total_output_tokens = 0
-        self.total_cost_usd = 0.0
+        self.allowed_domains: frozenset[str] | None = (
+            frozenset(allowed_domains) if allowed_domains is not None else None
+        )
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
+        self.total_cost_usd: float = 0.0
         self._last_period_cost_usd = 0.0
 
     def _current_task_description(self) -> str:
         return self.request[:60] if self.request else "one-shot actuation"
 
     async def on_start(self) -> None:
+        """Publish the manifest and carry out the one request the agent was spawned with, in the
+        background.
+        """
         await self.publish_manifest(
             description=self.DESCRIPTION,
             capabilities=self.CAPABILITIES,
@@ -426,7 +434,8 @@ class OneOffActuatorAgent(Actor):
         )
         self.run_detached(self._run(), name="actuation")
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
+        """Ignore every message: the agent's one request came with its spawn."""
         if msg.type == MessageType.TASK:
             return
 
@@ -435,14 +444,14 @@ class OneOffActuatorAgent(Actor):
             result = await self._execute_request()
             self.metrics.tasks_completed += 1
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/metrics",
+                agent_topic(self.actor_id, "metrics"),
                 self._build_metrics(),
             )
             await self._send_result(result)
         except Exception as exc:
             self.metrics.tasks_failed += 1
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/metrics",
+                agent_topic(self.actor_id, "metrics"),
                 self._build_metrics(),
             )
             logger.exception("[%s] One-shot actuation failed", self.name)
@@ -908,7 +917,7 @@ class OneOffActuatorAgent(Actor):
                 return self._entity_supports_color(entity)
         return False
 
-    def _iter_entities(self, node: Any):
+    def _iter_entities(self, node: Any) -> Iterator[dict[str, Any]]:
         if isinstance(node, dict):
             entity_id = str(node.get("entity_id") or "")
             if entity_id.startswith("light."):
@@ -1053,7 +1062,7 @@ class OneOffActuatorAgent(Actor):
     async def _log(self, msg: str) -> None:
         logger.info("[%s] %s", self.name, msg)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": msg, "timestamp": time.time()},
         )
 

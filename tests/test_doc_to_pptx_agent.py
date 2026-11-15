@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The doc-to-pptx agent: reading a document, placing its images, and building the deck.
 
 `test_pptx_theme_colors.py` holds the palette to six-digit colours,
@@ -335,6 +336,10 @@ class TestTheOutline:
         assert outline["title"] == "Quarterly Review"
         assert "Produce exactly 3 slides" in llm.prompts[0]
         assert "x" * 4001 not in llm.prompts[0]
+
+    async def test_without_an_llm_it_says_so(self) -> None:
+        with pytest.raises(RuntimeError, match="spawned without an LLM"):
+            await NS["_extract_outline"](_Agent(None), "some text", 3)
 
 
 class TestTheDeck:

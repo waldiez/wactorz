@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 Tests for the real WactorzDB write path against an on-disk SQLite database.
 
@@ -14,38 +15,39 @@ import time
 import unittest
 from pathlib import Path
 
+from wactorz.core.identity import derive_actor_id
 from wactorz.core.persistence import SCHEMA_SQL, WactorzDB
 
 
 class WactorzDBWritePathTest(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self._dir = tempfile.TemporaryDirectory()
         # mirror cli.py's default relative layout: ./state/wactorz.db
         self.db = WactorzDB(Path(self._dir.name) / "state" / "wactorz.db")
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         self.db.close()
         self._dir.cleanup()
 
-    def test_kv_roundtrip(self):
+    def test_kv_roundtrip(self) -> None:
         """kv_set/kv_get must work — this is the path that failed on old SQLite."""
         self.db.kv_set("agent-a", "answer", {"n": 42})
         self.assertEqual(self.db.kv_get("agent-a", "answer"), {"n": 42})
         self.assertEqual(self.db.kv_get("agent-a", "missing", "default"), "default")
 
-    def test_all_write_methods_compile_and_persist(self):
+    def test_all_write_methods_compile_and_persist(self) -> None:
         """Every public write must compile against the live SQLite engine."""
         ts = time.time()
         self.db.write_sensor(ts, "sensors/temp", "sensor.t", "temp", 21.5, unit="C")
         self.db.write_detection(ts, "yolo", "person", 0.9)
         self.db.write_ha_state(ts, "light.kitchen", "off", "on", domain="light")
         self.db.write_actuation(ts, "act", "light", "turn_on", "light.kitchen")
-        self.db.write_chat_log(ts, "main", "user", "hello")
+        self.db.write_chat_log(ts, "main", "user", "hello", agent_id=derive_actor_id("main"))
         # round-trips read back
         self.assertEqual(len(self.db.query_chat_log("main")), 1)
         self.assertEqual(len(self.db.query_sensor(topic="sensors/temp")), 1)
 
-    def test_default_timestamp_is_populated(self):
+    def test_default_timestamp_is_populated(self) -> None:
         """
         A write that omits the DEFAULT-bearing column forces the DEFAULT
         expression to evaluate; it must succeed and yield ~now.
@@ -63,7 +65,7 @@ class WactorzDBWritePathTest(unittest.TestCase):
 
 
 class SchemaPortabilityTest(unittest.TestCase):
-    def test_schema_uses_no_version_gated_functions(self):
+    def test_schema_uses_no_version_gated_functions(self) -> None:
         """
         Guard against reintroducing functions with a recent SQLite floor.
         CI's bundled SQLite is modern, so a real-DB test alone would not catch
@@ -77,7 +79,7 @@ class SchemaPortabilityTest(unittest.TestCase):
                 f"expression for portability",
             )
 
-    def test_schema_creates_on_any_sqlite(self):
+    def test_schema_creates_on_any_sqlite(self) -> None:
         """The full schema must compile on the running SQLite engine."""
         conn = sqlite3.connect(":memory:")
         try:

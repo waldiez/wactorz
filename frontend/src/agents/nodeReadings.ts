@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
  * A node's readings out of whatever carried them: its heartbeat over MQTT, or

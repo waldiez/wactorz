@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Report functions missing annotations, or using a bare container type.
 
 Neither ruff nor basedpyright flags a missing annotation, so a clean run of

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What an agent remembers across an in-place code repair.
 
 A repair compiles the model's new code into a fresh namespace, so anything the
@@ -15,7 +16,7 @@ from typing import Any
 
 from .resources import ENTRY_POINTS
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Values that are memory rather than machinery, so they are copied across.
 DATA_TYPES = (bool, int, float, str, bytes, list, dict, set, tuple)

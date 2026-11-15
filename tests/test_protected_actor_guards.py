@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A protected actor must not be replaced or deleted out from under the system.
 
 `actor_id` is a uuid5 of the name and `ActorRegistry.register` replaces whatever
@@ -11,14 +12,22 @@ protected actor with 403, the WebSocket path did not, and the two reached the
 same code.
 """
 
+import dataclasses
 from pathlib import Path
 from typing import Any
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
+from wactorz import config
 from wactorz.core.actor import Actor, Message
 from wactorz.core.registry import ActorRegistry, ProtectedActorCollision
 from wactorz.web import lifecycle, runtime
+from wactorz.web import ws as web_ws
+from wactorz.web.app import build_app
+
+KEY = "a-key-for-the-delete-tests"
 
 
 class _Agent(Actor):
@@ -133,3 +142,42 @@ class TestDeleteRefusesProtected:
         runtime.state["agents"] = {actor.actor_id: {"name": "weather", "protected": True}}
 
         assert await lifecycle.delete_agent(actor.actor_id) != "refused-protected"
+
+
+class TestTheRouteRefusesProtected:
+    """`DELETE /api/actors/{id}` says so, where the heartbeats' record does not."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_runtime(self) -> Any:
+        registry, agents = runtime.registry, dict(runtime.state["agents"])
+        yield
+        runtime.registry, runtime.state["agents"] = registry, agents
+
+    async def test_a_protected_actor_its_record_does_not_mark_is_answered_403_and_stays(
+        self, registry: ActorRegistry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        actor = _agent("main", tmp_path, protected=True)
+        await registry.register(actor)
+        frames: list[dict[str, Any]] = []
+
+        async def _broadcast(frame: dict[str, Any]) -> None:
+            frames.append(frame)
+
+        monkeypatch.setattr(config, "CONFIG", dataclasses.replace(config.CONFIG, api_key=KEY))
+        monkeypatch.setattr(web_ws, "broadcast", _broadcast)
+        client: TestClient[web.Request, web.Application] = TestClient(TestServer(build_app()))
+        await client.start_server()
+        runtime.registry = registry
+        runtime.state["agents"] = {actor.actor_id: {"name": "main"}}
+        try:
+            response = await client.delete(
+                f"/api/actors/{actor.actor_id}", headers={"X-API-Key": KEY}
+            )
+            answer = await response.json()
+        finally:
+            await client.close()
+
+        assert (response.status, answer) == (403, {"error": "actor is protected"})
+        # No card is taken off a dashboard for an agent that is still there.
+        assert frames == []
+        assert registry.find_by_name("main") is actor

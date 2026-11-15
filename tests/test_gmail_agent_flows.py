@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The Gmail agent's request flow: understanding a request, then serving it.
 
 A request is understood by the model when there is one and by a rule-based

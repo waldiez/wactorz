@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The add-on version is allowed to move on its own, and the script must let it.
 
 An add-on rebuild that ships no new library code — a `run.sh` fix, a schema

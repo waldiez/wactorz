@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for ``wactorz.agents.main.memory.MemoryMixin``.
 
 Exercises the real mixin against a fake host that supplies the Actor/LLMAgent
@@ -10,11 +11,12 @@ Run with ``pytest`` (or ``make test-py``). Async methods are driven through
 
 import asyncio
 from collections.abc import Callable
+from typing import Any
 
 from wactorz.agents.main.memory import MemoryMixin
 
 
-def run(coro):
+def run(coro) -> Any:
     return asyncio.run(coro)
 
 
@@ -22,27 +24,27 @@ def run(coro):
 
 
 class FakeActor:
-    def __init__(self, name, description=""):
+    def __init__(self, name, description="") -> None:
         self.name = name
         self.DESCRIPTION = description
 
 
 class FakeRegistry:
-    def __init__(self, actors):
+    def __init__(self, actors) -> None:
         self._actors = actors
 
-    def all_actors(self):
+    def all_actors(self) -> list[Any]:
         return list(self._actors)
 
 
 class FakeLLM:
     """Returns a preset raw string from ``complete``; records calls."""
 
-    def __init__(self, raw):
+    def __init__(self, raw) -> None:
         self.raw = raw
         self.calls = []
 
-    async def complete(self, messages, system=None, max_tokens=None):
+    async def complete(self, messages, system=None, max_tokens=None) -> tuple[Any, dict[str, Any]]:
         self.calls.append({"messages": messages, "system": system})
         return self.raw, {"input_tokens": 10, "output_tokens": 5, "cost_usd": 0.01}
 
@@ -51,7 +53,7 @@ class MemoryHost(MemoryMixin):
     # An interface-aware host has this; memory treats a host without it as text.
     _current_interface_is_voice: Callable[[], bool]
 
-    def __init__(self, registry=None, llm=None):
+    def __init__(self, registry=None, llm=None) -> None:
         self.name = "main"
         self._store = {}
         self._registry = registry
@@ -63,18 +65,18 @@ class MemoryHost(MemoryMixin):
         self.persisted_cost = 0
 
     # Actor base surface
-    def recall(self, key, default=None):
+    def recall(self, key, default=None) -> Any:
         return self._store.get(key, default)
 
-    def persist(self, key, value):
+    def persist(self, key, value) -> None:
         self._store[key] = value
 
     # LLMAgent surface
-    def _persist_cost(self):
+    def _persist_cost(self) -> None:
         self.persisted_cost += 1
 
 
-def host(registry_actors=None, llm=None):
+def host(registry_actors=None, llm=None) -> "MemoryHost":
     reg = FakeRegistry(registry_actors) if registry_actors is not None else None
     # Partial on purpose: the members these tests reach, not the whole host.
     return MemoryHost(registry=reg, llm=llm)  # pyright: ignore[reportAbstractUsage]
@@ -83,17 +85,17 @@ def host(registry_actors=None, llm=None):
 # ── User facts ───────────────────────────────────────────────────────────────
 
 
-def test_get_user_facts_empty():
+def test_get_user_facts_empty() -> None:
     assert host().get_user_facts() == {}
 
 
-def test_get_user_facts_stored():
+def test_get_user_facts_stored() -> None:
     h = host()
     h.persist("_user_facts", {"pref_user_name": "Bob"})
     assert h.get_user_facts() == {"pref_user_name": "Bob"}
 
 
-def test_preferred_timezone():
+def test_preferred_timezone() -> None:
     h = host()
     h.persist("_user_facts", {"pref_timezone": "Europe/Athens"})
     assert h._preferred_timezone_name() == "Europe/Athens"
@@ -102,7 +104,7 @@ def test_preferred_timezone():
 # ── Running-agents summary ───────────────────────────────────────────────────
 
 
-def test_running_agents_summary_filters():
+def test_running_agents_summary_filters() -> None:
     h = host(
         [
             FakeActor("main"),
@@ -123,14 +125,14 @@ def test_running_agents_summary_filters():
     assert not any(ln.startswith("installer") for ln in lines)
 
 
-def test_running_agents_summary_empty():
+def test_running_agents_summary_empty() -> None:
     assert host([FakeActor("main")])._get_running_agents_summary() == ""
 
 
 # ── Live-context prefix ──────────────────────────────────────────────────────
 
 
-def test_prefix_with_agents():
+def test_prefix_with_agents() -> None:
     out = host([FakeActor("alpha"), FakeActor("beta")])._prefix_with_live_context(
         "what is running?"
     )
@@ -139,7 +141,7 @@ def test_prefix_with_agents():
     assert out.endswith("what is running?")
 
 
-def test_prefix_without_agents():
+def test_prefix_without_agents() -> None:
     out = host([])._prefix_with_live_context("hi")
     assert "NONE" in out
     assert out.endswith("hi")
@@ -148,7 +150,7 @@ def test_prefix_without_agents():
 # ── System-prompt assembly ───────────────────────────────────────────────────
 
 
-def test_rebuild_system_prompt():
+def test_rebuild_system_prompt() -> None:
     h = host([FakeActor("cpu-sensor", "CPU temps")])
     h.persist(
         "_user_facts",
@@ -171,7 +173,7 @@ def test_rebuild_system_prompt():
 # ── Fact extraction ──────────────────────────────────────────────────────────
 
 
-def test_extract_facts_saves_and_normalizes():
+def test_extract_facts_saves_and_normalizes() -> None:
     llm = FakeLLM('{"user_name": "Bob", "pref_timezone": "Europe/Athens", "ha_url": "http://ha"}')
     h = host([], llm=llm)
     run(h._extract_and_save_facts("I'm Bob in Athens", "Hi Bob"))
@@ -183,7 +185,7 @@ def test_extract_facts_saves_and_normalizes():
     assert h.persisted_cost == 1
 
 
-def test_extract_facts_skips_voice_transcripts():
+def test_extract_facts_skips_voice_transcripts() -> None:
     llm = FakeLLM('{"pref_user_name": "Adé"}')
     h = host([], llm=llm)
     h._current_interface_is_voice = lambda: True
@@ -194,7 +196,7 @@ def test_extract_facts_skips_voice_transcripts():
     assert llm.calls == []
 
 
-def test_explicit_voice_memory_request_is_allowed():
+def test_explicit_voice_memory_request_is_allowed() -> None:
     llm = FakeLLM('{"pref_user_name": "Amalia"}')
     h = host([], llm=llm)
     h._current_interface_is_voice = lambda: True
@@ -205,19 +207,19 @@ def test_explicit_voice_memory_request_is_allowed():
     assert len(llm.calls) == 1
 
 
-def test_extract_facts_no_llm():
+def test_extract_facts_no_llm() -> None:
     h = host(llm=None)
     run(h._extract_and_save_facts("hello", "hi"))  # must not raise
     assert h.get_user_facts() == {}
 
 
-def test_extract_facts_empty_result():
+def test_extract_facts_empty_result() -> None:
     h = host([], llm=FakeLLM("{}"))
     run(h._extract_and_save_facts("nothing durable", "ok"))
     assert h.get_user_facts() == {}
 
 
-def test_extract_facts_bad_json():
+def test_extract_facts_bad_json() -> None:
     h = host([], llm=FakeLLM("not json at all"))
     run(h._extract_and_save_facts("x", "y"))  # must not raise
     assert h.get_user_facts() == {}

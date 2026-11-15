@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The static and docs handlers may only serve files inside their own root.
 
 The guard these tests pin used to be `str(candidate).startswith(str(base))`.

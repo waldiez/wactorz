@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Running a plan: making sure its agents exist, then driving the steps.
 
 Steps marked parallel run together; the rest wait on what they depend on. The
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 else:
     _Host = object
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long the planner waits for an agent it sent to a node to be reported
 #: running there. Generous: the node may install the agent's packages first,
@@ -316,7 +317,7 @@ class ExecutionMixin(_Host):
             # The step's failure is part of the plan's result, not an exception
             # here: the caller decides whether a fallback stands in for it.
             return exc.reply
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("[%s] Timeout from '%s'", self.name, agent_name)
             return {"error": f"Timeout from {agent_name}"}
         except RuntimeError as exc:

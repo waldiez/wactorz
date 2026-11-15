@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """How Home Assistant's WebSocket API answers, as `/metrics` says it.
 
 Requests are counted by command and outcome and timed; connecting is timed, and
@@ -79,12 +80,10 @@ class TestRequests:
         assert _requests("call_service", ha_metrics.ERROR) == before + 1
 
     async def test_no_answer_in_time_is_a_timeout(self) -> None:
-        # The frame wait times out inside `asyncio.wait_for`, which raises
-        # asyncio's own TimeoutError on Python 3.10 and the builtin from 3.11:
-        # both are a timeout.
+        # The frame wait times out inside `asyncio.wait_for`.
         before = _requests("get_states", ha_metrics.TIMEOUT)
 
-        with pytest.raises((TimeoutError, asyncio.TimeoutError)):
+        with pytest.raises(TimeoutError):
             await _client(_FakeWS()).call("get_states")
 
         assert _requests("get_states", ha_metrics.TIMEOUT) == before + 1

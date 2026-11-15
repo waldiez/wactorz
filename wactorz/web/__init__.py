@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Web layer — the aiohttp server (dashboard SPA + REST + WebSocket + docs).
 
 Split into focused modules: ``app`` (route table + entry point), ``runtime``

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What must not have happened while a scenario ran, whatever it was checking.
 
 A scenario asserts the things it is about. This asserts the rest, after every
@@ -16,8 +17,6 @@ A scenario that provokes an error on purpose -- the broker taken away, a refused
 command -- says which, with :meth:`Guard.allow` for the backend's console and
 :meth:`Guard.allow_on_the_page` for the page's, and everything else still counts.
 """
-
-from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field

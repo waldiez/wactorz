@@ -118,6 +118,7 @@
       <summary class="sidebar-label">Guide</summary>
       <a href="../guide/development.html" class="">Installation</a>
       <a href="../guide/dockerhub.html" class="active">Docker Hub</a>
+      <a href="../guide/windows.html" class="">Windows</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
       <a href="../guide/library.html" class="">Library</a>
@@ -154,8 +155,8 @@
 <hr />
 <ul>
 <li><a href="#which-image">Which image</a></li>
-<li><a href="#option-a--terminal--compose-recommended">Option A — Terminal + Compose (recommended)</a></li>
-<li><a href="#option-b--docker-desktop--terminal">Option B — Docker Desktop + Terminal</a></li>
+<li><a href="#option-a-terminal-and-compose-recommended">Option A: Terminal and Compose (recommended)</a></li>
+<li><a href="#option-b-docker-desktop-and-terminal">Option B: Docker Desktop and Terminal</a></li>
 </ul>
 <hr />
 <h2 id="which-image">Which image</h2>
@@ -199,7 +200,7 @@ code stays Apache-2.0 either way, and the default image has no such component.</
 <p>The corresponding source is the source of this release at <a href="https://github.com/waldiez/wactorz">https://github.com/waldiez/wactorz</a> (its tag, with the Dockerfile that builds the image) and Ultralytics' own at <a href="https://github.com/ultralytics/ultralytics">https://github.com/ultralytics/ultralytics</a>. Every package in an image is listed with its licence in
 <code>/app/THIRD_PARTY.txt</code>.</p>
 <hr />
-<h2 id="option-a-terminal-compose-recommended">Option A — Terminal + Compose (recommended)</h2>
+<h2 id="option-a-terminal-and-compose-recommended">Option A: Terminal and Compose (recommended)</h2>
 <p>Works in any terminal, including the built-in terminal inside Docker Desktop.</p>
 <h3 id="1-create-a-project-folder">1. Create a project folder</h3>
 <div class="highlight"><pre><span></span><code>mkdir<span class="w"> </span>wactorz
@@ -228,12 +229,12 @@ persistence_location /mosquitto/data/
 log_dest stdout
 </code></pre></div>
 
-<p><strong><code>compose.yaml</code></strong></p>
+<p><strong><code>compose.yaml</code></strong> (the broker is named by its tag here; the repository's own <code>compose.yaml</code> pins the build by digest, and is the one to copy the digest from)</p>
 <div class="highlight"><pre><span></span><code><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz</span>
 
 <span class="nt">services</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">mosquitto</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">eclipse-mosquitto:2.1.2-alpine</span>
 <span class="w">    </span><span class="nt">container_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz-mosquitto</span>
 <span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span>
 <span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
@@ -339,7 +340,7 @@ is what then keeps it yours.</p>
 </table>
 <p>To stop: <code>docker compose down</code></p>
 <hr />
-<h2 id="option-b-docker-desktop-terminal">Option B — Docker Desktop + Terminal</h2>
+<h2 id="option-b-docker-desktop-and-terminal">Option B: Docker Desktop and Terminal</h2>
 <p>The same setup with <code>docker run</code>, in PowerShell.</p>
 <h3 id="step-1-create-a-project-folder">Step 1 — Create a project folder</h3>
 <p>Use a new folder so the <code>.env</code> and <code>mosquitto.conf</code> paths are easy to copy into Docker commands:</p>
@@ -387,7 +388,7 @@ in <code>MQTT_PASSWORD</code>, and make sure these Docker-specific values are se
   <span class="p">-</span><span class="n">-env</span><span class="o">-file</span> <span class="s2">"${PWD}\.env"</span> <span class="p">`</span>
   <span class="n">-v</span> <span class="s2">"${PWD}\mosquitto.conf:/mosquitto/config/mosquitto.conf:ro"</span> <span class="p">`</span>
   <span class="n">-v</span> <span class="s2">"wactorz-mosquitto-data:/mosquitto/data"</span> <span class="p">`</span>
-  <span class="n">eclipse-mosquitto</span><span class="p">:</span><span class="n">2</span><span class="p">.</span><span class="n">1</span><span class="p">.</span><span class="n">2-alpine</span><span class="nv">@sha256</span><span class="p">:</span><span class="n">38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408</span> <span class="p">`</span>
+  <span class="n">eclipse-mosquitto</span><span class="p">:</span><span class="n">2</span><span class="p">.</span><span class="n">1</span><span class="p">.</span><span class="n">2-alpine</span> <span class="p">`</span>
   <span class="p">/</span><span class="n">bin</span><span class="p">/</span><span class="n">sh</span> <span class="n">-c</span> <span class="s1">'umask 077; mosquitto_passwd -b -c /mosquitto/data/passwd "$MQTT_USERNAME" "$MQTT_PASSWORD" &amp;&amp; chown mosquitto:mosquitto /mosquitto/data/passwd &amp;&amp; exec mosquitto -c /mosquitto/config/mosquitto.conf'</span>
 </code></pre></div>
 

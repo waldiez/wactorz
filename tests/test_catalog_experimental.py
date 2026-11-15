@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+from typing import Any
+
 from wactorz.agents.catalog_agent import (
     BETA_WARNING,
     CatalogAgent,
@@ -24,7 +27,7 @@ PRUNED_EXPERIMENTAL = {
 }
 
 
-def test_catalog_lists_curated_experimental_agents_with_warning():
+def test_catalog_lists_curated_experimental_agents_with_warning() -> None:
     catalog = CatalogAgent(name="catalog-test")
 
     listed = catalog._action_list()
@@ -40,7 +43,7 @@ def test_catalog_lists_curated_experimental_agents_with_warning():
         assert name not in by_name
 
 
-def test_catalog_agents_are_stable_unless_flagged():
+def test_catalog_agents_are_stable_unless_flagged() -> None:
     catalog = CatalogAgent(name="catalog-test")
 
     listed = catalog._action_list()
@@ -52,7 +55,7 @@ def test_catalog_agents_are_stable_unless_flagged():
         assert agent["experimental"] is False
 
 
-def test_action_list_hides_experimental_by_default():
+def test_action_list_hides_experimental_by_default() -> None:
     catalog = CatalogAgent(name="catalog-test")
 
     default = catalog._action_list()
@@ -64,7 +67,7 @@ def test_action_list_hides_experimental_by_default():
     assert {a["name"] for a in default["agents"]} == {a["name"] for a in revealed["agents"]}
 
 
-def test_wants_experimental_detects_reveal_words():
+def test_wants_experimental_detects_reveal_words() -> None:
     assert _wants_experimental("experimental") is True
     assert _wants_experimental("show me the beta ones") is True
     assert _wants_experimental("all") is True
@@ -72,7 +75,7 @@ def test_wants_experimental_detects_reveal_words():
     assert _wants_experimental("just the normal agents") is False
 
 
-def test_catalog_beta_info_hides_code_and_mentions_beta():
+def test_catalog_beta_info_hides_code_and_mentions_beta() -> None:
     catalog = CatalogAgent(name="catalog-test")
 
     info = catalog._action_info("reachy-mini")
@@ -86,7 +89,7 @@ def test_catalog_beta_info_hides_code_and_mentions_beta():
     assert "code" not in info["recipe"]
 
 
-def _grouping_payload(show_experimental: bool) -> dict:
+def _grouping_payload(show_experimental: bool) -> dict[str, Any]:
     return {
         "show_experimental": show_experimental,
         "agents": [
@@ -105,7 +108,7 @@ def _grouping_payload(show_experimental: bool) -> dict:
     }
 
 
-def test_catalog_response_hides_experimental_by_default():
+def test_catalog_response_hides_experimental_by_default() -> None:
     from wactorz.web.chat import format_catalog_agents_response
 
     text = format_catalog_agents_response(_grouping_payload(show_experimental=False))
@@ -120,7 +123,7 @@ def test_catalog_response_hides_experimental_by_default():
     assert "list experimental" in text
 
 
-def test_catalog_response_shows_experimental_when_opted_in():
+def test_catalog_response_shows_experimental_when_opted_in() -> None:
     from wactorz.web.chat import format_catalog_agents_response
 
     text = format_catalog_agents_response(_grouping_payload(show_experimental=True))
@@ -133,23 +136,23 @@ def test_catalog_response_shows_experimental_when_opted_in():
     assert "list experimental" not in text
 
 
-def test_catalog_spawn_message_includes_beta_warning_in_chat():
+def test_catalog_spawn_message_includes_beta_warning_in_chat() -> None:
     text = _chat_message_with_beta_warning("'reachy-mini' spawned and running", BETA_WARNING)
 
     assert text == f"'reachy-mini' spawned and running\n\nWarning: {BETA_WARNING}"
 
 
-def test_catalog_spawn_message_leaves_recommended_agents_plain():
+def test_catalog_spawn_message_leaves_recommended_agents_plain() -> None:
     text = _chat_message_with_beta_warning("'weather-agent' spawned and running", "")
 
     assert text == "'weather-agent' spawned and running"
 
 
-def test_experimental_first_use_banner_warns_once(monkeypatch):
+def test_experimental_first_use_banner_warns_once(monkeypatch) -> None:
     import wactorz.web.chat as chat
 
     class _FakeMain:
-        def __init__(self):
+        def __init__(self) -> None:
             self._agent_manifests = {
                 "reachy-mini": {"experimental": True, "warning": BETA_WARNING},
                 "weather-agent": {"experimental": False},

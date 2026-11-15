@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One process at a time on a state directory.
 
 A server or a node writes its memory back to the state directory as it runs,

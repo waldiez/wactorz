@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a node says its machine is, in the manifest it publishes retained.
 
 Placement is judged from these fields, so each is either right or absent. The

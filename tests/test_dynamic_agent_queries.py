@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Reading back what the system has recorded, from inside generated code.
 
 On main every query answers at once with a list, so generated code can iterate

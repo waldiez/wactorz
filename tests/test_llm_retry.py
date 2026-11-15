@@ -1,10 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
 """Retry, backoff and per-attempt timeout around every LLM provider call."""
 
 import asyncio
 import socket
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from types import SimpleNamespace
 from typing import Any
@@ -36,7 +37,7 @@ from wactorz.agents.llm.retry import (
 from wactorz.config import CONFIG
 
 
-def _with_policy(retries: int = 2, timeout: float = 300.0) -> _patch:
+def _with_policy(retries: int = 2, timeout: float = 300.0) -> "_patch[Any]":
     """CONFIG patched to a given retry/timeout policy."""
     return patch(
         "wactorz.config.CONFIG",
@@ -96,7 +97,7 @@ def test_status_read_from_each_sdk_spelling() -> None:
 
 
 def test_transport_failures_retry_without_a_status() -> None:
-    assert is_retryable(asyncio.TimeoutError())
+    assert is_retryable(TimeoutError())
     assert is_retryable(TimeoutError())
     assert is_retryable(ConnectionResetError())
     assert is_retryable(OSError("connection refused"))
@@ -289,7 +290,7 @@ def test_retry_after_read_from_both_sdk_shapes() -> None:
 
 def test_retry_after_accepts_an_http_date() -> None:
     """RFC 9110 allows a date as well as a delta, and both appear in the wild."""
-    soon = datetime.now(timezone.utc) + timedelta(seconds=30)
+    soon = datetime.now(UTC) + timedelta(seconds=30)
     stamp = format_datetime(soon)
     seconds = retry_after_seconds(Boom(headers=Headers(retry_after=stamp)))
     assert seconds is not None
@@ -496,7 +497,7 @@ async def test_a_retry_storm_checks_the_spend_cap_once(no_sleep: None) -> None:
 async def test_a_cancelled_call_stays_cancelled() -> None:
     """A cancellation arriving as the reply lands must not be absorbed.
 
-    `asyncio.wait_for` absorbs it on Python 3.10 — it returns the result from
+    `asyncio.wait_for` absorbs it on Python 3.11 — it returns the result from
     inside its own CancelledError handler when the guarded future is already
     done. An LLM call is the longest await an actor makes, so it is what a stop
     or a shutdown interrupts; swallowing that leaves the actor running past a
@@ -609,14 +610,14 @@ class FlakyProvider(LLMProvider):
             raise Boom(status_code=429)
 
     async def _complete(
-        self, messages: list[dict], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict]:
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         self._tick()
         return "ok", {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
 
     async def _complete_with_tools(
         self,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
@@ -624,7 +625,9 @@ class FlakyProvider(LLMProvider):
         self._tick()
         return ToolCompletion(content="ok", usage={"cost_usd": 0.0})
 
-    async def _stream(self, messages: list[dict], system: str = "", **kwargs: Any):
+    async def _stream(
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> "AsyncIterator[str]":
         self._tick()
         yield "ok"
 
@@ -658,7 +661,9 @@ async def test_stream_does_not_replay_what_the_reader_already_saw(no_sleep: None
     attempts = 0
 
     class MidStreamFailure(LLMProvider):
-        async def _stream(self, messages: list[dict], system: str = "", **kwargs: Any):
+        async def _stream(
+            self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+        ) -> "AsyncIterator[str]":
             nonlocal attempts
             attempts += 1
             yield "half a "
@@ -668,6 +673,7 @@ async def test_stream_does_not_replay_what_the_reader_already_saw(no_sleep: None
     seen: list[str] = []
     with _with_policy(retries=2), pytest.raises(Boom):
         async for chunk in provider.stream([{"role": "user", "content": "hi"}]):
+            assert isinstance(chunk, str)
             seen.append(chunk)
     assert seen == ["half a "]
     assert attempts == 1

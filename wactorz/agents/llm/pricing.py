@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Model pricing: the catalogue fetch, the fallback table, and cost arithmetic.
 
 The fallback is used when the fetch fails or a model is absent upstream. Prefix
@@ -9,7 +10,7 @@ import time
 
 import aiohttp
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 # Fallback pricing per 1M tokens (input, output) in USD.
@@ -121,6 +122,11 @@ def _fallback_pricing_key(model: str) -> str | None:
 
 
 def calc_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    """What ``input_tokens`` and ``output_tokens`` of ``model`` cost, in dollars.
+
+    Priced from the live catalogue by exact name, else from the built-in table by prefix; 0 for a
+    model in neither.
+    """
     # Exact match against live catalogue
     if model in _dynamic_pricing:
         price_in, price_out = _dynamic_pricing[model]

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The live date/time context handed to models.
 
 Shared by LLMAgent and by actors that have no LLM, which is why it lives with
@@ -9,7 +10,7 @@ import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 # ── Live date/time context (shared by LLMAgent and non-LLMAgent actors) ───────

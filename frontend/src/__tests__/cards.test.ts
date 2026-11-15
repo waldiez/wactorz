@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi } from "vitest";
 import {
@@ -10,7 +9,7 @@ import {
     buildWactorCard,
     paintCardTrend,
     type WactorCardCallbacks,
-} from "../ui/dashboard/cards";
+} from "../ui/overview/cards";
 import type { AgentInfo } from "../types/agent";
 
 function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {

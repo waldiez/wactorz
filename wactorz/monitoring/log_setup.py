@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Root logging configuration: handlers, format, and redaction.
 
 Called once at startup rather than run as an import side effect. The side-effect
@@ -15,7 +16,7 @@ import json
 import logging
 import logging.handlers
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from wactorz import config
@@ -39,10 +40,11 @@ class JsonFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
+        """The record as one JSON line: time, level, logger and message, with the traceback and
+        stack when it has them.
+        """
         entry = {
-            "ts": datetime.fromtimestamp(record.created, timezone.utc).isoformat(
-                timespec="milliseconds"
-            ),
+            "ts": datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds"),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),

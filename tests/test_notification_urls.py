@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Where a notification may be sent, and what the model is told about it.
 
 Three sources: an address stored by `/webhook`, one written into the task, and

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a stored model holds is said by the names and shapes code reads it by.
 
 Read from the headers alone, so listing a large model costs nothing and nothing

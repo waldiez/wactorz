@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The GitHub release page shows a version's summary, not its whole section.
 
 A CHANGELOG section opens with a summary -- a paragraph, ``Before you

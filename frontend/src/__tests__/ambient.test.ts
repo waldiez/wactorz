@@ -1,9 +1,9 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AmbientManager, AMBIENT_TRACKS, type AmbientTrackId } from "../io/AmbientManager";
+import { setMuted } from "../io/soundMute";
 
 function makeParam(): { value: number } {
     return { value: 1 };
@@ -129,6 +129,26 @@ describe("AmbientManager", () => {
             expect(localStorage.getItem("wactorz.ambientTrack")).toBe(id);
         },
     );
+
+    it("plays nothing while the browser is muted, and the chosen track once it is not", () => {
+        const playing = (m: AmbientManager): boolean => (m as unknown as { _stop: unknown })._stop !== null;
+        const m = new AmbientManager();
+        const stop = m.followMute();
+        m.setTrack("rain");
+        expect(playing(m)).toBe(true);
+
+        setMuted(true);
+        expect(playing(m)).toBe(false);
+        m.setTrack("forest");
+        expect([m.track, playing(m)]).toEqual(["forest", false]);
+
+        setMuted(false);
+        expect(playing(m)).toBe(true);
+        stop();
+        setMuted(true);
+        expect(playing(m)).toBe(true);
+        localStorage.clear();
+    });
 
     it("setTrack('none') stops any playing track and persists", () => {
         const m = new AmbientManager();

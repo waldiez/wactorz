@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent that ends by itself leaves the dashboard, the same as a deleted one.
 
 Deleting through the UI removes the monitor's entry for the agent. An agent that
@@ -57,6 +58,16 @@ class Ending(Actor):
 
     async def handle_message(self, msg: Message) -> None:
         return None
+
+
+@pytest.fixture(name="no_main", autouse=True)
+def no_main_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run as the profile without main, which takes a withdrawal as it comes.
+
+    These tests are of what a withdrawal does to the card and the frame that
+    says so; whether one stands under main is `test_withdrawals_by_mains_rule`'s.
+    """
+    monkeypatch.setattr(runtime, "started_with_main", False)
 
 
 @pytest.fixture(name="isolate_state", autouse=True)

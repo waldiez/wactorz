@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Process-wide store instances, created once at startup."""
 
 import logging
@@ -11,7 +12,7 @@ from .migrations import run_migrations
 from .pickle_store import PickleStore
 from .stores import close_stores, install_stores
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def init_persistence(

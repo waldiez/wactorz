@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Building the deck must not stop the rest of the process while it runs.
 
 Writing a deck reads every picture and writes a file of several megabytes, all

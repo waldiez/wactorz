@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """LLMAgent - An actor backed by a Large Language Model.
 Supports Anthropic Claude, OpenAI, Ollama (local), and custom providers.
 """
@@ -9,6 +10,7 @@ from typing import Any
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.persistence import chat_turn_recorded, get_db
+from ..core.topics import agent_topic
 from ..monitoring.log_redaction import redact
 from .llm.attachments import HISTORY_TEXT_LIMIT, flatten
 from .llm.base import LLMProvider, ToolCall, ToolCompletion
@@ -45,7 +47,7 @@ __all__ = [
 ]
 
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class LLMAgent(Actor):
@@ -59,20 +61,20 @@ class LLMAgent(Actor):
         system_prompt: str = "You are a helpful AI agent.",
         max_history: int = 20,
         summarize_threshold: int = 30,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self.llm = llm_provider
         self.system_prompt = system_prompt
         self.max_history = max_history
         self.summarize_threshold = summarize_threshold  # compress when history exceeds this
-        self._conversation_history: list[dict] = []
+        self._conversation_history: list[dict[str, Any]] = []
         self._history_summary: str = ""  # rolling summary of compressed messages
         self._current_task = "idle"
         # Cost / token tracking — must be set here so subclasses (MainActor etc.) inherit them
-        self.total_input_tokens = 0
-        self.total_output_tokens = 0
-        self.total_cost_usd = 0.0
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
+        self.total_cost_usd: float = 0.0
         self._last_persisted_usd = 0.0
 
     def _current_task_description(self) -> str:
@@ -96,7 +98,10 @@ class LLMAgent(Actor):
         """System prompt with the live date/time block prepended every turn."""
         return self._now_context() + "\n" + self.system_prompt
 
-    async def on_start(self):
+    async def on_start(self) -> None:
+        """Restore the conversation, its summary and the cost so far, refresh the model prices in
+        the background, and publish the manifest.
+        """
         self.run_detached(refresh_pricing(), name="refresh-pricing")
         # Restore conversation history and rolling summary from persistence
         saved = self.recall("conversation_history", [])
@@ -111,7 +116,7 @@ class LLMAgent(Actor):
             if not isinstance(content, str):
                 content = str(content)
             if content.strip():
-                entry: dict = {"role": role, "content": content}
+                entry: dict[str, Any] = {"role": role, "content": content}
                 if "ts" in m and isinstance(m["ts"], (int, float)):
                     entry["ts"] = m["ts"]
                 clean.append(entry)
@@ -162,11 +167,12 @@ class LLMAgent(Actor):
             output_schema=output_schema,
         )
 
-    async def on_stop(self):
+    async def on_stop(self) -> None:
+        """Remember the conversation and its summary for the next start."""
         self.persist("conversation_history", self._conversation_history)
         self.persist("history_summary", self._history_summary)
 
-    async def _maybe_summarize(self):
+    async def _maybe_summarize(self) -> None:
         """If history exceeds summarize_threshold, compress the oldest half into a
         rolling summary and keep only the most recent max_history messages.
         The summary is prepended as a system-style context message when sending
@@ -221,7 +227,7 @@ class LLMAgent(Actor):
             logger.warning("[%s] Summarization failed: %s — truncating instead", self.name, e)
             self._conversation_history = self._conversation_history[-self.max_history :]
 
-    def _build_messages_with_summary(self, n: int) -> list[dict]:
+    def _build_messages_with_summary(self, n: int) -> list[dict[str, Any]]:
         """Build the message list to send to the LLM, prepending the rolling summary
         as context if one exists.
         """
@@ -238,7 +244,13 @@ class LLMAgent(Actor):
         ]
         return summary_ctx + recent
 
-    def _record_user_turn(self, user_message: str, blocks: list[dict] | None, ts: float) -> None:
+    def _assistant_history_content(self, response: str) -> str:
+        """The conversational form of a reply stored before summarizing or persisting."""
+        return response
+
+    def _record_user_turn(
+        self, user_message: str, blocks: list[dict[str, Any]] | None, ts: float
+    ) -> None:
         """Append the user's turn, keeping a text stand-in for any attachments.
 
         The blocks themselves are never stored: a base64 payload in history is
@@ -252,14 +264,14 @@ class LLMAgent(Actor):
             turn["attachments_text"] = flatten(blocks, limit=HISTORY_TEXT_LIMIT)
         self._conversation_history.append(turn)
 
-    def _history_for_request(self, blocks: list[dict] | None) -> list[dict]:
+    def _history_for_request(self, blocks: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
         """The messages to send, with this turn's attachments spliced in.
 
         Older turns carry their stand-in; the current one carries the real
         thing — blocks where the provider takes them, and the full flattened
         text where it does not, so a file is never silently dropped.
         """
-        history: list[dict] = []
+        history: list[dict[str, Any]] = []
         for m in self._build_messages_with_summary(self.max_history):
             if not isinstance(m, dict):
                 continue
@@ -281,11 +293,12 @@ class LLMAgent(Actor):
                 history[-1]["content"] = f"{flatten(blocks)}\n\n{text}"
         return history
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
+        """Answer a task with the model; other messages are ignored."""
         if msg.type == MessageType.TASK:
             await self._handle_task(msg)
 
-    async def _reply_to_task(self, msg: Message, result: dict) -> None:
+    async def _reply_to_task(self, msg: Message, result: dict[str, Any]) -> None:
         """Answer a task's sender, echoing `_task_id` so their future resolves.
 
         Every exit from `_handle_task` goes through here, including the failures.
@@ -305,7 +318,7 @@ class LLMAgent(Actor):
             result = {**result, "_task_id": task_id}
         await self.send(reply_to, MessageType.RESULT, result)
 
-    async def _handle_task(self, msg: Message):
+    async def _handle_task(self, msg: Message) -> None:
         if isinstance(msg.payload, dict):
             # Accept "text", "task", "message", or fall back to JSON dump
             task_text = (
@@ -345,7 +358,11 @@ class LLMAgent(Actor):
             )
 
             self._conversation_history.append(
-                {"role": "assistant", "content": response, "ts": time.time()}
+                {
+                    "role": "assistant",
+                    "content": self._assistant_history_content(response),
+                    "ts": time.time(),
+                }
             )
             self.metrics.tasks_completed += 1
             duration = time.time() - start
@@ -360,7 +377,7 @@ class LLMAgent(Actor):
 
             # Publish completion
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/completed",
+                agent_topic(self.actor_id, "completed"),
                 {
                     "result_preview": response[:200],
                     "duration": duration,
@@ -383,7 +400,7 @@ class LLMAgent(Actor):
         finally:
             self._current_task = "idle"
 
-    async def chat(self, user_message: str, attachments: list[dict] | None = None) -> str:
+    async def chat(self, user_message: str, attachments: list[dict[str, Any]] | None = None) -> str:
         """Direct async call - useful for the main conversation actor.
 
         `attachments` are content blocks from `llm.attachments.to_blocks`, sent
@@ -407,7 +424,11 @@ class LLMAgent(Actor):
         )
         ts_reply = time.time()
         self._conversation_history.append(
-            {"role": "assistant", "content": response, "ts": ts_reply}
+            {
+                "role": "assistant",
+                "content": self._assistant_history_content(response),
+                "ts": ts_reply,
+            }
         )
         await self._maybe_summarize()
         self.persist("conversation_history", self._conversation_history)
@@ -420,13 +441,13 @@ class LLMAgent(Actor):
         self._persist_cost()
 
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/metrics",
+            agent_topic(self.actor_id, "metrics"),
             self._build_metrics(),
         )
         return response
 
     async def chat_stream(
-        self, user_message: str, attachments: list[dict] | None = None
+        self, user_message: str, attachments: list[dict[str, Any]] | None = None
     ) -> AsyncGenerator[str | dict[str, Any], None]:
         """Streaming version of chat(). Yields text chunks, then a final usage dict.
         The caller is responsible for printing chunks as they arrive.
@@ -479,7 +500,9 @@ class LLMAgent(Actor):
             # the partial response are lost on restart.
             if full_text:
                 partial = "".join(full_text)
-                self._conversation_history.append({"role": "assistant", "content": partial})
+                self._conversation_history.append(
+                    {"role": "assistant", "content": self._assistant_history_content(partial)}
+                )
                 self.persist("conversation_history", self._conversation_history)
             raise
 
@@ -495,7 +518,11 @@ class LLMAgent(Actor):
             )
         ts_reply = time.time()
         self._conversation_history.append(
-            {"role": "assistant", "content": response, "ts": ts_reply}
+            {
+                "role": "assistant",
+                "content": self._assistant_history_content(response),
+                "ts": ts_reply,
+            }
         )
         await self._maybe_summarize()
         self.persist("conversation_history", self._conversation_history)
@@ -511,7 +538,7 @@ class LLMAgent(Actor):
         self._persist_cost()
 
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/metrics",
+            agent_topic(self.actor_id, "metrics"),
             self._build_metrics(),
         )
 
@@ -543,6 +570,7 @@ class LLMAgent(Actor):
                     # can type a credential where no command asks for one.
                     content=redact(user_msg),
                     session_id=self.actor_id,
+                    agent_id=self.actor_id,
                 )
                 db.write_chat_log(
                     ts=ts_reply,
@@ -550,6 +578,7 @@ class LLMAgent(Actor):
                     role="assistant",
                     content=redact(reply),
                     session_id=self.actor_id,
+                    agent_id=self.actor_id,
                 )
             except Exception as exc:
                 # Warning, not debug: this branch swallowed an AttributeError for
@@ -558,7 +587,7 @@ class LLMAgent(Actor):
                 # worth a log line even though it must not break the turn.
                 logger.warning("[%s] chat_log SQLite write failed: %s", self.name, exc)
 
-    def _persist_cost(self):
+    def _persist_cost(self) -> None:
         """Write lifetime cost to durable SQLite storage after each exchange."""
         delta = self.total_cost_usd - self._last_persisted_usd
         if delta > 0:
@@ -574,12 +603,13 @@ class LLMAgent(Actor):
             },
         )
 
-    def _build_metrics(self) -> dict:
+    def _build_metrics(self) -> dict[str, Any]:
         m = super()._build_metrics()
         m["input_tokens"] = self.total_input_tokens
         m["output_tokens"] = self.total_output_tokens
         m["cost_usd"] = round(self.total_cost_usd, 6)
         return m
 
-    def clear_history(self):
+    def clear_history(self) -> None:
+        """Forget the conversation; its summary is kept."""
         self._conversation_history = []

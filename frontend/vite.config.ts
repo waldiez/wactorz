@@ -1,10 +1,37 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
+
+/** The line every built script and stylesheet opens with, as every source file does. */
+const LICENSE_NOTICE = "/**\n * SPDX-License-Identifier: Apache-2.0\n */\n";
+
+/**
+ * Put the license line at the top of each script and stylesheet the build writes.
+ *
+ * Added once the bundle is final, after minifying, which would drop it as a
+ * comment. `static/app` is committed, and scripts/license_notices.py checks it.
+ * Files copied from `public/` carry their own.
+ */
+function licenseNotice(): Plugin {
+    return {
+        name: "wactorz-license-notice",
+        apply: "build",
+        enforce: "post",
+        generateBundle(_options, bundle) {
+            for (const file of Object.values(bundle)) {
+                if (file.type === "chunk") {
+                    file.code = LICENSE_NOTICE + file.code;
+                } else if (file.fileName.endsWith(".css") && typeof file.source === "string") {
+                    file.source = LICENSE_NOTICE + file.source;
+                }
+            }
+        },
+    };
+}
 
 export default defineConfig({
+    plugins: [licenseNotice()],
     // envDir is deliberately left at its default (this directory) rather than
     // pointed at the repo root. The root `.env` is the backend's secrets file,
     // and Vite inlines every `VITE_`-prefixed value it finds into the client

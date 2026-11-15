@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Chat turns reach the console, not only the dashboard's feed.
 
 The server quiets `wactorz.web` to warnings, so a turn logged under the module

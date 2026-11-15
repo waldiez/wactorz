@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a stored model holds, read from its headers alone.
 
 Code written for a model has to read it by the names its arrays were saved

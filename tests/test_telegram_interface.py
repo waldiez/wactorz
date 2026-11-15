@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The Telegram bot: who it answers, and what it refuses.
 
 Everything here is an access-control claim, because that is what this interface

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """``init_persistence`` actually runs the framework migrations.
 
 The regression this pins: every other test calls ``init_persistence`` with

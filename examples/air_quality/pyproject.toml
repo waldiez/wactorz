@@ -1,0 +1,27 @@
+[project]
+name = "wactorz-example-air-quality"
+version = "0.1.0"
+description = "Wactorz example: room air quality, a model of the usual, and a person asked about the rest."
+requires-python = ">=3.11"
+dependencies = ["wactorz[data]", "numpy>=1.24.0"]
+
+# What Wactorz finds once this package is named in WACTORZ_EXTENSIONS: the two
+# agents, the four of the loop (loop.py), all started with the system, and the
+# Air tab.
+[project.entry-points."wactorz.agents"]
+air-detect = "air_quality.agents:detect"
+air-watch = "air_quality.agents:AirWatch"
+air-recorder = "air_quality.loop:AirRecorder"
+air-drift = "air_quality.loop:AirDrift"
+air-trainer = "air_quality.loop:AirTrainer"
+air-retrain = "air_quality.loop:AirRetrain"
+
+[project.entry-points."wactorz.extensions"]
+air = "air_quality.tab"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["air_quality"]

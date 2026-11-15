@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every table retention prunes is searched by time through an index.
 
 Retention deletes old rows in batches by ``ts``, and the time-series queries ask

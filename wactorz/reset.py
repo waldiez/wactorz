@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """wactorz-reset  —  clear stored state without touching running agents.
 
 Scopes
@@ -21,11 +22,16 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
+from wactorz.core.addresses import parse
 from wactorz.core.paths import resolve_state_dir
 from wactorz.web.uploads import UPLOADS_DIRNAME, discard
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from wactorz.core.persistence import PickleStore, WactorzDB
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 _CHAT_KV_KEYS = ("conversation_history", "history_summary")
 _METRIC_KV_KEYS = ("_final_cost", "_messages_processed")
@@ -50,13 +56,13 @@ _DEFAULT_STATE = resolve_state_dir()
 _DEFAULT_DB = Path(_DEFAULT_STATE) / "wactorz.db"
 
 
-def _db(db_path: str | None = None):
+def _db(db_path: str | None = None) -> "WactorzDB":
     from wactorz.core.persistence import WactorzDB
 
     return WactorzDB(db_path or _DEFAULT_DB)
 
 
-def _pickle_store(state_dir: str | None = None):
+def _pickle_store(state_dir: str | None = None) -> "PickleStore":
     from wactorz.core.persistence import PickleStore
 
     return PickleStore(state_dir or _DEFAULT_STATE)
@@ -91,8 +97,15 @@ def reset_chat(
     agent_name: str | None = None,
     db_path: str | None = None,
     state_dir: str | None = None,
+    *,
+    actor_id: str | None = None,
+    on_main: bool = True,
 ) -> None:
     """Clear chat_log and conversation kv entries (optionally for one agent).
+
+    ``actor_id`` limits the rows to that agent's, where another shares its
+    name; ``on_main`` says whether it is main's own, whose conversation the
+    kv and its state file hold: one on a node keeps those there.
 
     The stored attachments go with the rows that sent them. A row is filed
     under its thread whoever attached the file, the person or the agent, so one
@@ -101,8 +114,8 @@ def reset_chat(
     """
     with _db(db_path) as db:
         # Read before the rows go: afterwards nothing says which files they named.
-        named = db.chat_attachment_ids(agent_name) if agent_name else set()
-        rows = db.clear_chat_log(agent_name)
+        named = db.chat_attachment_ids(agent_name, actor_id) if agent_name else set()
+        rows = db.clear_chat_log(agent_name, actor_id)
         orphaned = named - db.chat_attachment_ids()
         logger.info(
             "[reset] chat_log: deleted %d rows%s",
@@ -110,15 +123,16 @@ def reset_chat(
             f" for {agent_name!r}" if agent_name else "",
         )
 
-        agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
-        for agent in agents:
+        agents: list[str] = [agent_name] if agent_name else db.kv_agents()
+        for agent in agents if on_main else ():
             for key in _CHAT_KV_KEYS:
                 db.kv_delete(agent, key)
     logger.info(
         "[reset] conversation kv cleared%s",
         f" for {agent_name!r}" if agent_name else " (all agents)",
     )
-    _strip_chat_from_pickles(agent_name, state_dir)
+    if on_main:
+        _strip_chat_from_pickles(agent_name, state_dir)
     if agent_name:
         gone = discard(orphaned, state_dir)
         logger.info("[reset] uploads: deleted %d files for %r", gone, agent_name)
@@ -133,14 +147,24 @@ def reset_agent_state(agent_name: str, state_dir: str | None = None) -> None:
     logger.info("[reset] pickle state deleted for %r", agent_name)
 
 
-def reset_metrics(agent_name: str | None = None, db_path: str | None = None) -> None:
-    """Clear cost and message-count kv entries, and the metrics history (optionally for one agent)."""
+def reset_metrics(
+    agent_name: str | None = None,
+    db_path: str | None = None,
+    *,
+    node: str | None = None,
+    on_main: bool = True,
+) -> None:
+    """Clear cost and message-count kv entries, and the metrics history (optionally for one agent).
+
+    ``node`` limits the history to that host's agent of the name ("" for main's),
+    where another shares it; ``on_main`` says whether the kv entries are its own.
+    """
     with _db(db_path) as db:
         # The history is a record of these same counters over time; a reset that
         # zeroed them and kept their past would show a cliff in every trend.
-        db.clear_metrics_history(agent_name)
-        agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
-        for agent in agents:
+        db.clear_metrics_history(agent_name, node)
+        agents: list[str] = [agent_name] if agent_name else db.kv_agents()
+        for agent in agents if on_main else ():
             for key in _METRIC_KV_KEYS:
                 db.kv_delete(agent, key)
         # The monitor's durable lifetime cost ledger (keyed by actor_id under
@@ -166,7 +190,7 @@ def reset_memory(agent_name: str | None = None, db_path: str | None = None) -> N
     that spawned them is exactly the half-reset this exists to prevent.
     """
     with _db(db_path) as db:
-        agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
+        agents: list[str] = [agent_name] if agent_name else db.kv_agents()
         for agent in agents:
             for key in _MEMORY_KV_KEYS:
                 db.kv_delete(agent, key)
@@ -175,39 +199,71 @@ def reset_memory(agent_name: str | None = None, db_path: str | None = None) -> N
     )
 
 
-_SPAWN_REGISTRY_KV_KEY = "_spawned_agents"
+#: Where main keeps its spawn registry: by actor id, and, in a store from before
+#: ids were kept, by name. Main reads the second when the first is absent, so a
+#: reset clears both, or a cleared registry would come back from the older one.
+_SPAWN_REGISTRY_KV_KEYS = ("_spawned_agents_by_id", "_spawned_agents")
+
+#: Where main keeps which of its agents on nodes are stopped, by id. It says
+#: nothing without the registry's entries, and goes when the registry is cleared.
+_STOPPED_AGENTS_KV_KEY = "_stopped_agents"
 
 
-def reset_spawns(agent_name: str | None = None, db_path: str | None = None) -> None:
+def _without_agent(
+    registry: dict[str, Any], agent_name: str, actor_id: str | None = None
+) -> dict[str, Any] | None:
+    """``registry`` without the agent ``agent_name``, or None when it holds none.
+
+    Kept by id, an entry carries its name; kept by name, the key is the name.
+    ``actor_id`` says which, where the name is kept more than once.
+    """
+    if actor_id:
+        kept = {key: entry for key, entry in registry.items() if key != actor_id}
+    else:
+        kept = {
+            key: entry
+            for key, entry in registry.items()
+            if key != agent_name
+            and not (isinstance(entry, dict) and entry.get("name") == agent_name)
+        }
+    return kept if len(kept) != len(registry) else None
+
+
+def reset_spawns(
+    agent_name: str | None = None, db_path: str | None = None, *, actor_id: str | None = None
+) -> None:
     """Clear the spawn registry (optionally for one agent).
 
-    The registry lives in ``kv_store`` under (owner, "_spawned_agents"), which is
-    what ``main._restore_spawned_agents()`` reads at start, so an agent left in
-    it is spawned again on the next restart. ``agent_name`` here is the
-    *spawned* agent's name; the registry is keyed by that name inside the
-    owner's entry.
+    The registry lives in ``kv_store`` under (owner, key), which is what
+    ``main._restore_spawned_agents()`` reads at start, so an agent left in it is
+    spawned again on the next restart. ``agent_name`` here is the *spawned*
+    agent's name, and every entry of that name is cleared, or with ``actor_id``
+    that agent's alone.
     """
     with _db(db_path) as db:
-        cleared = 0
+        cleared: set[str] = set()
         # One transaction: each owner's entry is read, edited and written back,
         # and an agent persisting its own registry between the read and the
         # write would otherwise have that write clobbered — or clobber this one.
         with db.transaction():
-            for owner in _all_kv_agents(db):
-                reg = db.kv_get(owner, _SPAWN_REGISTRY_KV_KEY, None)
-                if not isinstance(reg, dict):
-                    continue
-                if agent_name:
-                    if agent_name in reg:
-                        reg.pop(agent_name, None)
-                        db.kv_set(owner, _SPAWN_REGISTRY_KV_KEY, reg)
-                        cleared += 1
-                else:
-                    db.kv_delete(owner, _SPAWN_REGISTRY_KV_KEY)
-                    cleared += 1
+            for owner in db.kv_agents():
+                for key in _SPAWN_REGISTRY_KV_KEYS:
+                    reg = db.kv_get(owner, key, None)
+                    if not isinstance(reg, dict):
+                        continue
+                    if agent_name:
+                        kept = _without_agent(reg, agent_name, actor_id)
+                        if kept is not None:
+                            db.kv_set(owner, key, kept)
+                            cleared.add(owner)
+                    else:
+                        db.kv_delete(owner, key)
+                        cleared.add(owner)
+                if not agent_name:
+                    db.kv_delete(owner, _STOPPED_AGENTS_KV_KEY)
     logger.info(
         "[reset] kv spawn registry cleared for %d owner(s)%s",
-        cleared,
+        len(cleared),
         f" (agent {agent_name!r})" if agent_name else "",
     )
 
@@ -286,11 +342,6 @@ def reset_all(
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
-def _all_kv_agents(db) -> list[str]:
-    rows = db._conn.execute("SELECT DISTINCT agent FROM kv_store").fetchall()
-    return [r[0] for r in rows]
-
-
 def _strip_chat_from_pickles(agent_name: str | None, state_dir: str | None = None) -> None:
     """Remove the conversation keys from any legacy `state.pkl` that holds them.
 
@@ -350,13 +401,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--spawns", action="store_true", help="Clear spawn registry")
     p.add_argument("--logs", action="store_true", help="Truncate wactorz.log and monitor.log")
     p.add_argument("--all", action="store_true", help="Clear everything (including logs)")
-    p.add_argument("--agent", metavar="NAME", help="Limit to a single agent by name")
+    p.add_argument("--agent", metavar="NAME", help="Limit to a single agent, by name or name@node")
     p.add_argument("--db", metavar="PATH", help="Path to wactorz.db (default: from config)")
     p.add_argument("--state-dir", metavar="PATH", help="Path to state/ dir (default: ./state)")
     return p
 
 
 def main() -> None:
+    """Run ``wactorz-reset``: clear what the flags name, for one agent with ``--agent`` or for all
+    of them.
+
+    With no flag at all it prints the usage and exits with status 1, so a bare run clears nothing.
+    """
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", stream=sys.stdout
     )
@@ -366,7 +422,8 @@ def main() -> None:
         _build_parser().print_help()
         sys.exit(1)
 
-    agent = args.agent or None
+    # What is stored here is kept by the agent's name, whichever node it runs on.
+    agent = parse(args.agent).name if args.agent else None
     db_path = args.db or None
     state_dir = args.state_dir or None
 

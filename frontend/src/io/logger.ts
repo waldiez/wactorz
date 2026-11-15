@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
  * Tiny logging boundary. `info`/`debug` are gated to dev builds so production

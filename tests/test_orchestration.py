@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The orchestrator seam, with main behind it.
 
 Every chat surface will call an :class:`Orchestrator` rather than main by name,

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Checking on the node, a command for it, and packages nobody has allowed.
 
 Main's model reaches a node only by named operations that read; a command for

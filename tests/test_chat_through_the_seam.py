@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The dashboard chat goes through the orchestrator seam.
 
 A message that names no agent is the orchestrator's, whichever one the run

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """How the supervisor paces restarts, and what it tells the user.
 
 A crashing actor is restarted after a delay that doubles with each crash in a
@@ -238,6 +239,37 @@ class TestRecovery:
 
         assert notices.severities == ["info"]
         assert "back to normal" in notices.sent[0][1]
+
+
+class TestAFailureARestartWouldRepeat:
+    """An actor that would fail the same way after a restart is not restarted in a loop."""
+
+    def test_it_is_left_failed(self, supervisor: Supervisor) -> None:
+        spec = _spec(supervisor)
+        _crashed(spec)
+        assert spec.actor is not None
+        spec.actor.restart_futile = "the Python module 'gi' is not installed"
+
+        assert supervisor._failure_reason(spec) is None
+
+    def test_any_other_failure_is_still_restarted(self, supervisor: Supervisor) -> None:
+        spec = _spec(supervisor)
+        _crashed(spec)
+
+        assert "FAILED" in (supervisor._failure_reason(spec) or "")
+
+    async def test_the_watch_loop_does_not_restart_it(self, supervisor: Supervisor) -> None:
+        spec = _spec(supervisor)
+        _crashed(spec)
+        assert spec.actor is not None
+        failed = spec.actor
+        failed.restart_futile = "the Python module 'gi' is not installed"
+        _watch(supervisor)
+        await asyncio.sleep(0.1)
+        left_alone = spec.actor is failed and spec.crash_streak == 0
+        await supervisor.stop()
+
+        assert left_alone
 
 
 class TestTheErrorStorm:

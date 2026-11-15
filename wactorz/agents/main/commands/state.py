@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Commands that change what main remembers or has agreed to do.
 
 Grouped apart from the read-only reports because each of these has an effect:
@@ -8,7 +9,7 @@ channel never reaches this package at all.
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from ....config import CONFIG
@@ -16,7 +17,7 @@ from ..planning import PENDING_PLANS_KEY
 from .dispatch import CommandContext, command
 from .groups import MEMORY, NOTIFICATIONS, PIPELINES
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 @command(
@@ -117,7 +118,7 @@ async def show_rules(ctx: CommandContext, _argument: str) -> str:
         task = rule.get("task", "")[:]
         ts = rule.get("created_at", 0)
         created = (
-            datetime.fromtimestamp(ts, tz=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+            datetime.fromtimestamp(ts, tz=UTC).astimezone().strftime("%Y-%m-%d %H:%M")
             if ts
             else "unknown"
         )

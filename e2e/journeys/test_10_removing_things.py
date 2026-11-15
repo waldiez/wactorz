@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Agents deleted one by one, then everything wiped: a fresh install, its node still there.
 
 Late, because after it only the node is left to start from.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which process is running on a state directory.
 
 A server or a node keeps much of its state in memory and writes it back to the
@@ -78,11 +79,12 @@ class StateLock:
     """The lock on one state directory, held from :meth:`acquire` to :meth:`release`."""
 
     def __init__(self, directory: str | os.PathLike[str]) -> None:
-        self.directory = Path(directory)
+        self.directory: Path = Path(directory)
         self._file: IO[bytes] | None = None
 
     @property
     def path(self) -> Path:
+        """The lock file in the state directory."""
         return self.directory / LOCK_FILE
 
     def acquire(self) -> None:

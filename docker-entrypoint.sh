@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Drop to an unprivileged user, after making the state directory writable.
 #
 # The chown cannot move to build time: WACTORZ_STATE_DIR is usually a host bind

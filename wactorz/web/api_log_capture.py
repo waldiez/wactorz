@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Turning up the detail on one logger, at runtime.
 
 Diagnosing something usually means wanting more from *one* library — the MQTT
@@ -29,7 +30,7 @@ from aiohttp.web import Response
 from ..config import _env_truthy
 from .api_logs import LEVELS
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Lets the host allow DEBUG capture. Deliberately an environment variable and
 #: not an option in the API: the point is that turning on the level that prints

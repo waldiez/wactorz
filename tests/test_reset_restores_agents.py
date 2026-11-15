@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A reset must not leave the dashboard blank while the agents are running.
 
 `reset all` stops everything except the kept agents — `main`, the monitor, the

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Command-line entry point: argument parsing and process launch.
 
 System assembly and the run loop live in :mod:`wactorz.app`; the dev reloader in
@@ -9,7 +10,6 @@ import asyncio
 import logging
 import sys
 
-# pylint: disable=unused-import
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding  # pyright: ignore[reportUnusedImport]
 from wactorz.config import CONFIG
 
@@ -56,7 +56,7 @@ def get_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Start only the monitor and the agents this deployment brings (WACTORZ_AGENTS, "
-            "wactorz.agents entry points): no orchestrator, catalogue or installer, so no "
+            "wactorz.agents entry points of packages in WACTORZ_EXTENSIONS): no orchestrator, catalogue or installer, so no "
             "model is needed. Same as WACTORZ_MINIMAL=1."
         ),
     )

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Both HTTP servers in the process count and time what they are asked.
 
 The REST interface serves `/metrics`; the dashboard's server carries the chat
@@ -34,7 +35,7 @@ def _value(name: str, **labels: str) -> float:
 
 
 @pytest.fixture(name="dashboard")
-async def dashboard_fixture() -> AsyncIterator[TestClient]:
+async def dashboard_fixture() -> AsyncIterator[TestClient[web.Request, web.Application]]:
     client = TestClient(TestServer(build_app()))
     await client.start_server()
     yield client
@@ -43,7 +44,7 @@ async def dashboard_fixture() -> AsyncIterator[TestClient]:
 
 class TestTheDashboardServer:
     async def test_a_request_is_counted_and_timed_under_its_route(
-        self, dashboard: TestClient
+        self, dashboard: TestClient[web.Request, web.Application]
     ) -> None:
         labels = {"server": "dashboard", "method": "GET", "route": "/health"}
         before = _value("wactorz_http_requests_total", **labels)
@@ -56,7 +57,9 @@ class TestTheDashboardServer:
         assert _value("wactorz_http_request_duration_seconds_count", **labels) == timed + 1
         assert _value("wactorz_http_responses_total", **labels, status="200") >= 1
 
-    async def test_a_path_never_becomes_a_label(self, dashboard: TestClient) -> None:
+    async def test_a_path_never_becomes_a_label(
+        self, dashboard: TestClient[web.Request, web.Application]
+    ) -> None:
         # The path is caller-supplied: as a label, every new one would be a
         # new series. Routes come from the routing table, which here ends in a
         # catch-all for the single-page app.
@@ -71,7 +74,7 @@ class TestTheDashboardServer:
         assert not [route for route in routes if "no/such" in route]
 
     async def test_a_dashboard_websocket_is_counted_while_it_is_open(
-        self, dashboard: TestClient
+        self, dashboard: TestClient[web.Request, web.Application]
     ) -> None:
         before = _value("wactorz_ws_connections")
 
@@ -87,7 +90,7 @@ class TestTheDashboardServer:
         )
 
     async def test_open_websockets_are_read_when_metrics_are(
-        self, dashboard: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, dashboard: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(runtime, "ws_clients", {object(), object()})
 
@@ -133,7 +136,9 @@ async def test_the_rest_middleware_labels_its_requests_rest() -> None:
 class TestTheDashboardServesMetrics:
     """The REST interface runs only when chosen; the dashboard's server always does."""
 
-    async def test_it_answers_with_the_metrics(self, dashboard: TestClient) -> None:
+    async def test_it_answers_with_the_metrics(
+        self, dashboard: TestClient[web.Request, web.Application]
+    ) -> None:
         response = await dashboard.get("/metrics")
 
         assert response.status == 200
@@ -142,7 +147,7 @@ class TestTheDashboardServesMetrics:
         assert "wactorz_http_requests_total" in text
 
     async def test_with_a_key_it_asks_for_one(
-        self, dashboard: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, dashboard: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(config, "CONFIG", dataclasses.replace(config.CONFIG, api_key=KEY))
 

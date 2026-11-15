@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Only topics a browser acts on are forwarded to it.
 
 The server subscribes to four whole subtrees; the dashboard reads a fixed set

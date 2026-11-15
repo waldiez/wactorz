@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Installing an agent's packages on its node before the agent is sent there.
 
 Best-effort by design: the agent goes to the node whatever the installer said,

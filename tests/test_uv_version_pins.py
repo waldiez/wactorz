@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """CI and the app image use one uv, written in one place.
 
 The image exports its locked dependencies with the uv its Dockerfile pins, and
@@ -10,6 +11,7 @@ that line is then complete by itself, with nothing else to move in step.
 
 import re
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -22,7 +24,7 @@ UV_STAGE = re.compile(
 )
 
 
-def _steps(workflow: Path) -> list[dict]:
+def _steps(workflow: Path) -> list[dict[str, Any]]:
     jobs = (yaml.safe_load(workflow.read_text(encoding="utf-8")) or {}).get("jobs") or {}
     return [step for job in jobs.values() for step in job.get("steps") or []]
 

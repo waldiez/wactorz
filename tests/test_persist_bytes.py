@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Raw bytes kept with `persist_bytes`, so a model file can travel as state.
 
 A migration ships an agent's state as JSON, and a node keeps it as JSON, so a

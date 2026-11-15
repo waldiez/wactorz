@@ -1,6 +1,14 @@
 # Installation
 
-Wactorz requires Python 3.10+ and a running MQTT broker (Mosquitto). The `wactorz` command starts the actor system and the web dashboard — start Mosquitto first with `docker compose up -d`.
+Wactorz requires Python 3.11 or later and a running MQTT broker (Mosquitto). The `wactorz` command starts the actor system and the web dashboard. On Windows, see also [Windows](windows.md).
+
+Check your Python first:
+
+```bash
+python3 --version   # Windows: py --version
+```
+
+Python 3.10 and earlier cannot install current releases: pip stops with `requires a different Python`. Install a newer Python and make the virtual environment again with it.
 
 ---
 
@@ -9,7 +17,8 @@ Wactorz requires Python 3.10+ and a running MQTT broker (Mosquitto). The `wactor
 #### From PyPI
 
 ```bash
-pip install wactorz[all]
+python3 -m venv .venv
+.venv/bin/pip install "wactorz[all]"    # Windows: .venv\Scripts\pip
 ```
 
 #### Latest from GitHub
@@ -55,14 +64,15 @@ The `[all]` extra installs everything except the heavier stacks, `ml` and `visio
 ## Quick start
 
 ```bash
-# 1. Create a .env file with your LLM key (see Configuration below)
+# 1. Create a .env file with your LLM key (see Configuration below).
+#    From a clone, start from the template; otherwise create .env yourself.
 cp .env.template .env
 # edit .env and set LLM_API_KEY (or whichever provider you use)
 
-# 2. Get/run MQTT broker (if you don't have already) and open port 1883
-docker run -d --name mosquitto -p 1883:1883 eclipse-mosquitto
+# 2. Run an MQTT broker for this machine only, if you do not have one
+docker run -d --name mosquitto -p 127.0.0.1:1883:1883 eclipse-mosquitto:2.1.2-alpine mosquitto -c /mosquitto-no-auth.conf
 
-# 3. Start Wactorz
+# 3. Start Wactorz, from the folder that holds .env
 wactorz
 
 # 4. Open the web dashboard
@@ -70,6 +80,8 @@ wactorz
 ```
 
 That's it. The CLI interface starts in your terminal and the web dashboard opens at `localhost:8888`. Both can be used simultaneously.
+
+The broker in step 2 accepts anyone who can reach it, so it is published on `127.0.0.1` only. Before nodes or other machines connect to it, give it accounts: the Docker Compose stack below does, with `MQTT_USERNAME` and `MQTT_PASSWORD`, and [Security](security.md) covers the rest.
 
 #### Switch interface or provider
 
@@ -83,6 +95,39 @@ wactorz --interface discord --discord-token $DISCORD_BOT_TOKEN
 # Hot-reload during development (restarts on source file changes)
 wactorz --reload
 ```
+
+---
+
+## Upgrading
+
+Upgrade the way you installed:
+
+```bash
+# From PyPI
+.venv/bin/pip install --upgrade "wactorz[all]"
+
+# From source
+git pull
+pip install -e ".[all]"
+
+# Docker Compose from the repository
+git pull
+docker compose --profile python up -d --build
+
+# Docker Hub image
+docker compose pull
+docker compose up -d
+```
+
+The Home Assistant add-on updates from its page in Home Assistant.
+
+Main and its edge nodes must run the same release series (the same major and minor number), so after an upgrade that changes the minor number, run `/deploy <node>` for every node. Until then main refuses to send them new agents. See [Remote nodes](remote-nodes.md).
+
+Read the **Before you upgrade** section of the [changelog](https://github.com/waldiez/wactorz/blob/main/CHANGELOG.md) for the release you are moving to. For 0.8:
+
+- **Python 3.11 or later**, on main and on every node. Upgrade Python before you upgrade Wactorz.
+- **Packages that register agents, pipelines or extensions through entry points load only when named** in `WACTORZ_EXTENSIONS` (`*` loads everything installed, as before). A node reads its own list from `DEPLOY_<NODE>_EXTENSIONS` on main; under Home Assistant, set the add-on's `extensions` option.
+- **Redeploy every node** with `/deploy <node>`, as above.
 
 ---
 
@@ -155,9 +200,13 @@ MONITOR_PORT=8888   # dashboard port, default 8888; WS_PORT is read only when th
 
 ## Running Mosquitto via Docker
 
+For a broker on this machine only:
+
 ```bash
-docker run -d --name mosquitto -p 1883:1883 eclipse-mosquitto
+docker run -d --name mosquitto -p 127.0.0.1:1883:1883 eclipse-mosquitto:2.1.2-alpine mosquitto -c /mosquitto-no-auth.conf
 ```
+
+Mosquitto 2 accepts no connections from outside its container unless it is given a configuration, which is what `/mosquitto-no-auth.conf` (shipped in the image) does. That configuration allows anonymous clients, so keep it on `127.0.0.1`. For a broker with accounts, use the repository's Docker Compose stack (`docker compose up -d` starts the broker alone), which needs `MQTT_PASSWORD` set in `.env`.
 
 > **Note (Docker Desktop on Windows/Mac):** When services run inside Docker and need to reach the broker on the host, use `host.docker.internal` as the broker hostname instead of `localhost`.
 
@@ -245,8 +294,10 @@ Wactorz ships with a `Dockerfile` and Docker Compose files for running the full 
 
 ```bash
 cp .env.template .env
-# edit .env and set LLM_API_KEY, etc.
+# edit .env and set MQTT_PASSWORD and LLM_API_KEY
 ```
+
+The broker carries agent commands and spawned code, so it refuses to start without `MQTT_PASSWORD`.
 
 ### Production stack (profiles)
 
@@ -266,15 +317,16 @@ docker compose --profile full up -d
 | Profile | Services | Ports |
 |---|---|---|
 | *(default)* | mosquitto | :1883 |
-| `python` | + wactorz-python | + :8000, :8888 |
-| `full` | + wactorz-python, homeassistant | + :8000, :8888, :8123 |
+| `python` | + wactorz-python, the code sandbox, Prometheus, Alertmanager | + :8000, :8888, :9090, :9093 |
+| `full` | + wactorz-python, the code sandbox, homeassistant | + :8000, :8888, :8123 |
 
 Once running:
 
-| Service | URL | Credentials |
-|---|---|---|
-| Web UI | http://localhost:8888 | — |
-| REST API | http://localhost:8000 | — |
+| Service | URL |
+|---|---|
+| Web UI | http://localhost:8888 |
+| REST API | http://localhost:8000 |
+| Prometheus (`python` profile) | http://localhost:9090 |
 
 ### Stopping and teardown
 
@@ -299,25 +351,28 @@ docker compose --profile python up -d --build
 
 ### Development stack
 
-For local development, `compose.dev.yaml` starts MQTT + the Python app together with a single command:
+For local development, `compose.dev.yaml` uses development credentials (`wactorz` / `wactorz-dev`), so it needs no `MQTT_PASSWORD`. On its own it starts only the broker, for a backend run on the host (`make dev-full`); the `app` profile adds the backend in a container:
 
 ```bash
-# Start everything
-docker compose -f compose.dev.yaml up -d --build
+# Broker only
+docker compose -f compose.dev.yaml up -d
+
+# Broker + backend, rebuilt from the checkout
+docker compose -f compose.dev.yaml --profile app up -d --build
 
 # View logs
 docker compose -f compose.dev.yaml logs -f wactorz
 
 # Stop everything
-docker compose -f compose.dev.yaml down
+docker compose -f compose.dev.yaml --profile app down
 ```
 
 Services started:
 
 | Container | Port | Description |
 |---|---|---|
-| `wactorz-app` | :8000, :8888 | Python agent system (REST API + Web UI) |
 | `wactorz-dev-mosquitto` | :1883 | MQTT broker (TCP) |
+| `wactorz-app` (`app` profile) | :8000, :8888 | Python agent system (REST API + Web UI) |
 
 ### Environment variables in Docker
 

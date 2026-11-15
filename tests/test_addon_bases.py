@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The add-ons' base images are named in three places, which must agree.
 
 `ha-addon/bases/Dockerfile` pins each base by digest, and is what the release
@@ -11,6 +12,7 @@ has to reach the other two, which these tests then insist on.
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -37,7 +39,7 @@ def _line(reference: str) -> str:
     return _DATED.sub("", reference.split("@", 1)[0])
 
 
-def _build(addon: str) -> dict:
+def _build(addon: str) -> dict[str, Any]:
     return yaml.safe_load((ROOT / "ha-addon" / addon / "build.yaml").read_text())
 
 

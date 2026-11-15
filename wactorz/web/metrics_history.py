@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Sampling every agent and node into the metrics history, about once a minute.
 
 The samples are what the dashboard knows already -- each agent's latest
@@ -27,7 +28,7 @@ from .. import config
 from . import runtime
 from .metrics import known_nodes
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How often the history is sampled.
 SAMPLE_EVERY_S = 60.0

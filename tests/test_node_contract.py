@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The contract between main and a node, pinned.
 
 A node is whatever answers on `nodes/<name>/...`. Main never sees what that is;
@@ -14,6 +15,7 @@ Each constant below is the contract as it stands. A change to one is a change
 both sides have to make together, which is the point of failing here first.
 """
 
+import ast
 import asyncio
 import json
 import re
@@ -51,6 +53,11 @@ CONTROL_TOPICS = frozenset(
         # Clear one agent's chat, state or counters here, or every agent's, as
         # main has cleared its own records of them.
         "reset",
+        # Have an agent here serve another version of a model it names, with
+        # the new pin: a pointer the agent's pin follows has moved.
+        "swap_model",
+        # Main kept, or could not keep, a recorded file the node sent.
+        "data_ack",
         # An agent's blob, in chunks, as main places it here, and an artifact an
         # agent here names, as main answers `artifact_request`. Not signed: the
         # signed spawn names its hash, and only a match is used.
@@ -80,6 +87,10 @@ REPORT_TOPICS = frozenset(
         "artifact_request",
         # A reset done, quoting main's request and naming the agents it cleared.
         "reset_done",
+        # How a swap went, quoting main's token: the version served now, or why not.
+        "swap_ack",
+        # A recorded file is on its way on `blob_return`: its source, path, hash and size.
+        "data_file",
     }
 )
 
@@ -102,9 +113,9 @@ NODE_TOPICS = CONTROL_TOPICS | REPORT_TOPICS | {REPLY_TOPIC} | UNUSED_TOPICS
 
 # ── Payloads ───────────────────────────────────────────────────────────────────
 
-#: Fields main reads off a node heartbeat. `version`, `runtime`, `signing` and
-#: `signing_failures` are the ones a node may omit -- an older runner does -- and
-#: main fills in for it.
+#: Fields main reads off a node heartbeat. `version`, `runtime`, `signing`,
+#: `signing_failures` and `namespace` are the ones a node may omit -- an older
+#: runner does -- and main fills in for it.
 HEARTBEAT_FIELDS = frozenset(
     {
         "node",
@@ -129,6 +140,7 @@ HEARTBEAT_FIELDS = frozenset(
         "signing_failures",
         "tls",
         "slow_retry",
+        "namespace",
     }
 )
 
@@ -160,6 +172,9 @@ MANIFEST_FIELDS = frozenset(
         "code_bundles",
         # That it clears its own agents' copies when main resets them.
         "resets",
+        # That an agent runs under the id its spawn names.
+        "actor_ids",
+        "tasks_by_node",
     }
 )
 
@@ -173,8 +188,12 @@ MANIFEST_FIELDS = frozenset(
 SPAWN_CONFIG_FIELDS = frozenset(
     {
         "name",
+        # The id main's spawn registry keeps; a node too old for it derives
+        # one from the name.
+        "actor_id",
         "code",
         "poll_interval",
+        "task_timeout_s",
         "description",
         "input_schema",
         "output_schema",
@@ -210,11 +229,29 @@ STATE_FILE_SUFFIX = "_state.json"
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
+_LEAF = re.compile(r"[a-z_]+")
 _NODE_TOPIC = re.compile(r"nodes/(?:\{[^}]+\}|\+)/([a-z_]+)")
 
 
+def _helper_leaves(source: str) -> set[str]:
+    """The leaves named in ``node_topic(<node>, "<leaf>", ...)`` calls; a wildcard is no leaf."""
+    leaves: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.Call) and len(node.args) >= 2):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+        leaf = node.args[1]
+        if name != "node_topic" or not isinstance(leaf, ast.Constant):
+            continue
+        if isinstance(leaf.value, str) and _LEAF.fullmatch(leaf.value):
+            leaves.add(leaf.value)
+    return leaves
+
+
 def _topic_segments(source: str) -> set[str]:
-    return set(_NODE_TOPIC.findall(source))
+    """The node topic leaves ``source`` names, spelled out or through `node_topic`."""
+    return set(_NODE_TOPIC.findall(source)) | _helper_leaves(source)
 
 
 def _node_source() -> str:
@@ -249,7 +286,9 @@ def _runner_with_capture(tmp_path: Path) -> tuple[NodeRunner, list[tuple[str, An
 
 class TestTopics:
     def test_the_runner_speaks_exactly_the_contract_topics(self) -> None:
-        found = _topic_segments(_node_source())
+        found: set[str] = set()
+        for path in sorted(NODE_PACKAGE.rglob("*.py")):
+            found |= _topic_segments(path.read_text(encoding="utf-8"))
         assert found == NODE_TOPICS
 
     def test_main_speaks_only_contract_topics(self) -> None:
@@ -274,7 +313,7 @@ class TestTopics:
         # The runner mints reply topics under its own name; main publishes to
         # whatever `_reply_topic` the request carried. Neither side may spell
         # the other's half.
-        assert f'f"nodes/{{agent.node}}/{REPLY_TOPIC}/' in _node_source()
+        assert f'node_topic(agent.node, "{REPLY_TOPIC}", ' in _node_source()
         bridge = (PACKAGE / "agents" / "main" / "llm_bridge.py").read_text(encoding="utf-8")
         assert 'data.get("_reply_topic")' in bridge
 
@@ -401,13 +440,15 @@ class TestPayloadShapes:
             ("migrate_result", MIGRATE_RESULT_FIELDS),
         ],
     )
-    def test_the_runner_publishes_the_contract_fields(self, topic: str, fields: frozenset) -> None:
+    def test_the_runner_publishes_the_contract_fields(
+        self, topic: str, fields: frozenset[Any]
+    ) -> None:
         # Every literal payload published on the topic names at least these
         # keys. Read from source: the paths that publish them need a broker
         # and a running agent, and the shape is what is being pinned.
         source = _node_source()
         pattern = re.compile(
-            r'f"nodes/\{self\.node_name\}/' + topic + r'",\s*\{(.*?)\n\s*\}', re.DOTALL
+            r'node_topic\(self\.node_name, "' + topic + r'"\),\s*\{(.*?)\n\s*\}', re.DOTALL
         )
         bodies = pattern.findall(source)
         assert bodies, f"no literal payload published on {topic}"

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Publish a draft for the reviewer to improve.
 
 Run without arguments for the built-in draft, or pass a draft of your own:

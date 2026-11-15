@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which chat interfaces run when no main does, as in the minimal profile.
 
 The social channels answer through the orchestrator alone, so they run with

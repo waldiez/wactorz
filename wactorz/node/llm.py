@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The LLM, as reached from a node.
 
 The API key stays on main. An agent running here calls ``agent.llm.chat(...)``
@@ -18,11 +19,12 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from ..agents.llm.base import LLMProvider
+from ..core.topics import main_topic, node_topic
 
 if TYPE_CHECKING:
     from .agent import NodeAgent
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long a bridged call waits for main to answer. Generous rather than tight:
 #: the request is queued here, travels to main, waits on a model and comes back,
@@ -37,8 +39,8 @@ class BridgeProvider(LLMProvider):
         self._agent = agent
 
     async def _complete(
-        self, messages: list[dict], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict]:
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         """Ask main to make this call, and wait for the answer it publishes back.
 
         The usage it reports is whatever main sent. The bridge has historically
@@ -51,7 +53,7 @@ class BridgeProvider(LLMProvider):
         started = time.monotonic()
         try:
             reply = await self._agent.ask_main(
-                "main/llm_request",
+                main_topic("llm_request"),
                 {"messages": messages, "system": system},
                 timeout=timeout,
             )
@@ -78,13 +80,11 @@ async def request_over_mqtt(
     for a remote call from main — so the runner has one place to deliver a reply
     to, whichever kind of request asked for it.
 
-    ``asyncio.wait_for`` rather than ``asyncio.timeout``: this runs on Python
-    3.10, where the latter does not exist. The future is cancelled on timeout
-    and the key is dropped either way, so a reply that arrives afterwards finds
+    The future is cancelled on timeout and the key is dropped either way, so a reply that arrives afterwards finds
     nothing waiting and is logged rather than resolving a call that gave up.
     """
-    reply_topic = f"nodes/{agent.node}/reply/{uuid.uuid4().hex[:8]}"
-    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    reply_topic = node_topic(agent.node, "reply", uuid.uuid4().hex[:8])
+    future: asyncio.Future[Any] = asyncio.get_event_loop().create_future()
     agent._result_futures[reply_topic] = future
     try:
         # Signed last, so the signature covers the reply topic and who is asking:
@@ -100,7 +100,7 @@ async def request_over_mqtt(
         )
         await agent._mqtt_publish(topic, request)
         return await asyncio.wait_for(future, timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("[%s] %s timed out after %ss", agent.name, topic, timeout)
         return None
     finally:

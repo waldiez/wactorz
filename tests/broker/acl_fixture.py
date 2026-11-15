@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Write the broker files the access-list tests run against.
 
 ``python -m tests.broker.acl_fixture <directory>`` writes ``node_passwd`` and

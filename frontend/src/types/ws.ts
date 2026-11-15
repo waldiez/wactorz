@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
  * Wire contracts for the monitor server's `/ws` endpoint — the data shapes the
@@ -51,3 +50,6 @@ export interface LogFeedItem {
     /** The option picked, on an `answer` entry. */
     option?: string;
 }
+
+/** How the page's link to the server stands. */
+export type ConnState = "live" | "connecting" | "disconnected";

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The node signing mode is reachable from the Home Assistant add-on.
 
 Configured by three files that cannot see each other: `wactorz/config.py` reads
@@ -13,6 +14,7 @@ install that saved `warn` keeps it.
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -25,7 +27,7 @@ OPTION = "node_signing"
 VARIABLE = "WACTORZ_NODE_SIGNING"
 
 
-def _config(addon: str) -> dict:
+def _config(addon: str) -> dict[str, Any]:
     return yaml.safe_load((ROOT / "ha-addon" / addon / "config.yaml").read_text(encoding="utf-8"))
 
 

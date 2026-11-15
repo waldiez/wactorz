@@ -7,8 +7,8 @@ The fastest way to run Wactorz — no repo clone needed. Everything runs in cont
 ---
 
 - [Which image](#which-image)
-- [Option A — Terminal + Compose (recommended)](#option-a--terminal--compose-recommended)
-- [Option B — Docker Desktop + Terminal](#option-b--docker-desktop--terminal)
+- [Option A: Terminal and Compose (recommended)](#option-a-terminal-and-compose-recommended)
+- [Option B: Docker Desktop and Terminal](#option-b-docker-desktop-and-terminal)
 
 ---
 
@@ -45,7 +45,7 @@ The corresponding source is the source of this release at <https://github.com/wa
 
 ---
 
-## Option A — Terminal + Compose (recommended)
+## Option A: Terminal and Compose (recommended)
 
 Works in any terminal, including the built-in terminal inside Docker Desktop.
 
@@ -83,14 +83,14 @@ persistence_location /mosquitto/data/
 log_dest stdout
 ```
 
-**`compose.yaml`**
+**`compose.yaml`** (the broker is named by its tag here; the repository's own `compose.yaml` pins the build by digest, and is the one to copy the digest from)
 
 ```yaml
 name: wactorz
 
 services:
   mosquitto:
-    image: eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408
+    image: eclipse-mosquitto:2.1.2-alpine
     container_name: wactorz-mosquitto
     restart: unless-stopped
     environment:
@@ -192,7 +192,7 @@ To stop: `docker compose down`
 
 ---
 
-## Option B — Docker Desktop + Terminal
+## Option B: Docker Desktop and Terminal
 
 The same setup with `docker run`, in PowerShell.
 
@@ -252,7 +252,7 @@ docker run -d --name wactorz-mosquitto `
   --env-file "${PWD}\.env" `
   -v "${PWD}\mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" `
   -v "wactorz-mosquitto-data:/mosquitto/data" `
-  eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408 `
+  eclipse-mosquitto:2.1.2-alpine `
   /bin/sh -c 'umask 077; mosquitto_passwd -b -c /mosquitto/data/passwd "$MQTT_USERNAME" "$MQTT_PASSWORD" && chown mosquitto:mosquitto /mosquitto/data/passwd && exec mosquitto -c /mosquitto/config/mosquitto.conf'
 ```
 

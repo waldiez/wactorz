@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Repair of the agent code an LLM generates for a pipeline step.
 
 The model reliably makes the same few mistakes -- awaiting synchronous agent
@@ -10,7 +11,7 @@ import logging
 import re
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def rewrite_aiomqtt_to_subscribe(code: str, topic: str) -> str:

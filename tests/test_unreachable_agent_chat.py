@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent that is not running must not answer chat.
 
 Stopping cancels the message loop that drains the mailbox, but chat never uses

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The outbox: where a message from an agent meets the channel that reaches the person.
 
 An agent, on main or on a node, publishes what it has to say on its own
@@ -34,11 +35,12 @@ from ...core.mqtt import (
     session_kwargs,
 )
 from ...core.outbound import Answer, OutboundMessage, check_options, pick_option
+from ...core.topics import AGENTS, agent_topic, own_topic_parts
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Every agent's chat frames, whichever machine the agent is on.
-CHAT_FRAMES = "agents/+/chat"
+CHAT_FRAMES = agent_topic("+", "chat")
 
 #: How long the outbox waits before dialling the broker again after losing it.
 RECONNECT_SECONDS = 5.0
@@ -49,14 +51,17 @@ class ChannelNotRunningError(RuntimeError):
 
     @classmethod
     def discord(cls) -> "ChannelNotRunningError":
+        """The error for a message to Discord while the bot is not running."""
         return cls("the Discord bot is not running")
 
     @classmethod
     def telegram(cls) -> "ChannelNotRunningError":
+        """The error for a message to Telegram while the bot is not running."""
         return cls("the Telegram bot is not running")
 
     @classmethod
     def whatsapp(cls) -> "ChannelNotRunningError":
+        """The error for a message to WhatsApp while the webhook is not running."""
         return cls("the WhatsApp webhook is not running")
 
 
@@ -65,14 +70,17 @@ class NotAUserError(ValueError):
 
     @classmethod
     def discord(cls, user: Any) -> "NotAUserError":
+        """The error for a Discord recipient ``user`` that is not a numeric id."""
         return cls(f"a Discord user is a numeric id, not {user!r}")
 
     @classmethod
     def telegram(cls, user: Any) -> "NotAUserError":
+        """The error for a Telegram recipient ``user`` that is not a numeric id."""
         return cls(f"a Telegram user is a numeric id, not {user!r}")
 
     @classmethod
     def whatsapp(cls) -> "NotAUserError":
+        """The error for a WhatsApp recipient that is not a phone number."""
         return cls("a WhatsApp user is a phone number")
 
 
@@ -247,8 +255,8 @@ class Outbox:
 
     async def handle_frame(self, topic: str, payload: str) -> bool:
         """Deliver the message in one broker frame, if it is one. True when delivered."""
-        parts = topic.split("/")
-        if len(parts) != 3 or parts[0] != "agents" or parts[2] != "chat":
+        parts = own_topic_parts(topic)
+        if parts is None or len(parts) != 3 or parts[0] != AGENTS or parts[2] != "chat":
             return False
         try:
             data = json.loads(payload)

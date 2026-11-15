@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
  * Accessibility checks with axe, under the rule the end-to-end suite applies:

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The machines a plan's agents can run on, as the planner's model is shown them.
 
 A step's spawn may name a node, and placement keeps the one it names. The

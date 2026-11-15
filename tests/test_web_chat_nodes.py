@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`/nodes` typed into the dashboard's chat.
 
 Main answers it, remote nodes and their readings included, so the handler here

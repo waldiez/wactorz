@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The agent that runs code written at runtime, and the surface that code sees.
 
 An agent is a file until it grows a second concern; then it becomes a package

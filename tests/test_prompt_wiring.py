@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The choice of prompt fragments travels from the configuration to main, and from
 main to the planners it spawns.
 
@@ -8,8 +9,6 @@ prompts that never mention it and refuses its intents, that the planner neither
 gathers nor shows Home Assistant's live context there, and that the same test
 that starts the Home Assistant agents is the one that decides.
 """
-
-from __future__ import annotations
 
 import dataclasses
 from pathlib import Path

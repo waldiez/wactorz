@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pickle store — agent.state objects only.
 
 Each agent's state is one file, and it is kept in memory once read: a recall is
@@ -39,7 +40,7 @@ from ..blobs import ENCODERS, Blobs, marker, marker_for
 from ..deferred_write import LARGE_STATE_BYTES, DeferredWriter
 from ..paths import agent_state_dir, resolve_state_dir
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Marks a state file written one value at a time, and says which layout it is.
 STATE_FORMAT_KEY = "wactorz_state_format"

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The planner around its plans: routing, workers, caching, and ending.
 
 A planner is spawned for one request and must not outlive it. Every way it
@@ -127,7 +128,7 @@ async def _finish(*tasks: "asyncio.Task[Any] | None") -> None:
     for task in pending:
         task.cancel()
     if pending:
-        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.10/3.11.
+        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.11.
         await asyncio.wait(pending, timeout=5)
 
 

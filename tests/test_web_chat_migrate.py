@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`/migrate` typed into the dashboard's chat.
 
 The dashboard answers it with main's own command, so it reads the same as from

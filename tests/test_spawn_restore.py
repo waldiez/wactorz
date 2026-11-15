@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Bringing agents back at startup, and conjuring one on demand.
 
 Restore reads the spawn registry and puts back what should be running. The
@@ -14,12 +15,15 @@ that matches nothing resolves to nothing, and the caller is told whether the
 name was spawnable so it can say which of the two happened.
 """
 
-from typing import Any
+from typing import Any, cast
 
+from wactorz.agents.catalog_agent import _build_catalog
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry, with_actor_id
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.core.manifests import AgentManifest
 
 _SPAWN_FAILED = "agent failed to start"
 _NODE_UNREACHABLE = "node unreachable"
@@ -96,7 +100,7 @@ class _Main:
         self,
         *,
         spawn_registry: dict[str, dict[str, Any]] | None = None,
-        manifests: dict[str, dict[str, Any]] | None = None,
+        manifests: dict[str, AgentManifest] | None = None,
         registry: _Registry | None = None,
         local_spawn_fails: tuple[str, ...] = (),
         remote_spawn_fails: tuple[str, ...] = (),
@@ -113,14 +117,19 @@ class _Main:
 
         self.locally_spawned: list[tuple[str, bool, bool]] = []
         self.remotely_spawned: list[tuple[str, str, bool]] = []
+        #: The config each spawn was handed, local and remote alike.
+        self.configs: dict[str, dict[str, Any]] = {}
         #: Whether each remote spawn was a restore, which asks about no packages.
         self.restoring: list[bool] = []
 
-        async def _local(config: dict[str, Any], save: bool = True, *, from_registry: bool = False):
+        async def _local(
+            config: dict[str, Any], save: bool = True, *, from_registry: bool = False
+        ) -> None:
             name = config.get("name", "?")
             if name in local_spawn_fails:
                 raise RuntimeError(_SPAWN_FAILED)
             self.locally_spawned.append((name, save, from_registry))
+            self.configs[name] = config
 
         async def _remote(
             config: dict[str, Any], node: str, save: bool, *, restoring: bool = False
@@ -130,8 +139,13 @@ class _Main:
             if name in remote_spawn_fails:
                 raise RuntimeError(_NODE_UNREACHABLE)
             self.remotely_spawned.append((name, node, save))
+            self.configs[name] = config
 
-        setattr(main.spawns, "_get_spawn_registry", lambda: dict(spawn_registry or {}))
+        setattr(
+            main.spawns,
+            "_get_spawn_registry",
+            lambda: SpawnRegistry.from_names(dict(spawn_registry or {})),
+        )
         setattr(main.spawns, "_spawn_from_config", _local)
         setattr(main.spawns, "_spawn_remote", _remote)
         setattr(main, "_match_catalog_recipe", lambda name, capabilities=None: catalog_match)
@@ -156,9 +170,9 @@ def remote(name: str, node: str = "rpi", **over: Any) -> dict[str, Any]:
     return {"name": name, "code": "print(1)", "node": node, **over}
 
 
-def recipe(**over: Any) -> dict[str, Any]:
+def recipe(**over: Any) -> AgentManifest:
     """A manifest entry the catalogue can spawn from."""
-    return {"spawnable": True, "catalog": "catalog", **over}
+    return cast(AgentManifest, {"spawnable": True, "catalog": "catalog", **over})
 
 
 class TestNotRacingTheSupervisor:
@@ -364,3 +378,83 @@ class TestResolvingAnAgentByName:
 
         assert target is None
         assert spawnable is True
+
+
+class TestCatalogAgentsComeBackCurrent:
+    """Only opted-in recipes refresh code, without approving new dependencies."""
+
+    async def test_a_trusted_catalog_entry_takes_the_current_code_and_settings(self) -> None:
+        stale = {
+            **_build_catalog()["reachy-mini"],
+            "code": "old = 1",
+            "trusted": True,
+            "task_timeout_s": 99,
+            "initial_state": {"robot_host": "192.0.2.1"},
+        }
+        main = _Main(spawn_registry={"reachy-mini": stale})
+
+        await main.restore()
+
+        current = _build_catalog()["reachy-mini"]
+        restored = main.configs["reachy-mini"]
+        assert restored["code"] == current["code"]
+        assert restored["task_timeout_s"] == 99
+        assert restored["initial_state"] == stale["initial_state"]
+        assert restored["install"] == current["install"]
+        assert restored["trusted"] is True
+
+    async def test_where_it_runs_is_kept(self) -> None:
+        entry = {
+            "name": "smart-energy",
+            "type": "dynamic",
+            "code": "old = 1",
+            "trusted": True,
+            "node": "rpi",
+        }
+        main = _Main(spawn_registry={"smart-energy": entry})
+
+        await main.restore()
+
+        restored = main.configs["smart-energy"]
+        assert restored["node"] == "rpi"
+        # With the id the registry keeps for it, as every entry is read back.
+        assert restored == with_actor_id("smart-energy", entry)
+
+    async def test_changed_dependencies_need_a_fresh_approved_spawn(self) -> None:
+        stale = {
+            **_build_catalog()["reachy-mini"],
+            "install": ["reachy-mini==1.8.4"],
+            "trusted": True,
+        }
+        main = _Main(spawn_registry={"reachy-mini": stale, "other": local("other")})
+
+        await main.restore()
+
+        assert "reachy-mini" not in main.configs
+        assert main.restored_names == ["other"]
+        assert stale["install"] == ["reachy-mini==1.8.4"]
+
+    async def test_remote_dependency_migration_is_refused_before_node_dispatch(self) -> None:
+        stale = {**_build_catalog()["reachy-mini"], "install": [], "trusted": True, "node": "rpi"}
+        main = _Main(spawn_registry={"reachy-mini": stale})
+
+        await main.restore()
+
+        assert main.remotely_spawned == []
+
+    async def test_an_untrusted_entry_with_a_catalog_name_is_left_alone(self) -> None:
+        # Only the catalog writes trusted entries; a model-written agent that
+        # happens to share a recipe's name keeps its own code.
+        own = {"name": "reachy-mini", "type": "dynamic", "code": "mine = 1"}
+        main = _Main(spawn_registry={"reachy-mini": own})
+
+        await main.restore()
+
+        assert main.configs["reachy-mini"] == with_actor_id("reachy-mini", own)
+
+    async def test_an_agent_with_no_recipe_is_left_alone(self) -> None:
+        main = _Main(spawn_registry={"a": local("a", trusted=True)})
+
+        await main.restore()
+
+        assert main.configs["a"]["code"] == "print(1)"

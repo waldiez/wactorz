@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A wheel can be put together again from a package as it is installed.
 
 `/deploy` gives a node the package the server runs. A server installed from a
@@ -16,6 +17,7 @@ import importlib.metadata
 import json
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -42,7 +44,7 @@ FILES = {
 }
 
 
-def _install(site: Path, origin: dict | None, wheel: str | None = None) -> None:
+def _install(site: Path, origin: dict[str, Any] | None, wheel: str | None = None) -> None:
     """Lay the made-up package out under ``site`` and have it be what `demo` resolves to."""
     files = dict(FILES)
     if wheel is not None:
@@ -82,7 +84,9 @@ def site_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 class TestWhereItCameFrom:
     @pytest.mark.parametrize("origin", [FROM_A_COMMIT, FROM_A_FOLDER])
-    def test_a_commit_or_a_folder_is_a_direct_reference(self, site: Path, origin: dict) -> None:
+    def test_a_commit_or_a_folder_is_a_direct_reference(
+        self, site: Path, origin: dict[str, Any]
+    ) -> None:
         _install(site, origin)
 
         assert installed_from_a_direct_reference("demo") is True

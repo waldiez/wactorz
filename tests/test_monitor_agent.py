@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The monitor watches, classifies and tells the user. It never restarts anything.
 
 The Supervisor is the single restart authority, so everything the monitor does
@@ -482,7 +483,7 @@ class TestMonitorLoop:
 
         monkeypatch.setattr(setup.monitor, "_ping_all_actors", _flaky)
 
-        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.10/3.11.
+        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.11.
         task = asyncio.create_task(setup.monitor._monitor_loop())
         done, _ = await asyncio.wait({task}, timeout=5)
 

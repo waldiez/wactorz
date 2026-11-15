@@ -1,9 +1,8 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import type { HistoryRow } from "../ui/dashboard/history";
+import type { HistoryRow } from "../io/historyApi";
 import {
     AGENT_CHARTS,
     buildCharts,
@@ -14,7 +13,7 @@ import {
     throttleSummary,
     TrendPanel,
     type HistoryReader,
-} from "../ui/dashboard/trendPanel";
+} from "../ui/overview/trendPanel";
 
 const T0 = 1_700_000_000;
 
@@ -104,6 +103,9 @@ describe("buildCharts", () => {
         const agents = charts.find(c => c.querySelector("figcaption")?.textContent === "Agents")!;
         expect([...agents.querySelectorAll(".af-chart-axis span")].map(s => s.textContent)).toEqual([
             "2",
+            "1.5",
+            "1",
+            "0.5",
             "0",
         ]);
     });
@@ -259,9 +261,11 @@ describe("TrendPanel", () => {
 
     it("loads nothing once closed", async () => {
         await panel.open("agents", "a");
+        const window = document.querySelector<HTMLButtonElement>(".af-trend-window")!;
         panel.close();
         read.mockClear();
-        await (panel as unknown as { _load(): Promise<void> })._load();
+        window.click();
+        await Promise.resolve();
         expect(read).not.toHaveBeenCalled();
     });
 });

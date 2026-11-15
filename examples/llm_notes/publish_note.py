@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Publish a few notes for the summariser to hear."""
 
 import asyncio

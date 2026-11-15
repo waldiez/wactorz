@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """How the `wactorz` command reports a configuration it cannot start with."""
 
 import logging

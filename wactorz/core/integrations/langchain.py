@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """LangChain and LangGraph beside Wactorz: the spend of a chain on the dashboard.
 
 A chain or a graph calls its model through LangChain, not through the
@@ -61,6 +62,9 @@ class CostCallback(BaseCallbackHandler):
         self.prices: Prices = dict(prices or {})
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        """Charge the actor for the call that just ended, from the token counts the response
+        reports.
+        """
         input_tokens, output_tokens, model = token_usage(response)
         self.actor.record_llm_cost(
             cost_of(self.prices, model, input_tokens, output_tokens),

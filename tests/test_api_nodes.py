@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """``GET /api/nodes``: the nodes main knows, for a page that opens after they said so.
 
 A node's manifest is retained, so it reaches the server once, when it
@@ -9,6 +10,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.web import api_system
@@ -16,7 +18,7 @@ from wactorz.web.app import build_app
 
 
 @pytest.fixture(name="client")
-async def client_fixture() -> AsyncIterator[TestClient]:
+async def client_fixture() -> AsyncIterator[TestClient[web.Request, web.Application]]:
     client = TestClient(TestServer(build_app()))
     await client.start_server()
     yield client
@@ -25,7 +27,7 @@ async def client_fixture() -> AsyncIterator[TestClient]:
 
 @pytest.mark.parametrize("path", ["/api/nodes", "/nodes"])
 async def test_every_known_node_with_its_machine(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+    client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch, path: str
 ) -> None:
     listed: list[dict[str, Any]] = [
         {"node": "rpi", "online": True, "manifest": {"manifest_v": 1, "arch": "aarch64"}}
@@ -39,7 +41,7 @@ async def test_every_known_node_with_its_machine(
 
 
 async def test_without_main_there_are_none(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(api_system, "known_nodes", list)
 

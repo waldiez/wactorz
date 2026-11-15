@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Moving state out of the pre-SQLite pickle files, once, without clobbering.
 
 It runs on every start, so it must be a no-op the second time: a key SQLite

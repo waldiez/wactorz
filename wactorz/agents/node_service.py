@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Install the node runner as a systemd service, at the least-privileged rung.
 
 The deploy used to launch the runner with `nohup`, which does not survive a
@@ -26,7 +27,7 @@ import shlex
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 UNIT_NAME = "wactorz-node.service"
 
@@ -195,10 +196,14 @@ def _unit_path_value(path: str) -> str:
 
 
 def user_unit_path(home: str) -> str:
+    """Where the runner's user unit file goes, under ``home``."""
     return f"{home}/.config/systemd/user/{UNIT_NAME}"
 
 
 def unit_path(rung: Rung, home: str) -> str:
+    """Where the runner's unit file goes on ``rung``: the system path, or the user's under
+    ``home``.
+    """
     return SYSTEM_UNIT_PATH if rung.system else user_unit_path(home)
 
 

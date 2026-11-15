@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Stand-ins for optional dependencies, safe to use at module scope.
 
 The suite must run on a machine (or CI job) without the optional extras
@@ -27,7 +28,7 @@ def ensure_importable(*names: str) -> None:
             continue
         try:
             importlib.import_module(name)
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:
             # Not installed (or unimportable here) — a bare module is enough for
             # tests that only need the attribute lookup to resolve.
             sys.modules[name] = types.ModuleType(name)

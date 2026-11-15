@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every deploy-target field is reachable from the Home Assistant add-on.
 
 A `DeployTarget` field is configured by three files that have no way of knowing

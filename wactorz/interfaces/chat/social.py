@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shared pieces for the social chat channels.
 
 Rate limiting and the checks that decide whether a channel may start at all —
@@ -7,10 +8,11 @@ its library is installed, and it has a sender allow-list.
 import importlib.util
 import logging
 import time
+from typing import Any
 
 from ...config import CONFIG
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 _INTERFACE_DEPENDENCIES = {
@@ -43,7 +45,9 @@ class SocialRateLimiter:
     """
 
     def __init__(self, per_minute: int | None = None) -> None:
-        self.per_minute = CONFIG.social_rate_limit_per_min if per_minute is None else per_minute
+        self.per_minute: int = (
+            CONFIG.social_rate_limit_per_min if per_minute is None else per_minute
+        )
         self._hits: dict[str, list[float]] = {}
         self._in_flight: set[str] = set()
 
@@ -71,7 +75,7 @@ class SocialRateLimiter:
         self._in_flight.discard(sender)
 
 
-def social_channel_blocked(channel: str, token: str, allowed: frozenset) -> str | None:
+def social_channel_blocked(channel: str, token: str, allowed: frozenset[Any]) -> str | None:
     """Why ``channel`` must not start, or None when it's safe to.
 
     A bot with a token but no sender allow-list answers anyone who finds it, and

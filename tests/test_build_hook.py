@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the packaging build hook's rebuild decision.
 
 The hook decides whether ``static/app`` (committed, and shipped in the wheel)
@@ -8,15 +9,19 @@ bundled dashboard does not match its source.
 """
 
 import importlib.util
+import os
 import sys
+import time
 from pathlib import Path
+from types import ModuleType
+from typing import NoReturn
 
 import pytest
 
 _HOOK_PATH = Path(__file__).resolve().parents[1] / "scripts" / "hooks" / "build_hook.py"
 
 
-def _load_hook():
+def _load_hook() -> "ModuleType":
     """Import the hook module by path — it lives outside the package."""
     spec = importlib.util.spec_from_file_location("wactorz_build_hook", _HOOK_PATH)
     assert spec and spec.loader
@@ -82,8 +87,6 @@ class TestIsStale:
         """The reason this is content-hashed rather than timestamped."""
         hook._record_fingerprint(_frontend(project))
         src = _frontend(project) / "src" / "main.ts"
-        import os
-        import time
 
         os.utime(src, (time.time() + 10_000, time.time() + 10_000))
         assert not hook._is_stale(_dist(project), _frontend(project))
@@ -118,7 +121,7 @@ class TestFingerprint:
         assert hook._input_fingerprint(_frontend(project)) != before
 
     def test_unwritable_cache_is_not_fatal(self, project: Path, monkeypatch) -> None:
-        def _boom(*_args, **_kwargs):
+        def _boom(*_args, **_kwargs) -> NoReturn:
             raise OSError("read-only")
 
         monkeypatch.setattr(Path, "mkdir", _boom)

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent's blobs travel beside its state when it moves.
 
 A migration ships the state as JSON; a model, an array or raw bytes goes as a
@@ -9,6 +10,7 @@ message named, and main loads nothing from a node that runs code when loaded.
 import asyncio
 import hashlib
 import json
+import struct
 import sys
 import types
 from collections.abc import AsyncIterator
@@ -41,6 +43,8 @@ from wactorz.core.paths import agent_state_dir
 from wactorz.core.state_snapshot import why_it_cannot_travel
 
 BIG = 1 << 40
+#: A chunk's header as the protocol frames it: its index, and how many there are.
+_FRAME = struct.Struct(">II")
 
 
 def _sha(data: bytes) -> str:
@@ -225,6 +229,64 @@ class TestTheInbox:
         await _deliver(inbox, data)
 
         assert not any(tmp_path.glob("*"))
+
+    async def test_blobs_started_together_cannot_pass_the_cap_between_them(
+        self, tmp_path: Path
+    ) -> None:
+        # Each fits alone. Started together they would hold twice the cap, so the
+        # second is refused from its first chunk, by what the first announced.
+        inbox = Inbox(tmp_path, CHUNK_BYTES * 2)
+        first, second = b"a" * (CHUNK_BYTES * 2), b"b" * (CHUNK_BYTES * 2)
+        first_chunks, second_chunks = list(chunks(first)), list(chunks(second))
+
+        await inbox.accept(_sha(first), first_chunks[0])
+        for chunk in second_chunks:
+            await inbox.accept(_sha(second), chunk)
+        await inbox.accept(_sha(first), first_chunks[1])
+
+        assert inbox.path(_sha(first)).read_bytes() == first
+        assert not inbox.path(_sha(second)).exists()
+        assert sum(p.stat().st_size for p in tmp_path.iterdir()) <= CHUNK_BYTES * 2
+
+    async def test_a_chunk_larger_than_a_chunk_is_refused(self, tmp_path: Path) -> None:
+        # Reservations count in chunks: a larger one would write past what its blob holds.
+        inbox = Inbox(tmp_path, CHUNK_BYTES * 4)
+        data = b"x" * (CHUNK_BYTES * 2)
+
+        await inbox.accept(_sha(data), _FRAME.pack(0, 1) + data)
+        await inbox.accept(_sha(data + b"y"), _FRAME.pack(0, 1) + data + b"y")
+
+        assert sum(p.stat().st_size for p in tmp_path.iterdir()) == 0
+
+    async def test_one_oversized_chunk_part_way_drops_the_blob(self, tmp_path: Path) -> None:
+        inbox = Inbox(tmp_path, CHUNK_BYTES * 4)
+        data = b"x" * (CHUNK_BYTES * 3)
+        first, *_ = list(chunks(data))
+
+        await inbox.accept(_sha(data), first)
+        await inbox.accept(_sha(data), _FRAME.pack(1, 3) + b"x" * (CHUNK_BYTES * 2))
+
+        assert not any(tmp_path.iterdir())
+
+    async def test_blobs_that_fit_together_arrive_together(self, tmp_path: Path) -> None:
+        inbox = Inbox(tmp_path, CHUNK_BYTES * 2)
+        first, second = b"a" * CHUNK_BYTES, b"b" * CHUNK_BYTES
+        (first_chunk,), (second_chunk,) = list(chunks(first)), list(chunks(second))
+
+        await inbox.accept(_sha(first), first_chunk)
+        await inbox.accept(_sha(second), second_chunk)
+
+        assert inbox.path(_sha(first)).read_bytes() == first
+        assert inbox.path(_sha(second)).read_bytes() == second
+
+    async def test_a_finished_blob_makes_room_for_the_next(self, tmp_path: Path) -> None:
+        inbox = Inbox(tmp_path, CHUNK_BYTES * 2)
+        first, second = b"a" * (CHUNK_BYTES * 2), b"b" * (CHUNK_BYTES * 2)
+
+        await _deliver(inbox, first)
+        await _deliver(inbox, second)
+
+        assert inbox.path(_sha(second)).read_bytes() == second
 
     async def test_waiting_ends_when_the_last_blob_arrives(self, tmp_path: Path) -> None:
         inbox = Inbox(tmp_path, BIG)

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Where the spend figures come from, and how an upgrade seeds them.
 
 `tests/test_cost_limit_enforcement.py` covers the cap stopping a call. This
@@ -11,9 +12,9 @@ reset stays a reset.
 import re
 from collections.abc import Iterator
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -51,7 +52,7 @@ class TestPeriods:
         class _Clock:
             @staticmethod
             def now() -> datetime:
-                return datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+                return datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
         monkeypatch.setattr(cost, "datetime", _Clock)
 
@@ -136,11 +137,11 @@ class TestUpgradeSeeding:
         assert cost.get_global_cost_info()["spend_usd"] == 10.0
 
     def test_unreadable_durable_totals_count_as_nothing(self) -> None:
-        assert cost._known_persisted_cost_total(_Broken()) == 0.0
+        assert cost._known_persisted_cost_total(cast(WactorzDB, _Broken())) == 0.0
 
     def test_seeding_against_a_failing_database_does_not_raise(self) -> None:
-        cost._bootstrap_active_global_cost(_Broken(), "monthly")
-        cost._seed_alltime_cost(_Broken())
+        cost._bootstrap_active_global_cost(cast(WactorzDB, _Broken()), "monthly")
+        cost._seed_alltime_cost(cast(WactorzDB, _Broken()))
 
     def test_a_failing_write_during_seeding_is_tolerated(
         self, db: WactorzDB, monkeypatch: pytest.MonkeyPatch

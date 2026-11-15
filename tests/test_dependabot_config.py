@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What Dependabot proposes, and what it is told to leave alone.
 
 A major release can need code changed before it can be merged. Grouped with
@@ -7,6 +8,7 @@ at all. The frontend is not asked for while Dependabot cannot read its lockfile.
 """
 
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -14,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
 
 
-def _entry(ecosystem: str) -> dict:
+def _entry(ecosystem: str) -> dict[str, Any]:
     return next(u for u in CONFIG["updates"] if u["package-ecosystem"] == ecosystem)
 
 

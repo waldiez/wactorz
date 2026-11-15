@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A generated agent's tasks are counted by how they end, and its work is timed.
 
 `handle_task` and `process()` carry everything a generated agent does. A task is

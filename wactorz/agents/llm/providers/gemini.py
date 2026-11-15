@@ -1,15 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
 """GeminiProvider — Google Gemini, whose SDK is sync-only."""
 
 import asyncio
 import logging
 import queue
+from collections.abc import AsyncIterator
 from typing import Any
 
 from ..attachments import UNREADABLE
 from ..base import LLMProvider, ToolCall, ToolCompletion, _temp_params
 from ..pricing import calc_cost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 _GEMINI_STREAM_STALL_TIMEOUT = 60
@@ -105,12 +107,12 @@ class GeminiProvider(LLMProvider):
         self,
         model: str = "gemini-2.5-flash",
         api_key: str | None = None,
-    ):
-        from google import genai
-        from google.genai import types as genai_types
+    ) -> None:
+        from google import genai  # optional dependency: the `google` extra
+        from google.genai import types as genai_types  # optional dependency: the `google` extra
 
         self.model_name = model
-        self.client = genai.Client(api_key=api_key) if api_key else genai.Client()
+        self.client: genai.Client = genai.Client(api_key=api_key) if api_key else genai.Client()
         self._types = genai_types
 
     @classmethod
@@ -121,7 +123,7 @@ class GeminiProvider(LLMProvider):
         return True
 
     async def _complete(
-        self, messages: list[dict[str, Any]], system: str = "", **kwargs
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
     ) -> tuple[str, dict[str, Any]]:
         contents = self._to_gemini_contents(messages)
         config = self._types.GenerateContentConfig(
@@ -235,7 +237,9 @@ class GeminiProvider(LLMProvider):
             parameters=_gemini_schema(tool.get("parameters", {"type": "object", "properties": {}})),
         )
 
-    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
+    async def _stream(
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> AsyncIterator[str | dict[str, Any]]:
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         contents = self._to_gemini_contents(messages)
         config = self._types.GenerateContentConfig(
@@ -246,7 +250,7 @@ class GeminiProvider(LLMProvider):
         q: queue.Queue[tuple[str, Any]] = queue.Queue()
         input_tokens = output_tokens = 0
 
-        def _stream_thread():
+        def _stream_thread() -> None:
             try:
                 for chunk in self.client.models.generate_content_stream(
                     model=self.model_name,

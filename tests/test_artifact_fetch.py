@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A node fetches the models its agents name, once, and keeps them.
 
 A spawn names artifacts by reference; main pins each to the version and the
@@ -23,6 +24,7 @@ from tests.waiting import until
 from wactorz.agents.main import artifact_service as service_module
 from wactorz.agents.main.artifact_service import ArtifactService
 from wactorz.agents.main.hosts import ArtifactHost
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import ActorState
 from wactorz.core.artifacts import (
     ArtifactError,
@@ -92,8 +94,8 @@ class _Host:
         #: Where what is published goes as well, standing in for the broker.
         self.deliver: Any = None
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self.registry
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names(self.registry)
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = False, qos: int = 0
@@ -167,6 +169,7 @@ class TestPinning:
             {"version": 0},
             {"name": "a/b"},
             {"format": "h5"},
+            {"metadata": "k_sigma=6"},
         ],
     )
     def test_a_node_refuses_an_entry_that_is_not_well_formed(
@@ -174,6 +177,38 @@ class TestPinning:
     ) -> None:
         with pytest.raises(ArtifactError):
             check_pinned({**stored, **change})
+
+    def test_a_pin_carries_what_was_said_of_the_version(
+        self, store: ArtifactStore, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "tuned.onnx"
+        path.write_bytes(MODEL + b"tuned")
+        store.add(path, "imu-detector", metadata={"k_sigma": 5, "dataset": "imu-2026"})
+
+        pin = store.pin("imu-detector:latest")
+
+        assert pin["metadata"] == {"k_sigma": 5, "dataset": "imu-2026"}
+        assert check_pinned(pin)["metadata"] == pin["metadata"]
+
+    def test_an_entry_sent_without_metadata_reads_as_none_said(
+        self, stored: dict[str, Any]
+    ) -> None:
+        # What a main from before metadata travelled sends.
+        sent = {key: value for key, value in stored.items() if key != "metadata"}
+
+        assert check_pinned(sent)["metadata"] == {}
+
+    def test_a_node_gives_its_agent_the_metadata(
+        self, runner: RecordingRunner, store: ArtifactStore, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "tuned.onnx"
+        path.write_bytes(MODEL + b"tuned")
+        pin = pinned(store.add(path, "imu-detector", metadata={"k_sigma": 5}))
+        runner.artifacts.take(pin["sha256"], path)
+
+        found = runner.readable_artifacts({"artifacts": {"model": pin}})
+
+        assert found["model"]["metadata"] == {"k_sigma": 5}
 
     def test_a_config_without_artifacts_names_none(self) -> None:
         assert pinned_in({"name": "x"}) == {}

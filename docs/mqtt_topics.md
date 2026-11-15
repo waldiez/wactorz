@@ -2,6 +2,12 @@
 
 All topics use `localhost:1883` by default (configurable via `--mqtt-broker` and `--mqtt-port`).
 
+With `WACTORZ_NAMESPACE` set, Wactorz's own topics -- `agents/`, `nodes/`, `main/`,
+`system/`, `models/`, `pipelines/` and `shadow/` -- go under it (`house/agents/{id}/status`),
+and the world's (`home/`, `sensors/`, `custom/`, `schedule/`, `homeassistant/`) stay as
+they are. This page writes them bare, as agent programs and the dashboard do. See "Two
+installs on one broker" in `remote-nodes.md`.
+
 ---
 
 ## Agent Topics
@@ -362,7 +368,7 @@ A message that offers the person a choice, or goes to a chat channel, carries mo
 **Published by:** The agent that asked
 **Retained:** yes
 **Trigger:** When the agent starts, if it has asked anything, and whenever it asks a question or one is answered
-**Purpose:** The agent's question book: every question it still keeps, open or answered, as `ask_operator` records them. The monitor's `GET /api/questions` reads it, so a question asked while the monitor was down is still there when it comes back. Cleared when the agent is deleted.
+**Purpose:** The agent's question book: every question it still keeps, open or answered, as `ask_operator` records them. The monitor's `GET /api/questions` reads it, so a question asked while the monitor was down is still there when it comes back, and relays it to the dashboard's Inbox. Cleared when the agent is deleted. A book counts only as its agent's word, as main's labels take it: one of main's own agents is read from the agent, and one on a node only from the node main places it on, signed. What the monitor keeps and relays is the book as admitted, never the payload as it came; one that is not admitted, or is not a book, leaves the last one standing.
 
 ```json
 {
@@ -649,6 +655,36 @@ agent can read current state without a request/response round-trip.
 
 ---
 
+### `models/{name}/drift`
+**Published by:** The `drift` library agent, on main
+**Retained:** no
+**Trigger:** When a drift test first crosses its threshold on a column of the model's readings, once per episode (`docs/design/drift.md`).
+**Purpose:** What a rule fires a retrain on: a `task` action to the `trainer` with the window and split the rule names. `observation` is the id of the alarm's node in the provenance graph, which the trainer joins its run to; `ts` is the moment ADWIN found the scores changed, else the end of the window checked.
+
+```json
+{
+  "what":        "drift",
+  "model":       "imu-detector",
+  "version":     3,
+  "observation": "…",
+  "ts":          1760086400.0,
+  "test":        "psi",
+  "column":      "ay",
+  "source":      "sensors/imu",
+  "statistic":   0.42,
+  "threshold":   0.2,
+  "alarmed":     true,
+  "p":           null,
+  "at":          null,
+  "rows":        {"reference": 1008, "current": 288},
+  "detail":      {},
+  "window":      {"source": "sensors/imu", "since": 1760000000.0, "until": 1760086400.0},
+  "reference":   {"source": "sensors/imu", "since": 1759395200.0, "until": 1760000000.0}
+}
+```
+
+---
+
 ### Node control and status topics
 **Published by:** Main actor and remote runner
 **Purpose:** Remote node lifecycle, reconciliation, and task routing.
@@ -664,8 +700,8 @@ agent can read current state without a request/response round-trip.
 | `nodes/{node}/reset` | Main actor | `{ "scope": "chat", "agent": "counter", "request": "..." }` — `agent` is null for every agent on the node; signed |
 | `nodes/{node}/reset_done` | Remote runner | `{ "node": "...", "request": "...", "scope": "chat", "cleared": ["counter"], "timestamp": ... }` |
 | `nodes/{node}/blob/{sha256}` | Main actor | One blob of an agent main is placing on the node, in chunks: each payload is binary, an 8-byte header (chunk index and chunk count, big-endian 32-bit each) followed by up to 256 KiB of the blob. The spawn that follows names the blob in `_initial_state` as `{ "__wactorz_blob__": "<format>", "sha256": "...", "size": ... }`, and the node uses the blob only if its bytes hash to that. Not signed: the spawn is |
-| `nodes/{node}/heartbeat` | Remote runner | `{ "node": "...", "version": "0.7.2", "runtime": "node", "node_id": "...", "agents": [...], "agent_count": 1, "broker": "...", "pid": 123, "uptime_s": 12.3, "cpu_pct": 1.2, "mem_used_mb": 100, "mem_free_mb": 1000, "swap_used_mb": 0, "load_1m": 0.4, "load_5m": 0.3, "disk_free_mb": 20000, "temp_c": 56.8, "throttled": [] }` — `version` is the Wactorz release the node runs and `runtime` what kind of process answers (`node` for the package; the single-file runner said `runner`); a node deployed before these fields sends neither and is recorded as `runner` at an unknown version. Memory is in MiB and within any cgroup memory limit on the node (a container, a systemd `MemoryMax=`); `disk_free_mb` is where the node keeps agent state; `temp_c` is the CPU's. `throttled` lists what holds the board back now (`under_voltage`, `freq_capped`, `throttled`, `soft_temp_limit`), from a Raspberry Pi's firmware: `[]` is none, `null` a machine that cannot tell. Any reading the node cannot take is `null`, never 0 |
-| `nodes/{node}/manifest` | Remote runner | Retained, at start and after an install: what the machine is. `{ "node": "...", "version": "0.7.2", "runtime": "node", "timestamp": ..., "manifest_v": 1, "arch": "aarch64", "os": "linux", "os_release": "Debian GNU/Linux 13 (trixie)", "python": "3.13.5", "model": "Raspberry Pi 5 Model B Rev 1.0", "container": false, "cpu_count": 4, "ram_total_mb": 8058, "swap_total_mb": 2047, "disk": { "state": { "path": "...", "total_mb": 480001, "free_mb": 432492 }, "venv": { ... } }, "gpu": [], "devices": ["bluetooth", "speaker", "gpio", "i2c"], "packages": { "psutil": "7.1.0", ... } }` — `arch` is the interpreter's, one name per CPU on every system (`aarch64`, `x86_64`, `armv7l` for a 32-bit Pi system); memory and CPUs are within any cgroup limit; `gpu` lists accelerators by `kind` (`cuda`, `hailo`, `edgetpu`, `mps`); `devices` are what an agent can use (`bluetooth` with BlueZ reachable, a `camera` by its driver, `microphone`, `speaker`, `serial`, `gpio`, `i2c`); `packages` are the node environment's distributions by normalised name. `gpu` and `devices` are `null` where the node cannot tell, as is any field it cannot read. Cleared (empty, retained) by `/nodes remove` |
+| `nodes/{node}/heartbeat` | Remote runner | `{ "node": "...", "version": "0.8.0", "runtime": "node", "node_id": "...", "agents": [...], "agent_count": 1, "broker": "...", "pid": 123, "uptime_s": 12.3, "cpu_pct": 1.2, "mem_used_mb": 100, "mem_free_mb": 1000, "swap_used_mb": 0, "load_1m": 0.4, "load_5m": 0.3, "disk_free_mb": 20000, "temp_c": 56.8, "throttled": [] }` — `version` is the Wactorz release the node runs and `runtime` what kind of process answers (`node` for the package; the single-file runner said `runner`); a node deployed before these fields sends neither and is recorded as `runner` at an unknown version. Memory is in MiB and within any cgroup memory limit on the node (a container, a systemd `MemoryMax=`); `disk_free_mb` is where the node keeps agent state; `temp_c` is the CPU's. `throttled` lists what holds the board back now (`under_voltage`, `freq_capped`, `throttled`, `soft_temp_limit`), from a Raspberry Pi's firmware: `[]` is none, `null` a machine that cannot tell. Any reading the node cannot take is `null`, never 0 |
+| `nodes/{node}/manifest` | Remote runner | Retained, at start and after an install: what the machine is. `{ "node": "...", "version": "0.8.0", "runtime": "node", "timestamp": ..., "manifest_v": 1, "arch": "aarch64", "os": "linux", "os_release": "Debian GNU/Linux 13 (trixie)", "python": "3.13.5", "model": "Raspberry Pi 5 Model B Rev 1.0", "container": false, "cpu_count": 4, "ram_total_mb": 8058, "swap_total_mb": 2047, "disk": { "state": { "path": "...", "total_mb": 480001, "free_mb": 432492 }, "venv": { ... } }, "gpu": [], "devices": ["bluetooth", "speaker", "gpio", "i2c"], "packages": { "psutil": "7.1.0", ... } }` — `arch` is the interpreter's, one name per CPU on every system (`aarch64`, `x86_64`, `armv7l` for a 32-bit Pi system); memory and CPUs are within any cgroup limit; `gpu` lists accelerators by `kind` (`cuda`, `hailo`, `edgetpu`, `mps`); `devices` are what an agent can use (`bluetooth` with BlueZ reachable, a `camera` by its driver, `microphone`, `speaker`, `serial`, `gpio`, `i2c`); `packages` are the node environment's distributions by normalised name. `gpu` and `devices` are `null` where the node cannot tell, as is any field it cannot read. Cleared (empty, retained) by `/nodes remove` |
 | `agents/{node}/logs` | Remote runner | `{ "type": "spawned", "message": "...", "node": "...", "timestamp": ... }` |
 | `nodes/{node}/logs` | Remote runner | `{ "type": "log", "message": "...", "timestamp": ... }` |
 | `nodes/{node}/list` | Main actor | *(request)* published to make the runner emit `nodes/{node}/agents` |
@@ -675,7 +711,8 @@ agent can read current state without a request/response round-trip.
 | `nodes/{node}/blob_return/{sha256}` | Remote runner | One blob of an agent the node is handing back, in chunks shaped as on `blob`, sent before the `state_return` that names it. Never a format that runs code when it loads |
 | `nodes/{node}/artifact_request` | Remote runner | `{ "agent": "...", "sha256": ["..."] }` — the artifacts an agent spawned here names, pinned in its spawn's `artifacts` as `{ "<key>": { "name": "imu-detector", "version": 3, "sha256": "...", "format": "onnx", "size": ..., "runs_code": false } }`, that the node does not hold. Main answers on `blob` for each that an agent placed on this node names, and the node uses one only if it hashes to what the spawn names |
 | `nodes/{node}/reply/#` | Remote runner | Reply payloads for node requests |
-| `agents/by-name/{agent}/task` | Main actor | `{ "text": "...", "payload": "...", "_reply_topic": "...", "_remote_task": true }` |
+| `agents/at/{node}/{agent}/task` | Main actor, or an agent on a node | `{ "text": "...", "payload": "...", "_reply_topic": "...", "_remote_task": true }`, for the agent on that node alone; sent to a node whose manifest says `"tasks_by_node": true` |
+| `agents/by-name/{agent}/task` | Main actor, or an agent on a node | The same, by name, for a node from before tasks went by node (or whose manifest has not arrived); every node running the name hears it |
 
 ---
 
@@ -776,7 +813,9 @@ mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command
 | `nodes/{node}/artifact_request` | Remote runner | The artifacts an agent spawned here names that the node does not hold |
 | `models/{name}/active` | Main actor | Retained: the version of a model agents serve, or empty when none is marked; at start and on each move |
 | `models/{name}/shadow` | Main actor | Retained: the version of a model on trial beside the active one, or empty; at start and on each move |
-| `agents/by-name/{agent}/task` | Main actor | Remote named-agent task |
+| `models/{name}/drift` | The `drift` agent | A drift test crossing its threshold on a column of the model's readings, once per episode, with the observation's id |
+| `agents/at/{node}/{agent}/task` | Main actor | Task for an agent on that node |
+| `agents/by-name/{agent}/task` | Main actor | Task by name, for a node from before tasks went by node |
 | `nodes/{node}/list` | Main actor | Request runner's agent list |
 | `main/llm_request` | Remote agents | Route LLM call through main |
 | `main/history_request` | Remote agents | Read main's stored history, a page at a time |

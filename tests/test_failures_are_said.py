@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A failure that is carried on from is still said.
 
 Three places went on in silence. An actor's stop swallowed whatever its

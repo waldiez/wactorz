@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The tool schemas Gemini will actually accept.
 
 `additionalProperties: false` is in the shared tool definitions because OpenAI's

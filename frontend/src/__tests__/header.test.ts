@@ -1,13 +1,11 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// Isolate the header from the audio/reset popovers (and their singletons).
-vi.mock("../ui/dashboard/popovers", () => ({
-    buildAudioPopover: () => document.createElement("div"),
-    buildResetPopover: () => document.createElement("div"),
+// Isolate the header from the reset popover (and the endpoint it calls).
+vi.mock("../ui/shell/popovers", () => ({
+    buildResetPopover: () => Object.assign(document.createElement("div"), { _resetArmed: () => {} }),
 }));
 
 import {
@@ -17,7 +15,7 @@ import {
     resolveHaNavUrl,
     releaseHeaderPopovers,
     releaseBottomNav,
-} from "../ui/dashboard/header";
+} from "../ui/shell/header";
 import { safeStorage } from "../safeStorage";
 
 describe("buildHeader", () => {
@@ -39,10 +37,10 @@ describe("buildHeader", () => {
         });
         expect(header.querySelector(".af-title")!.textContent).toBe("Wactorz");
         expect(header.querySelector(".af-conn-badge")!.classList.contains("af-conn-live")).toBe(true);
-        // 4 built-in view tabs + the Devices link + audio, reset and sign-out
+        // 6 built-in view tabs + Settings + the Devices link + the speaker, reset and sign-out
         // icon buttons. Devices and sign-out are always built and hidden until
         // /api/config says otherwise, so both are here whatever it will answer.
-        expect(header.querySelectorAll(".af-view-btn").length).toBe(8);
+        expect(header.querySelectorAll(".af-view-btn").length).toBe(11);
     });
 
     it("marks the current view active (class + aria-current)", () => {
@@ -72,7 +70,7 @@ describe("buildHeader", () => {
         expect(onSetView).toHaveBeenCalledWith("chat");
     });
 
-    it("the audio icon button toggles its popover open, then closed on a second click", () => {
+    it("the reset icon button toggles its popover open, then closed on a second click", () => {
         const header = buildHeader({
             view: "overview",
             connState: "live",
@@ -81,20 +79,20 @@ describe("buildHeader", () => {
             extraViews: [],
         });
         document.body.appendChild(header);
-        const audioBtn = header.querySelector<HTMLButtonElement>('[title="Audio settings"]')!;
+        const popoverBtn = header.querySelector<HTMLButtonElement>('[title="Clear stored state"]')!;
         // A disclosure, not a menu: no popup role is promised, and the panel it
         // controls is a group named after it.
-        expect(audioBtn.hasAttribute("aria-haspopup")).toBe(false);
-        const panel = document.getElementById(audioBtn.getAttribute("aria-controls")!)!;
+        expect(popoverBtn.hasAttribute("aria-haspopup")).toBe(false);
+        const panel = document.getElementById(popoverBtn.getAttribute("aria-controls")!)!;
         expect(panel.getAttribute("role")).toBe("group");
-        expect(panel.getAttribute("aria-label")).toBe("Audio settings");
-        expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
-        audioBtn.click(); // open: toggles `.open` and positions the popover
+        expect(panel.getAttribute("aria-label")).toBe("Clear stored state");
+        expect(popoverBtn.getAttribute("aria-expanded")).toBe("false");
+        popoverBtn.click(); // open: toggles `.open` and positions the popover
         expect(document.querySelector("div.open")).not.toBeNull();
-        expect(audioBtn.getAttribute("aria-expanded")).toBe("true");
-        audioBtn.click(); // close: the else branch (onClose is undefined for audio)
+        expect(popoverBtn.getAttribute("aria-expanded")).toBe("true");
+        popoverBtn.click(); // close: the else branch, which disarms the reset
         expect(document.querySelector("div.open")).toBeNull();
-        expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
+        expect(popoverBtn.getAttribute("aria-expanded")).toBe("false");
     });
 
     it("Escape closes an open popover and returns focus to its button", () => {
@@ -106,15 +104,15 @@ describe("buildHeader", () => {
             extraViews: [],
         });
         document.body.appendChild(header);
-        const audioBtn = header.querySelector<HTMLButtonElement>('[title="Audio settings"]')!;
-        audioBtn.click(); // open
+        const popoverBtn = header.querySelector<HTMLButtonElement>('[title="Clear stored state"]')!;
+        popoverBtn.click(); // open
         expect(document.querySelector("div.open")).not.toBeNull();
 
         document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
 
         expect(document.querySelector("div.open")).toBeNull();
-        expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
-        expect(document.activeElement).toBe(audioBtn);
+        expect(popoverBtn.getAttribute("aria-expanded")).toBe("false");
+        expect(document.activeElement).toBe(popoverBtn);
     });
 
     it("opening a popover moves focus into it, since it sits at the end of the page", () => {
@@ -330,11 +328,111 @@ describe("buildBottomNav", () => {
         expect(sheet.classList.contains("open")).toBe(true);
     });
 
+    it("puts the built-in views the bar has no room for in the More sheet, before Settings", () => {
+        const nav = buildBottomNav({ view: "overview", onSetView: vi.fn(), haUrl: null, extraViews: [] });
+        const sheet = nav.querySelector<HTMLElement>(".af-bottom-sheet")!;
+
+        expect([...sheet.querySelectorAll<HTMLElement>("[data-view]")].map(b => b.dataset["view"])).toEqual([
+            "wiring",
+            "feed",
+            "models",
+            "settings",
+        ]);
+        expect(nav.querySelector(':scope > [data-view="models"]')).toBeNull();
+        expect(nav.querySelector(':scope > [data-view="feed"]')).toBeNull();
+        expect(nav.querySelector(':scope > [data-view="inbox"]')).not.toBeNull();
+    });
+
     it("a secondary (settings) tab routes through onSetView", () => {
         const onSetView = vi.fn();
         const nav = buildBottomNav({ view: "overview", onSetView, haUrl: null, extraViews: [] });
         nav.querySelector<HTMLButtonElement>('[data-view="settings"]')!.click();
         expect(onSetView).toHaveBeenCalledWith("settings");
+    });
+});
+
+describe("the tabs this browser hides", () => {
+    const hidden = new Set(["feed", "models", "devices"]);
+    const shown = (root: ParentNode): string[] =>
+        [...root.querySelectorAll<HTMLElement>("[data-view]")].map(b => b.dataset["view"]!);
+
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        releaseBottomNav();
+    });
+    afterEach(() => releaseHeaderPopovers());
+
+    it("are left out of the header, the Devices link included", () => {
+        const header = buildHeader({
+            view: "overview",
+            connState: "live",
+            onSetView: vi.fn(),
+            haUrl: "http://ha.local",
+            extraViews: [{ key: "panel-x", label: "Panel X", icon: "grid" }],
+            hidden: new Set([...hidden, "panel-x"]),
+        });
+
+        expect(shown(header)).toEqual(["overview", "chat", "wiring", "inbox", "settings"]);
+        expect(header.querySelector(".af-ha-nav-link")).toBeNull();
+    });
+
+    it("are left out of the phone's bar and its More sheet", () => {
+        const nav = buildBottomNav({
+            view: "overview",
+            onSetView: vi.fn(),
+            haUrl: "http://ha.local",
+            extraViews: [],
+            hidden,
+        });
+
+        expect(shown(nav)).toEqual(["overview", "chat", "inbox", "wiring", "settings"]);
+        expect(nav.querySelector(".af-ha-nav-link")).toBeNull();
+    });
+});
+
+describe("the order this browser keeps", () => {
+    const shown = (root: ParentNode): string[] =>
+        [...root.querySelectorAll<HTMLElement>("[data-view]")].map(b => b.dataset["view"]!);
+    const order = ["models", "feed", "overview"];
+
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        releaseBottomNav();
+    });
+    afterEach(() => releaseHeaderPopovers());
+
+    it("sets the header's tabs, extension ones included, with Settings still last", () => {
+        const header = buildHeader({
+            view: "overview",
+            connState: "live",
+            onSetView: vi.fn(),
+            haUrl: null,
+            extraViews: [{ key: "panel-x", label: "Panel X", icon: "grid" }],
+            order: ["panel-x", ...order],
+        });
+
+        expect(shown(header)).toEqual([
+            "panel-x",
+            "models",
+            "feed",
+            "overview",
+            "chat",
+            "wiring",
+            "inbox",
+            "settings",
+        ]);
+    });
+
+    it("sets the More sheet's, leaving the phone's bar as it is", () => {
+        const nav = buildBottomNav({
+            view: "overview",
+            onSetView: vi.fn(),
+            haUrl: null,
+            extraViews: [],
+            order,
+        });
+
+        expect(shown(nav)).toEqual(["overview", "chat", "inbox", "models", "feed", "wiring", "settings"]);
     });
 });
 

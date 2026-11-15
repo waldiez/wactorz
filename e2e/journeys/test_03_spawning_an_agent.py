@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Asked for an agent, main starts one; it gets a card, and it answers for itself."""
 
 import json

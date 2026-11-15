@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A topic the request names is sampled, though no agent declares it.
 
 A device or a script publishing straight to the broker declares no contract,

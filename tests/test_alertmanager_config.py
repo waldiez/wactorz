@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Where the compose stack's alerts go is decided in `.env`, and nowhere by default.
 
 Prometheus raises the alerts; Alertmanager, started beside it, delivers them.
@@ -17,6 +18,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -32,7 +34,7 @@ needs_sh = pytest.mark.skipif(
 )
 
 
-def _render(out: Path, own: Path | None = None, **settings: str) -> tuple[dict, str]:
+def _render(out: Path, own: Path | None = None, **settings: str) -> tuple[dict[str, Any], str]:
     """Run the script as the container does; its configuration and what it said."""
     env = {key: value for key, value in os.environ.items() if not key.startswith("ALERT")}
     env.update(settings)
@@ -49,7 +51,7 @@ def _render(out: Path, own: Path | None = None, **settings: str) -> tuple[dict, 
     return yaml.safe_load((out / "alertmanager.yml").read_text(encoding="utf-8")), done.stdout
 
 
-def _receiver(config: dict) -> dict:
+def _receiver(config: dict[str, Any]) -> dict[str, Any]:
     (receiver,) = config["receivers"]
     assert config["route"]["receiver"] == receiver["name"]
     return receiver
@@ -142,7 +144,7 @@ class TestAConfigurationOfYourOwn:
 # ── The stack around it ────────────────────────────────────────────────────────
 
 
-def _services(name: str) -> dict[str, dict]:
+def _services(name: str) -> dict[str, dict[str, Any]]:
     return yaml.safe_load((ROOT / name).read_text(encoding="utf-8"))["services"]
 
 

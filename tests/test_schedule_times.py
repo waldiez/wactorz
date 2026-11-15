@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Working out when a scheduled agent should next fire.
 
 These are pure functions over a supplied "now", so every case pins a real clock
@@ -6,7 +7,8 @@ a schedule whose time has just passed must roll to the next occurrence, not fire
 immediately and then again.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -22,7 +24,7 @@ from wactorz.agents.scheduled_agent import (
 )
 
 # A Wednesday, so weekday arithmetic has somewhere to go in both directions.
-WED_NOON = datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc)
+WED_NOON = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
 
 
 class TestParseHhmm:
@@ -111,20 +113,20 @@ class TestInterval:
 
 class TestOnce:
     def test_a_naive_time_is_read_in_the_schedule_timezone(self) -> None:
-        fired = _next_fire_once("2026-05-02T17:00:00", timezone.utc)
-        assert fired == datetime(2026, 5, 2, 17, 0, tzinfo=timezone.utc)
+        fired = _next_fire_once("2026-05-02T17:00:00", UTC)
+        assert fired == datetime(2026, 5, 2, 17, 0, tzinfo=UTC)
 
     def test_an_explicit_offset_is_kept(self) -> None:
-        fired = _next_fire_once("2026-05-02T17:00:00+02:00", timezone.utc)
+        fired = _next_fire_once("2026-05-02T17:00:00+02:00", UTC)
         assert fired.utcoffset() == timedelta(hours=2)
 
     def test_a_time_already_past_is_returned_as_given(self) -> None:
         """Deciding what to do about it belongs to the caller, not the parser."""
-        assert _next_fire_once("2000-01-01T00:00:00", timezone.utc).year == 2000
+        assert _next_fire_once("2000-01-01T00:00:00", UTC).year == 2000
 
     def test_a_non_iso_string_is_refused_with_the_expected_form(self) -> None:
         with pytest.raises(ValueError, match="ISO-8601"):
-            _next_fire_once("next tuesday", timezone.utc)
+            _next_fire_once("next tuesday", UTC)
 
 
 class TestTimezoneResolution:
@@ -170,7 +172,7 @@ class TestDescribeSchedule:
             ({"type": "cron", "expr": "0 9 * * 1"}, "cron 0 9 * * 1"),
         ],
     )
-    def test_each_kind_renders(self, schedule: dict, expected: str) -> None:
+    def test_each_kind_renders(self, schedule: dict[str, Any], expected: str) -> None:
         assert describe_schedule(schedule) == expected
 
     def test_a_timezone_is_appended_where_it_is_meaningful(self) -> None:

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Reading the environment must not be able to take the process down.
 
 `_env_int` raised a bare `ValueError` at *import* time, so one stray character
@@ -116,7 +117,6 @@ def test_the_state_bridge_flag_is_wired_to_the_shared_parser() -> None:
     *true* — the old inline test was `not in ("0", "false", "no")` — and now read
     as false. Stricter than "fix the casing", and deliberate.
     """
-    from pathlib import Path
 
     source = Path("wactorz/config.py").read_text(encoding="utf-8")
 

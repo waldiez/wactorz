@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """HomeAssistantAgent - Unified Home Assistant agent.
 
 Handles all HA operations in a single agent:
@@ -24,6 +25,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from typing import Any, ClassVar
 
@@ -67,7 +69,7 @@ from .prompts.home_assistant_prompts import (
     HARDWARE_SELECTION_PROMPT,
 )
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class AutomationEditError(Exception):
@@ -75,26 +77,36 @@ class AutomationEditError(Exception):
 
     @classmethod
     def unidentified(cls, exc: Exception) -> "AutomationEditError":
+        """The error for an edit whose automation could not be identified, with the reason in
+        ``exc``.
+        """
         return cls(f"Could not identify automation to edit: {exc}")
 
     @classmethod
     def which(cls) -> "AutomationEditError":
+        """The error for an edit that does not say which automation it is for."""
         return cls("Could not identify which automation to edit.")
 
     @classmethod
     def no_id(cls) -> "AutomationEditError":
+        """The error for an edit whose automation id could not be worked out."""
         return cls("Could not determine the automation ID to edit.")
 
     @classmethod
     def not_generated(cls, exc: Exception) -> "AutomationEditError":
+        """The error for the model failing to write the edited automation, with the reason in
+        ``exc``.
+        """
         return cls(f"LLM could not generate updated automation: {exc}")
 
     @classmethod
     def invalid_config(cls) -> "AutomationEditError":
+        """The error for an edited automation that is not a valid configuration."""
         return cls("Invalid generated automation config.")
 
     @classmethod
     def config_not_an_object(cls) -> "AutomationEditError":
+        """The error for an edited automation that is not a JSON object."""
         return cls("Generated automation config must be an object.")
 
 
@@ -103,10 +115,12 @@ class NotAnObjectError(TypeError):
 
     @classmethod
     def automation(cls) -> "NotAnObjectError":
+        """The error for an automation that is not a JSON object."""
         return cls("automation must be a JSON object")
 
     @classmethod
     def reply(cls) -> "NotAnObjectError":
+        """The error for a model's reply that is not a JSON object."""
         return cls("LLM response is not a JSON object")
 
 
@@ -117,6 +131,12 @@ class NotAnObjectError(TypeError):
 
 class HomeAssistantAgent(LLMAgent):
     """Unified Home Assistant agent: hardware recommendations, automation CRUD, and entity history."""
+
+    #: What this agent's model requests have taken, kept by the base class's
+    #: accounting and added to here.
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost_usd: float
 
     DESCRIPTION = (
         "Controls Home Assistant: automations, devices, areas, entities, and entity history. "
@@ -151,12 +171,12 @@ class HomeAssistantAgent(LLMAgent):
         "format": "str — 'csv' when csv field is present",
     }
 
-    def __init__(self, llm_provider: LLMProvider | None = None, **kwargs) -> None:
+    def __init__(self, llm_provider: LLMProvider | None = None, **kwargs: Any) -> None:
         kwargs.setdefault("name", "home-assistant-agent")
         kwargs.setdefault("system_prompt", AUTOMATION_CREATION_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
-        self.ha_url = (CONFIG.ha_url).rstrip("/")
-        self.ha_token = (CONFIG.ha_token).strip()
+        self.ha_url: str = (CONFIG.ha_url).rstrip("/")
+        self.ha_token: str = (CONFIG.ha_token).strip()
         self._device_cache: dict[str, Any] = {"timestamp": 0.0, "data": None}
         self._device_cache_ttl = 30.0
         self._automation_cache: dict[str, Any] = {"timestamp": 0.0, "data": None}
@@ -165,7 +185,7 @@ class HomeAssistantAgent(LLMAgent):
 
     # ── Cost tracking helper ─────────────────────────────────────────────────
 
-    def _accumulate_usage(self, usage: dict) -> None:
+    def _accumulate_usage(self, usage: dict[str, Any]) -> None:
         """Add token counts and cost from one llm.complete() call to running totals."""
         if not isinstance(usage, dict):
             return
@@ -191,7 +211,7 @@ class HomeAssistantAgent(LLMAgent):
         self._log_chat_turn(user_message, response, ts_user=ts_user, ts_reply=ts_reply)
         return response
 
-    async def chat_stream(self, user_message: str):
+    async def chat_stream(self, user_message: str) -> AsyncGenerator[str | dict[str, Any], None]:
         """Override LLMAgent streaming path so direct @home-assistant-agent calls
         still use Home Assistant intent routing instead of generic LLM chat.
         """
@@ -200,6 +220,13 @@ class HomeAssistantAgent(LLMAgent):
         yield {}
 
     async def handle_message(self, msg: Message) -> None:
+        """Answer a task: a named ``operation`` (cameras, snapshots, streams, history), an
+        automation built from the entities or hardware it names, or a request in words,
+        classified first.
+
+        The result goes back to the sender, with the task's id echoed so a planner waiting on it
+        is answered.
+        """
         if msg.type != MessageType.TASK:
             return
 

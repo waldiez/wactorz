@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """GmailAgent — search, read, label, and draft Gmail messages.
 
 Draft-first by design: like Google's hosted Gmail MCP, this agent never sends
@@ -8,13 +9,14 @@ import json
 import logging
 import re
 import time
+from collections.abc import AsyncGenerator
 from typing import Any, ClassVar
 
 from ..core.actor import Message, MessageType
 from ..core.integrations.gmail_mcp import GmailMcpClient, gmail_mcp_config_status
 from .llm_agent import LLMAgent, LLMProvider
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 GMAIL_PARSE_PROMPT = """You convert a user Gmail request into JSON only.
@@ -47,6 +49,12 @@ This agent never sends email; it only drafts.
 class GmailAgent(LLMAgent):
     """Gmail agent for searching, reading, labeling, and drafting mail."""
 
+    #: What this agent's model requests have taken, kept by the base class's
+    #: accounting and added to here.
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost_usd: float
+
     DESCRIPTION = (
         "Accesses Gmail: search/read mail, list labels and drafts, create drafts (never sends)"
     )
@@ -74,15 +82,16 @@ class GmailAgent(LLMAgent):
         "status": "Sanitized Gmail configuration status",
     }
 
-    def __init__(self, llm_provider: LLMProvider | None = None, **kwargs) -> None:
+    def __init__(self, llm_provider: LLMProvider | None = None, **kwargs: Any) -> None:
         kwargs.setdefault("name", "gmail-agent")
         kwargs.setdefault("system_prompt", GMAIL_PARSE_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
-        self.client = GmailMcpClient()
+        self.client: GmailMcpClient = GmailMcpClient()
         self._pending_draft: dict[str, Any] = {}
         self._awaiting_draft = False
 
     async def chat(self, user_message: str) -> str:
+        """Answer ``user_message`` and keep the turn in the conversation and the chat log."""
         ts_user = time.time()
         self._conversation_history.append({"role": "user", "content": user_message, "ts": ts_user})
         result = await self._process({"text": user_message})
@@ -94,11 +103,17 @@ class GmailAgent(LLMAgent):
         self._log_chat_turn(user_message, response, ts_user=ts_user, ts_reply=time.time())
         return response
 
-    async def chat_stream(self, user_message: str):
+    async def chat_stream(self, user_message: str) -> AsyncGenerator[str | dict[str, Any], None]:
+        """The answer :meth:`chat` gives, whole, followed by an empty usage dict: no model is
+        called.
+        """
         yield await self.chat(user_message)
         yield {}
 
     async def handle_message(self, msg: Message) -> None:
+        """Answer a task with its result, the task's id echoed, sent to its reply address; other
+        messages are ignored.
+        """
         if msg.type != MessageType.TASK:
             return
         payload = msg.payload if isinstance(msg.payload, dict) else {"text": str(msg.payload or "")}

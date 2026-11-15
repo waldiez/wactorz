@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
  * Signing out, and when the control exists at all.
@@ -11,13 +10,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import {
-    SIGN_OUT_KEY,
-    buildSignOutButton,
-    canSignOut,
-    setSignOutVisible,
-    signOut,
-} from "../ui/dashboard/signOut";
+import { SIGN_OUT_KEY } from "../config/keys";
+import { buildSignOutButton, canSignOut, setSignOutVisible, signOut } from "../ui/shell/signOut";
 import { safeStorage } from "../safeStorage";
 
 beforeEach(() => {

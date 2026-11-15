@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Code the model writes goes to a node, once one is set for it.
 
 Two agents the model wrote run on main, as they did before any node was set for

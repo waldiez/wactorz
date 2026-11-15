@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which callers a browser may act on this server's behalf for.
 
 Two separate questions, both answered here because they fail together:
@@ -31,7 +32,7 @@ from aiohttp import web
 from .. import config
 from .static_site import ingress_path_of
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Ingress peers already named in the log, so each is reported once.
 _seen_peers: set[Any] = set()

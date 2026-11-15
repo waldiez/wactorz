@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /** Convert a raw epoch value to milliseconds.
  *  Python's time.time() returns seconds (< 1e10); JS Date.now() returns ms. */

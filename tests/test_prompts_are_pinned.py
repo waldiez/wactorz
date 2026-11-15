@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The prompts a configured Home Assistant installation sends, pinned word for word.
 
 Main and the planner are being reshaped so that a system without Home Assistant
@@ -19,8 +20,6 @@ plain text: an editor that trims trailing whitespace or adds a final newline
 would otherwise alter the pinned text without anyone asking it to, and a line
 per element keeps the diff readable.
 """
-
-from __future__ import annotations
 
 import difflib
 import json

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Typing `@agent do the thing` and getting that agent's answer back.
 
 The direct form: the user names an agent and main hands the task straight to it,
@@ -15,7 +16,7 @@ guessed at rather than typed and are handled in `_execute_llm_delegations`.
 """
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -25,7 +26,10 @@ from wactorz.agents.main.lifecycle import LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.core.actor import ActorMetrics
+from wactorz.core.manifests import AgentManifest
 
 _RECIPE_FAILED = "recipe exploded"
 
@@ -95,7 +99,7 @@ class _ReplyTopic:
         return self
 
     async def __aenter__(self) -> tuple[str, Any]:
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         if not self._times_out:
             future.set_result(self._answer)
         return "main/reply/main-id/abcd", future
@@ -111,7 +115,7 @@ class _Main:
         self,
         *,
         running: tuple[str, ...] = (),
-        manifests: dict[str, dict[str, Any]] | None = None,
+        manifests: dict[str, AgentManifest] | None = None,
         catalogue: _Catalogue | None = None,
         appears_after_spawn: str | None = None,
         nodes: dict[str, dict[str, Any]] | None = None,
@@ -124,6 +128,8 @@ class _Main:
         main.actor_id = "main-id"
         main.manifests = ManifestRegistry(main)
         main.nodes = NodeManager(main, main.manifests)
+        # Started long ago: the spawn registry no longer stands in for a node unheard from.
+        main.metrics = ActorMetrics(start_time=0.0)
         main.migration = Migration(main, main.nodes)
         main.spawns = SpawnService(main)
         main.delegation = DelegationManager(main)
@@ -132,7 +138,7 @@ class _Main:
         main._known_nodes = dict(nodes or {})
         main._conversation_history = []
         setattr(main, "_registry", _Registry(running, catalogue, appears_after_spawn))
-        setattr(main, "_get_spawn_registry", dict)
+        setattr(main, "_get_spawn_registry", SpawnRegistry)
 
         self.delegated: list[tuple[str, str]] = []
         self.published: list[tuple[str, Any]] = []
@@ -159,8 +165,8 @@ def node(*agents: str) -> dict[str, Any]:
     return {"agents": list(agents), "last_seen": 0}
 
 
-def recipe(**over: Any) -> dict[str, Any]:
-    return {"spawnable": True, "catalog": "catalog", **over}
+def recipe(**over: Any) -> AgentManifest:
+    return cast(AgentManifest, {"spawnable": True, "catalog": "catalog", **over})
 
 
 class TestReadingWhatWasTyped:
@@ -319,6 +325,42 @@ class TestAnAgentOnAnotherMachine:
         await main.ask("@sensor status")
 
         assert not main.published
+
+
+class TestANameTwoNodesShare:
+    """Asked which one is meant, rather than sent to either."""
+
+    async def test_a_bare_name_is_answered_with_the_addresses(self) -> None:
+        main = _Main(nodes={"rpi": node("sensor"), "pc": node("sensor")})
+
+        answer = await main.ask("@sensor status")
+
+        assert "`@sensor@rpi` or `@sensor@pc`" in answer
+        assert not main.published
+
+    async def test_the_full_address_of_one_of_them_is_refused_too(self) -> None:
+        # The task would go on the name's topic, which both nodes run.
+        main = _Main(nodes={"rpi": node("sensor"), "pc": node("sensor")})
+
+        answer = await main.ask("@sensor@pc status")
+
+        assert "takes a task only by name" in answer
+        assert not main.published
+
+    async def test_a_node_that_takes_tasks_on_its_own_topic_is_sent_there(self) -> None:
+        main = _Main(
+            nodes={"rpi": node("sensor"), "pc": node("sensor")}, remote_answer={"result": "on"}
+        )
+        main.actor.nodes.node_manifests = {"pc": {"tasks_by_node": True}}
+
+        assert await main.ask("@sensor@pc status") == "**sensor** (on pc): on"
+        topic, _payload = main.published[0]
+        assert topic == "agents/at/pc/sensor/task"
+
+    async def test_the_full_address_of_the_only_one_reaches_it(self) -> None:
+        main = _Main(nodes={"pc": node("sensor")}, remote_answer={"result": "on"})
+
+        assert await main.ask("@sensor@pc status") == "**sensor** (on pc): on"
 
 
 class TestAnAgentThatIsNowhere:

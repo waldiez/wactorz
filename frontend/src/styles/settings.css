@@ -1,73 +1,418 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /* ── Settings view ────────────────────────────────────────────── */
 .af-settings {
-  padding: 24px 28px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 14px;
   overflow-y: auto;
   height: 100%;
-}
-.af-settings > * {
   box-sizing: border-box;
-  max-width: 680px;
 }
 .af-settings-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.9);
+  font-size: 20px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
   margin: 0;
 }
+/* The section list beside the section open, as the Inbox lays out its lists. */
+.af-settings-columns {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 720px);
+  gap: 16px;
+  align-items: start;
+}
+.af-settings-side {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 8px;
+  position: sticky;
+  top: 0;
+}
+.af-settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ── The section list ───────────────────────────────────────── */
+.af-settings-link {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  color: rgba(255, 255, 255, 0.82);
+  text-decoration: none;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+.af-settings-link:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.af-settings-link.open {
+  background: rgba(37, 99, 235, 0.16);
+  border-color: rgba(37, 99, 235, 0.45);
+  color: #bfdbfe;
+}
+.af-settings-link-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: rgba(255, 255, 255, 0.6);
+}
+.af-settings-link.open .af-settings-link-icon {
+  color: #93c5fd;
+}
+.af-settings-link-words {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.af-settings-link-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.af-settings-link-line {
+  font-size: 11px;
+  color: var(--af-text-dim);
+}
+
+/* ── A section ──────────────────────────────────────────────── */
 .af-settings-section {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-  padding: 18px 20px;
+  min-width: 0;
 }
-.af-settings-section-heading {
-  font-size: 13px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.75);
-  margin: 0;
-}
-.af-settings-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.af-settings-field {
+.af-settings-section-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 12px;
-  cursor: default;
+  flex-wrap: wrap;
+  gap: 8px 12px;
 }
-.af-settings-label {
-  width: 90px;
-  flex-shrink: 0;
-  color: rgba(255, 255, 255, 0.5);
+.af-settings-section-heading {
+  font-size: 17px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+  margin: 0;
+}
+/* Where the section's values are kept: said before anything is changed. */
+.af-settings-scope {
   font-size: 11px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.7);
+  white-space: nowrap;
 }
-.af-settings-field .af-cfg-input {
-  flex: 1;
+.af-settings-scope.server {
+  border-color: rgba(251, 191, 36, 0.4);
+  color: #fde68a;
+}
+/* The list says it beside the name; only a phone, where the list leaves it out, says it here. */
+.af-settings-section-line {
+  display: none;
+  margin: -8px 0 0;
+  font-size: 12px;
+  color: var(--af-text-dim);
+}
+.af-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 .af-settings-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 2px;
+  flex-wrap: wrap;
+  gap: 10px;
 }
-.af-settings-note {
+.af-settings-hint {
+  font-size: 12px;
+  color: var(--af-text-dim);
+  margin: 0;
+}
+
+/* ── Groups and rows (ui/settings/layout.ts) ────────────────── */
+.af-setting-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.af-setting-group-title {
   font-size: 11px;
-  color: #fbbf24;
-  margin: 4px 0 0;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.6);
+  margin: 0 0 0 2px;
 }
+.af-setting-rows {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.af-setting-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  min-height: 28px;
+}
+.af-setting-row + .af-setting-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+/* A row is shown and hidden by its `hidden`, which `display: flex` would otherwise win over. */
+.af-setting-row[hidden] {
+  display: none;
+}
+.af-setting-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: rgba(255, 255, 255, 0.6);
+}
+.af-setting-words {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.af-setting-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.88);
+}
+.af-setting-hint {
+  font-size: 12px;
+  color: var(--af-text-dim);
+}
+.af-setting-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  max-width: 60%;
+}
+.af-setting-control .af-cfg-input {
+  width: 200px;
+}
+
+/* An on/off switch: a checkbox drawn as a track and a knob. */
+.af-switch {
+  appearance: none;
+  position: relative;
+  width: 36px;
+  height: 20px;
+  margin: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+  flex-shrink: 0;
+}
+.af-switch::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.75);
+  transition: transform 0.15s;
+}
+.af-switch:checked {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+.af-switch:checked::before {
+  transform: translateX(16px);
+  background: white;
+}
+.af-switch:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.af-switch:focus-visible {
+  outline: 2px solid var(--af-focus);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .af-switch,
+  .af-switch::before {
+    transition: none;
+  }
+}
+
+/* A few choices drawn as one control; each is a radio button, hidden behind its label. */
+.af-segments {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.af-segment {
+  position: relative;
+}
+.af-segment input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+/* One height for every choice: an emoji in a label is taller than the text beside it. */
+.af-segment span {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 28px;
+  line-height: 1;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  white-space: nowrap;
+}
+.af-segment input:hover + span {
+  background: rgba(255, 255, 255, 0.08);
+}
+.af-segment input:checked + span {
+  background: rgba(37, 99, 235, 0.22);
+  border-color: rgba(37, 99, 235, 0.55);
+  color: #bfdbfe;
+}
+.af-segment input:focus-visible + span {
+  outline: 2px solid var(--af-focus);
+  outline-offset: 1px;
+}
+.af-setting-slider {
+  width: 200px;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+
+/* ── Budget ─────────────────────────────────────────────────── */
+.af-budget-spend {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.af-budget-spend-line {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+  margin: 0;
+}
+.af-budget-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.af-budget-bar[hidden] {
+  display: none;
+}
+.af-budget-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: #34d399;
+  transition: width 0.3s;
+}
+.af-budget-bar.near .af-budget-bar-fill {
+  background: #fbbf24;
+}
+.af-budget-bar.over .af-budget-bar-fill {
+  background: #f87171;
+}
+
+/* ── Tabs ───────────────────────────────────────────────────── */
+.af-settings-tab-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.af-settings-tab-controls .af-switch {
+  margin-left: 10px;
+}
+.af-settings-move {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  padding: 0;
+}
+.af-settings-move:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+/* ── A phone: the list is one short row above the section ───── */
+@media (max-width: 639px) {
+  .af-settings {
+    padding: 8px;
+    gap: 8px;
+  }
+  .af-settings-title {
+    display: none;
+  }
+  .af-settings-columns {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+  .af-settings-side {
+    position: static;
+    padding: 4px;
+  }
+  .af-settings-nav {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+    gap: 4px;
+  }
+  .af-settings-link {
+    justify-content: center;
+    align-items: center;
+    padding: 8px;
+  }
+  .af-settings-link-line {
+    display: none;
+  }
+  .af-settings-section-line {
+    display: block;
+  }
+  /* The control goes under the words, at full width, where a select or a row of choices fits. */
+  .af-setting-row:not(.af-settings-tab-row) {
+    flex-wrap: wrap;
+  }
+  .af-setting-row:not(.af-settings-tab-row) .af-setting-control {
+    max-width: none;
+  }
+  .af-setting-row:has(.af-cfg-input, .af-segments, .af-setting-slider) .af-setting-control {
+    flex-basis: 100%;
+    justify-content: flex-start;
+  }
+  .af-setting-control .af-cfg-input,
+  .af-setting-slider {
+    width: 100%;
+  }
+  .af-segments {
+    justify-content: flex-start;
+  }
+}
+
+/* ── Fields and buttons ─────────────────────────────────────── */
 .af-cfg-input {
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.14);

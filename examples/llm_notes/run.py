@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Start Wactorz with the summariser and the model it should use.
 
 The minimal profile builds no model on its own, so one is named here:

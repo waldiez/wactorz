@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent names its models, finds them before it starts, and loads them safely.
 
 A library agent names them with ``models=`` on ``@wactorz.agent`` or ``MODELS``
@@ -157,6 +158,17 @@ class TestAnActorsModels:
         assert detector.seen_at_start == str(store.path_of(held))
         assert detector.artifacts["model"]["version"] == 1
 
+    async def test_it_reads_what_was_said_of_its_model(
+        self, detector: Detector, store: ArtifactStore, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "imu.npz"
+        np.savez(path, mean=np.zeros(3))
+        store.add(path, "imu-detector", metadata={"k_sigma": 6})
+
+        await detector.start()
+
+        assert detector.artifacts["model"]["metadata"] == {"k_sigma": 6}
+
     async def test_load_model_reads_it_once(
         self,
         detector: Detector,
@@ -223,7 +235,7 @@ class TestAnActorsModels:
 
 
 @wactorz.agent(name="scorer", models={"model": "imu-detector:1"})
-async def score(reading: dict, me: FunctionAgent) -> dict:
+async def score(reading: dict[str, Any], me: FunctionAgent) -> dict[str, Any]:
     model = await me.load_model("model")
     return {"distance": float(abs(reading["az"] - model["mean"][2]))}
 

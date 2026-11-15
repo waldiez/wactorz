@@ -1,11 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the extension discovery seam (wactorz.ext).
 
 Discovery is sandboxed by pointing the package ``__path__`` at a tmp dir of
 fake extension modules — nothing touches the real extensions, and the fakes'
 ``setup`` takes a plain recorder object, so no aiohttp is needed.
 """
-
-# pylint: disable=missing-function-docstring
 
 import sys
 from collections.abc import Callable, Generator
@@ -83,10 +82,18 @@ def test_broken_import_is_logged_and_skipped(
     assert "broken" in caplog.text and "failed to import" in caplog.text
 
 
+class _App(dict[Any, Any]):
+    """Stands in for the aiohttp application: items, as setup_all stores the panels there."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+
+
 def test_setup_all_runs_every_extension(sandbox: Callable[..., None]) -> None:
     sandbox("alpha", "def setup(app):\n    app.calls.append('alpha')\n")
     sandbox("beta", "def setup(app):\n    app.calls.append('beta')\n")
-    app = SimpleNamespace(calls=[])
+    app = _App()
     ext.setup_all(app)  # pyright: ignore[reportArgumentType]
     assert sorted(app.calls) == ["alpha", "beta"]
 
@@ -99,7 +106,7 @@ def test_setup_all_survives_a_raising_extension(
     # the extensions after it from loading.
     sandbox("angry", "def setup(app):\n    raise RuntimeError('boom in setup')\n")
     sandbox("calm", "def setup(app):\n    app.calls.append('calm')\n")
-    app = SimpleNamespace(calls=[])
+    app = _App()
     with caplog.at_level("WARNING", logger="wactorz.ext"):
         ext.setup_all(app)  # pyright: ignore[reportArgumentType]
     assert app.calls == ["calm"]
@@ -127,7 +134,7 @@ def test_collect_actor_decorators_gathers_and_applies(sandbox: Callable[..., Non
     )
     decorators = ext.collect_actor_decorators(SimpleNamespace())  # pyright: ignore[reportArgumentType]
     assert len(decorators) == 1
-    payload: dict = {}
+    payload: dict[str, Any] = {}
     decorators[0](SimpleNamespace(name="io"), payload)
     assert payload == {"tag": "IO"}
 

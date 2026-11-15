@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The compose stack's sandbox node: told what any node is told, and nothing of main's.
 
 In the compose stack the sandbox node is a container, not a machine ``/deploy``
@@ -12,6 +13,7 @@ import dataclasses
 import stat
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -163,7 +165,7 @@ class TestItsBrokerAccount:
         assert broker_certificates.account_nodes() == []
 
 
-def _services(stack: str) -> dict[str, dict]:
+def _services(stack: str) -> dict[str, dict[str, Any]]:
     compose = yaml.load((ROOT / stack).read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     return compose["services"]
 

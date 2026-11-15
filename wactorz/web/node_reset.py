@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Asking the nodes to reset what their agents keep, and hearing back.
 
 A reset of chat history, agent state or counters clears main's records, and
@@ -18,8 +19,9 @@ from aiomqtt import MqttError
 from ..core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ..core.node_publications import admit
 from ..core.node_signing import signed_publish_kwargs
+from ..core.topics import NODES, node_topic, own_topic_parts
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long a reset waits for the nodes it asked. Generous for one round trip
 #: over the broker; a node slower than this is reported as not having answered,
@@ -68,15 +70,13 @@ async def _ask(main_actor: Any, scope: str, agent: str | None, nodes: list[str])
         ) as client:
             # Subscribed before asking, so an answer cannot arrive unheard.
             for node in nodes:
-                await client.subscribe(f"nodes/{node}/reset_done", qos=1)
+                await client.subscribe(node_topic(node, "reset_done"), qos=1)
             for node in nodes:
-                topic = f"nodes/{node}/reset"
+                topic = node_topic(node, "reset")
                 payload = json.dumps({"scope": scope, "agent": agent, "request": request})
                 await client.publish(topic, payload, qos=1, **signed_publish_kwargs(topic, payload))
             await asyncio.wait_for(_hear(client, request, answers), ANSWER_TIMEOUT_S)
-    # Spelled this way on purpose: the two are one object from 3.11 and separate
-    # on 3.10, where only this spelling catches what `wait_for` raises.
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pass
     except (OSError, MqttError) as exc:
         logger.warning("[reset] Could not ask the nodes to reset %s: %s", scope, exc)
@@ -91,8 +91,8 @@ async def _hear(client: Any, request: str, answers: dict[str, str]) -> None:
     """
     async for msg in client.messages:
         topic = str(msg.topic)
-        parts = topic.split("/")
-        node = parts[1] if len(parts) == 3 else ""
+        parts = own_topic_parts(topic)
+        node = parts[1] if parts is not None and len(parts) == 3 and parts[0] == NODES else ""
         if node not in answers:
             continue
         payload = bytes(msg.payload or b"")

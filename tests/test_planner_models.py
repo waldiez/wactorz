@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The planner names the models it uses, from the ones that are kept.
 
 A pipeline request goes to the planner, not to main, so the planner is told

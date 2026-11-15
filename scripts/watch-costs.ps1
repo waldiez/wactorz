@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 param(
     [string]$BaseUrl = "http://localhost:8000",
     [int]$IntervalSeconds = 5

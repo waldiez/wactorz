@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Lint the agent programs that are held in strings.
 
 A catalogue agent not yet moved into a module of its own keeps its program in

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The contract and discovery surface a node exposes to generated code.
 
 `declare_contract` is what makes an agent visible to the planner, and it is

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The planner places the code it writes where main places the model's code.
 
 A plan is the model's, like a ``<spawn>`` block, so its agents go where main's

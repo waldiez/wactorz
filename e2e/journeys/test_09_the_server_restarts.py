@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The server is stopped and started again: everything it was running comes back.
 
 The same state directory, the same broker, the same node, and the same browser

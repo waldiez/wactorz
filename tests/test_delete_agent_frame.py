@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Both delete paths announce the removal under the name the dashboard matches.
 
 The frame carried a state snapshot, so the numbers on the page stayed correct

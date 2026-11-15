@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Loading extensions: a broken one is logged and skipped, never fatal.
 
 Extensions are discovered as modules under `wactorz/ext/`. Each is set up in a
@@ -7,6 +8,8 @@ anything cyclic or undeclared after, in discovery order. The browser config and
 per-actor decorators an extension offers are gathered the same forgiving way.
 """
 
+import importlib
+import pkgutil
 import types
 from typing import Any
 
@@ -146,8 +149,6 @@ class TestWhatBelongsInExt:
         """A module under `wactorz/ext/` is imported on every start, so one that
         needs an optional library would warn on every start for everyone who
         does not have it. Such bridges live in `wactorz/core/integrations/` instead."""
-        import importlib
-        import pkgutil
 
         for module in pkgutil.iter_modules(ext.__path__):
             if module.name.startswith("_"):
@@ -158,7 +159,9 @@ class TestWhatBelongsInExt:
 class _EntryPoint:
     """One ``wactorz.extensions`` entry point, as importlib.metadata hands them out."""
 
-    def __init__(self, name: str, value: str, loaded: Any = None, error: Exception | None = None):
+    def __init__(
+        self, name: str, value: str, loaded: Any = None, error: Exception | None = None
+    ) -> None:
         self.name = name
         self.value = value
         self._loaded = loaded

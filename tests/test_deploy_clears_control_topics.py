@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A deploy clears the node's control topics before that node subscribes to them.
 
 A node acts on what it finds on `nodes/<name>/spawn` and its siblings as soon as it

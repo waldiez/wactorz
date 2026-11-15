@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Serving the application log.
 
 The endpoint is a read over the in-memory ring buffer, and every dimension a

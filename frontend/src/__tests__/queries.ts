@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
  * Finding elements in a unit test the way the end-to-end suite finds them in
@@ -20,12 +19,21 @@ const IMPLICIT_ROLES: Record<string, string> = {
     SELECT: "combobox",
     TEXTAREA: "textbox",
     A: "link",
+    ARTICLE: "article",
+    ASIDE: "complementary",
+    TABLE: "table",
+    H1: "heading",
+    H2: "heading",
+    H3: "heading",
 };
 
 /** The roles an `<input>` takes from its type, for the types this dashboard uses. */
 const INPUT_ROLES: Record<string, string> = {
     radio: "radio",
     checkbox: "checkbox",
+    search: "searchbox",
+    number: "spinbutton",
+    range: "slider",
 };
 
 /** The element's role: its `role` attribute, else what its tag implies. */
@@ -37,16 +45,27 @@ export function roleOf(node: Element): string {
     if (node instanceof HTMLInputElement) {
         return INPUT_ROLES[node.type] ?? "textbox";
     }
+    // A header cell heads its row when scoped to it, else its column.
+    if (node.tagName === "TH") {
+        return node.getAttribute("scope") === "row" ? "rowheader" : "columnheader";
+    }
+    // A section is a region only once it is named.
+    if (node.tagName === "SECTION") {
+        return node.hasAttribute("aria-label") ? "region" : "";
+    }
     return IMPLICIT_ROLES[node.tagName] ?? "";
 }
 
-/** The element's accessible name: its `aria-label`, else its label for an input, else its text. */
+/** The element's accessible name: its `aria-label`, else its label for an input, a table's caption, else its text. */
 export function nameOf(node: Element): string {
     const label = node.getAttribute("aria-label");
     if (label !== null) {
         return label.trim();
     }
-    if (node instanceof HTMLInputElement) {
+    if (node instanceof HTMLTableElement && node.caption) {
+        return (node.caption.textContent ?? "").trim();
+    }
+    if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement) {
         const labelled =
             node.closest("label") ?? (node.id ? document.querySelector(`label[for="${node.id}"]`) : null);
         return (labelled?.textContent ?? "").trim();

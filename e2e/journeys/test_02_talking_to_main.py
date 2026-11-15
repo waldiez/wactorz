@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A message goes to the server's own agent, and its answer comes back to the page."""
 
 from harness import backend, browser, waiting

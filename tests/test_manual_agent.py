@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The manual agent: routing a request, finding a manual, reading it, and answering from it.
 
 `test_manual_agent_downloads.py` holds the fetch itself to public addresses and

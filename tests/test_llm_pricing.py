@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Model pricing lookup.
 
 Costs are computed from a table keyed by model-name *prefix*, so a dated or
@@ -9,8 +10,6 @@ That is not cosmetic — the same number drives the reported spend, the budget
 check and the spend cap, so a shadowed model silently overstates cost by the
 ratio between the two rates.
 """
-
-# pylint: disable=missing-function-docstring
 
 import pytest
 

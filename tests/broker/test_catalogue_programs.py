@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A catalogue program's own broker connection, on main and on a node.
 
 Some programs open a connection of their own, besides the one their host
@@ -55,7 +56,7 @@ async def _publish_until_heard(
 
         try:
             await asyncio.wait_for(keep_publishing(), timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pytest.fail(f"within {timeout:g}s, never: {what}")
 
 

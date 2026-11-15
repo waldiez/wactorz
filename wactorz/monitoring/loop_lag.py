@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Noticing when the event loop stops running, and saying where it is.
 
 Every actor in a process shares one event loop. Code that blocks it -- a
@@ -21,7 +22,7 @@ import traceback
 
 from prometheus_client import Histogram
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How often the loop is asked to answer.
 CHECK_INTERVAL_S = 1.0
@@ -91,8 +92,8 @@ class LoopLagMonitor:
 
     def _answer(self, asked_at: float, answered: threading.Event) -> None:
         """On the loop: record how long it took to get here."""
-        self.last = time.monotonic() - asked_at
-        self.longest = max(self.longest, self.last)
+        self.last: float = time.monotonic() - asked_at
+        self.longest: float = max(self.longest, self.last)
         LAG.observe(self.last)
         answered.set()
 

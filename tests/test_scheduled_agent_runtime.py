@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A scheduled agent at run time: validating, firing, restarting, and ending.
 
 `tests/test_schedule_times.py` pins the clock arithmetic. This pins what the
@@ -15,7 +16,7 @@ import asyncio
 import importlib.util
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +59,7 @@ def _broker(agent: ScheduledAgent) -> _Broker:
 
 
 def _utc_iso(delta: timedelta) -> str:
-    return (datetime.now(timezone.utc) + delta).replace(tzinfo=None).isoformat()
+    return (datetime.now(UTC) + delta).replace(tzinfo=None).isoformat()
 
 
 def _record_self_delete(agent: ScheduledAgent) -> list[bool]:
@@ -80,7 +81,7 @@ async def _stop_loop(agent: ScheduledAgent) -> None:
     task = agent._loop_task
     if task is not None and not task.done():
         task.cancel()
-        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.10/3.11.
+        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.11.
         await asyncio.wait({task}, timeout=5)
 
 
@@ -145,7 +146,7 @@ class TestValidationAtSpawn:
         monkeypatch.setitem(sys.modules, "croniter", None)
 
         with pytest.raises(ValueError, match="structured schedule"):
-            _next_fire_cron(datetime.now(timezone.utc), "0 17 * * *")
+            _next_fire_cron(datetime.now(UTC), "0 17 * * *")
 
 
 class TestFiring:
@@ -153,7 +154,7 @@ class TestFiring:
         agent = _agent(tmp_path, DAILY)
         await agent.on_start()
         await _stop_loop(agent)
-        fired_at = datetime(2026, 9, 17, 17, 0, tzinfo=timezone.utc)
+        fired_at = datetime(2026, 9, 17, 17, 0, tzinfo=UTC)
 
         await agent._fire(now_utc=fired_at, manual=True)
 
@@ -181,7 +182,7 @@ class TestFiring:
 
         monkeypatch.setattr(agent, "persist", _refuse)
 
-        await agent._fire(now_utc=datetime.now(timezone.utc))
+        await agent._fire(now_utc=datetime.now(UTC))
 
         assert agent._state.fire_count == 1
 
@@ -189,7 +190,7 @@ class TestFiring:
         first = _agent(tmp_path, DAILY)
         await first.on_start()
         await _stop_loop(first)
-        await first._fire(now_utc=datetime.now(timezone.utc))
+        await first._fire(now_utc=datetime.now(UTC))
 
         second = _agent(tmp_path, DAILY)
         await second._load_persistent_state()
@@ -197,7 +198,7 @@ class TestFiring:
         await _stop_loop(second)
 
         assert second._state.fire_count == 1
-        assert second._last_fire_local(timezone.utc) is not None
+        assert second._last_fire_local(UTC) is not None
 
     async def test_unreadable_saved_state_starts_fresh(self, tmp_path: Path) -> None:
         agent = _agent(tmp_path, DAILY)
@@ -214,9 +215,9 @@ class TestFiring:
         await _stop_loop(agent)
         agent._state.last_fire_iso = "2026-09-17T17:00:00"
 
-        last = agent._last_fire_local(timezone.utc)
+        last = agent._last_fire_local(UTC)
 
-        assert last == datetime(2026, 9, 17, 17, 0, tzinfo=timezone.utc)
+        assert last == datetime(2026, 9, 17, 17, 0, tzinfo=UTC)
 
     async def test_an_unreadable_last_fire_is_ignored(self, tmp_path: Path) -> None:
         agent = _agent(tmp_path, DAILY)
@@ -224,7 +225,7 @@ class TestFiring:
         await _stop_loop(agent)
         agent._state.last_fire_iso = "not a timestamp"
 
-        assert agent._last_fire_local(timezone.utc) is None
+        assert agent._last_fire_local(UTC) is None
 
 
 class TestOneShotStart:
@@ -311,7 +312,7 @@ class TestRunLoop:
         await agent.on_start()
         await _stop_loop(agent)
         agent._schedule = {"type": "once", "at": _utc_iso(-timedelta(seconds=1)), "tz": "UTC"}
-        agent._tz = timezone.utc
+        agent._tz = UTC
         deleted = _record_self_delete(agent)
 
         loop = asyncio.create_task(agent._run_loop())
@@ -408,7 +409,9 @@ class TestSelfDelete:
                 removed.append(actor_id)
 
         class _Main:
-            def _remove_from_spawn_registry(self, name: str) -> None:
+            def _remove_from_spawn_registry(
+                self, name: str, node: str | None = None, *, actor_id: str | None = None
+            ) -> None:
                 removed.append(name)
 
         async def _stop() -> None:
@@ -441,7 +444,9 @@ class TestSelfDelete:
                 raise RuntimeError("locked")
 
         class _Main:
-            def _remove_from_spawn_registry(self, name: str) -> None:
+            def _remove_from_spawn_registry(
+                self, name: str, node: str | None = None, *, actor_id: str | None = None
+            ) -> None:
                 raise RuntimeError("db gone")
 
         async def _stop() -> None:

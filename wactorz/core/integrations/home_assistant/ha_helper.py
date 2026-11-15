@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import base64
 import csv
 import hashlib
@@ -5,13 +6,13 @@ import io
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 from .ha_web_socket_client import HAWebSocketClient  # noqa: E402
 
@@ -72,6 +73,12 @@ def generate_swid(
 
 # ── URL Helpers ────────────────────────────────────────────────────────
 def normalize_ha_ws_url(url: str) -> str:
+    """``url`` as Home Assistant's WebSocket API URL: ``ws``/``wss`` ending in
+    ``/api/websocket``.
+
+    An ``http``/``https`` URL becomes ``ws``/``wss``; a URL of neither kind is returned trimmed;
+    an empty one gives an empty string.
+    """
     raw = (url or "").strip().rstrip("/")
     if not raw:
         return ""
@@ -100,6 +107,11 @@ def normalize_ha_ws_url(url: str) -> str:
 
 
 def normalize_ha_base_url(url: str) -> str:
+    """``url`` as Home Assistant's base HTTP URL, the inverse of :func:`normalize_ha_ws_url`.
+
+    A ``ws``/``wss`` URL becomes ``http``/``https``, and ``/api/websocket`` is taken off the end;
+    a URL of neither kind is returned trimmed.
+    """
     raw = (url or "").strip().rstrip("/")
     if not raw:
         return ""
@@ -129,6 +141,11 @@ async def fetch_devices_entities_with_location(
     token: str,
     include_states: bool = False,
 ) -> list[dict[str, Any]]:
+    """Every Home Assistant device with its area and enabled entities, sorted by name.
+
+    Entities with no device are grouped by area into a device of their own each. With
+    ``include_states``, each entity carries its current state and attributes.
+    """
     ws_url = normalize_ha_ws_url(ws_url)
     async with HAWebSocketClient(ws_url, token) as ha:
         # Core registries
@@ -396,7 +413,7 @@ async def get_simplified_ha_data(ws_url: str, token: str) -> dict[str, list[dict
 
         _SKIP_KEYS = {"icon", "entity_picture"}
 
-        def drop_nulls(d: dict) -> dict:
+        def drop_nulls(d: dict[str, Any]) -> dict[str, Any]:
             return {k: v for k, v in d.items() if v is not None and v != [] and k not in _SKIP_KEYS}
 
         return {
@@ -869,6 +886,9 @@ async def create_automation_via_websocket(
     token: str,
     automation_config: dict[str, Any],
 ) -> dict[str, Any]:
+    """Create an automation from ``automation_config``, through the REST API; ``ws_url`` may be
+    the WebSocket URL, which is turned into the base URL.
+    """
     return await create_automation_via_rest(ws_url, token, automation_config)
 
 
@@ -1070,7 +1090,7 @@ def to_utc(s: str) -> str:
         return s
     if dt.tzinfo is None:
         dt = dt.astimezone()  # attach local tz
-    return dt.astimezone(timezone.utc).isoformat()
+    return dt.astimezone(UTC).isoformat()
 
 
 _TS_KEYS = ("last_changed", "last_updated", "last_reported")
@@ -1099,7 +1119,7 @@ def localise_history_timestamps(history: dict[str, Any]) -> dict[str, Any]:
             for key in _TS_KEYS:
                 if isinstance(s.get(key), str):
                     try:
-                        dt = datetime.fromisoformat(s[key].replace("Z", "+00:00"))
+                        dt = datetime.fromisoformat(s[key])
                         s[key] = dt.astimezone(local_tz).isoformat()
                     except ValueError:
                         pass

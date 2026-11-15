@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A state directory in one archive, and back.
 
 An export takes what the system remembers -- its database, each agent's state

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The rest of what generated code is handed as `agent`.
 
 Generated code is written by a model, often for a remote node first, so this
@@ -118,7 +119,7 @@ async def _stop_window(window: Any) -> None:
     task = inner._task
     inner.stop()
     if task is not None:
-        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.10/3.11.
+        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.11.
         await asyncio.wait({task}, timeout=5)
 
 
@@ -376,7 +377,7 @@ class TestSubscribeBookkeeping:
         assert inspect.isawaitable(result)
         assert getattr(api._actor, "_sub_hub", None) is None, "no second listener was bound"
 
-    def test_a_callback_that_cannot_be_inspected_is_allowed_through(
+    async def test_a_callback_that_cannot_be_inspected_is_allowed_through(
         self, api: AgentAPI, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         bound: list[str] = []
@@ -498,9 +499,11 @@ class TestWindow:
         made: list[str] = []
         real_make = bus.make_window
 
-        def _make(topic: str, seconds: float = 300, max_size: int = 1000) -> StreamWindow:
+        def _make(
+            topic: str, seconds: float = 300, max_size: int = 1000, *, event_time: bool = False
+        ) -> StreamWindow:
             made.append(topic)
-            return real_make(topic, seconds=seconds, max_size=max_size)
+            return real_make(topic, seconds=seconds, max_size=max_size, event_time=event_time)
 
         monkeypatch.setattr(bus, "make_window", _make)
 

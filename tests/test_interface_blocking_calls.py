@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Blocking network calls must not run on the shared event loop.
 
 Every actor in the process runs on one loop. A synchronous call made from inside
@@ -10,12 +11,12 @@ Each test runs an unrelated ticker alongside the call and counts how often it
 gets scheduled: a blocked loop starves it, an offloaded call does not.
 """
 
-# pylint: disable=missing-function-docstring,too-few-public-methods
-
 import asyncio
 import socket
+import time
 import types
 from collections.abc import Awaitable
+from typing import Any
 
 import pytest
 
@@ -25,7 +26,7 @@ from wactorz.interfaces.chat_interfaces import WhatsAppInterface
 _BLOCK = 0.2
 
 
-async def _loop_ticks_during(coro: Awaitable) -> int:
+async def _loop_ticks_during(coro: Awaitable[Any]) -> int:
     """Run `coro`, counting how many times an unrelated task got scheduled."""
     ticks = 0
     stop = False
@@ -51,11 +52,10 @@ class _BlockingTwilio:
 
     def __init__(self) -> None:
         self.messages = types.SimpleNamespace(create=self._create)
-        self.calls: list[dict] = []
+        self.calls: list[dict[str, Any]] = []
 
-    def _create(self, **kwargs):
+    def _create(self, **kwargs) -> None:
         self.calls.append(kwargs)
-        import time
 
         time.sleep(_BLOCK)
 
@@ -68,7 +68,7 @@ def _whatsapp() -> WhatsAppInterface:
 
 class TestTwilioSend:
     @pytest.mark.asyncio
-    async def test_sending_does_not_block_the_loop(self):
+    async def test_sending_does_not_block_the_loop(self) -> None:
         iface, twilio = _whatsapp(), _BlockingTwilio()
 
         ticks = await _loop_ticks_during(
@@ -78,7 +78,7 @@ class TestTwilioSend:
         assert ticks > 5, f"loop starved for the whole send ({ticks} ticks)"
 
     @pytest.mark.asyncio
-    async def test_sending_passes_the_expected_fields(self):
+    async def test_sending_passes_the_expected_fields(self) -> None:
         iface, twilio = _whatsapp(), _BlockingTwilio()
 
         await iface._send_message(twilio, "hello", "whatsapp:+15550000000")
@@ -94,11 +94,10 @@ class TestTwilioSend:
 
 class TestHostLookup:
     @pytest.mark.asyncio
-    async def test_a_slow_dns_lookup_does_not_block_the_loop(self, monkeypatch):
+    async def test_a_slow_dns_lookup_does_not_block_the_loop(self, monkeypatch) -> None:
         from wactorz.interfaces import chat_interfaces
 
         def _slow(_host: str) -> str:
-            import time
 
             time.sleep(_BLOCK)
             return "10.0.0.5"
@@ -110,7 +109,7 @@ class TestHostLookup:
         assert ticks > 5, f"loop starved during the lookup ({ticks} ticks)"
 
     @pytest.mark.asyncio
-    async def test_resolution_failure_is_reported_as_none(self, monkeypatch):
+    async def test_resolution_failure_is_reported_as_none(self, monkeypatch) -> None:
         def _fail(_host: str) -> str:
             raise socket.gaierror("no such host")
 
@@ -121,7 +120,7 @@ class TestHostLookup:
         assert await chat_interfaces.resolve_host("nowhere.local") is None
 
     @pytest.mark.asyncio
-    async def test_a_successful_lookup_returns_the_address(self, monkeypatch):
+    async def test_a_successful_lookup_returns_the_address(self, monkeypatch) -> None:
         monkeypatch.setattr(socket, "gethostbyname", lambda _h: "192.168.1.7")
 
         from wactorz.interfaces import chat_interfaces

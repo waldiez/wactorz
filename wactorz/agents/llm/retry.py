@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Retry, backoff and a per-attempt timeout for LLM requests.
 
 Applied in ``LLMProvider``'s public methods, so every provider inherits this the
@@ -16,11 +17,11 @@ import asyncio
 import logging
 import random
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any, TypeVar
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -168,8 +169,8 @@ def retry_after_seconds(exc: BaseException) -> float | None:
     if when is None:
         return None
     if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+        when = when.replace(tzinfo=UTC)
+    return max(0.0, (when - datetime.now(UTC)).total_seconds())
 
 
 def retry_delay(exc: BaseException, attempt: int) -> float | None:
@@ -218,7 +219,7 @@ async def _bounded(operation: Callable[[], Awaitable[T]], timeout: float | None)
     """One attempt, abandoned after ``timeout`` seconds.
 
     ``asyncio.wait``, not ``wait_for``, for the reason given in
-    ``Actor._wind_down_tasks``: on Python 3.10 a ``wait_for`` whose guarded
+    ``Actor._wind_down_tasks``: on Python 3.11 a ``wait_for`` whose guarded
     future completes in the same instant the caller is cancelled returns the
     result from inside its own ``CancelledError`` handler, and the caller never
     learns it was cancelled. An LLM call is the longest await an actor makes, so
@@ -238,7 +239,7 @@ async def _bounded(operation: Callable[[], Awaitable[T]], timeout: float | None)
     if not done:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        raise asyncio.TimeoutError
+        raise TimeoutError
     return task.result()
 
 

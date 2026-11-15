@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 Tests for WeatherAgent's natural-language parsing.
 
@@ -10,6 +11,7 @@ previously mangled queries like "weather tomorrow".
 
 import unittest
 from datetime import date, timedelta
+from typing import Any
 
 from wactorz.catalogue_agents.weather_agent import (
     WeatherAgent,
@@ -23,17 +25,17 @@ WED = date(2026, 6, 3)  # a Wednesday
 
 
 class ParseIntentTest(unittest.TestCase):
-    def _p(self, text):
+    def _p(self, text) -> dict[str, Any]:
         return parse_query(text, WED)
 
-    def assertIntent(self, text, action, location=None):
+    def assertIntent(self, text, action, location=None) -> dict[str, Any]:
         p = self._p(text)
         self.assertEqual(p.get("action"), action, f"{text!r} action")
         got = (p.get("location") or "").lower()
         self.assertEqual(got, (location or "").lower(), f"{text!r} location")
         return p
 
-    def test_current_default_and_named(self):
+    def test_current_default_and_named(self) -> None:
         self.assertIntent("what's the weather", "current", None)
         self.assertIntent("whats the weather like rn", "current", None)
         self.assertIntent("whats the weather in athens gr", "current", "athens gr")
@@ -41,33 +43,33 @@ class ParseIntentTest(unittest.TestCase):
         self.assertIntent("athens", "current", "athens")
         self.assertIntent("whats it like outside", "current", None)
 
-    def test_tomorrow_is_a_forecast_not_a_location(self):
+    def test_tomorrow_is_a_forecast_not_a_location(self) -> None:
         # regression: previously geocoded the whole sentence
         p = self.assertIntent("what's the weather tomorrow", "forecast", None)
         self.assertEqual(p["date_from"], "2026-06-04")
         p = self.assertIntent("whats the weather in athens gr tomorrow", "forecast", "athens gr")
         self.assertEqual(p["date_from"], "2026-06-04")
 
-    def test_weekend_spans_saturday_sunday(self):
+    def test_weekend_spans_saturday_sunday(self) -> None:
         p = self.assertIntent("how hot will it be in rome this weekend", "forecast", "rome")
         self.assertEqual((p["date_from"], p["date_to"]), ("2026-06-06", "2026-06-07"))
 
-    def test_weekday_targets_next_occurrence(self):
+    def test_weekday_targets_next_occurrence(self) -> None:
         p = self.assertIntent("what's the forecast for friday in madrid", "forecast", "madrid")
         self.assertEqual(p["date_from"], "2026-06-05")  # Fri after Wed
 
-    def test_next_week_is_following_monday_window(self):
+    def test_next_week_is_following_monday_window(self) -> None:
         p = self.assertIntent(
             "how's the weather in los angeles next week", "forecast", "los angeles"
         )
         self.assertEqual((p["date_from"], p["date_to"]), ("2026-06-08", "2026-06-14"))
 
-    def test_n_day_horizon(self):
+    def test_n_day_horizon(self) -> None:
         self.assertEqual(self._p("forecast for tokyo next 5 days")["days"], 5)
         self.assertEqual(self._p("weather in cape town in 10 days")["days"], 10)
         self.assertEqual(self._p("weather in new york this week")["days"], 7)
 
-    def test_following_week_is_next_week(self):
+    def test_following_week_is_next_week(self) -> None:
         p = self.assertIntent(
             "whats the weather in athens for the following week", "forecast", "athens"
         )
@@ -76,7 +78,7 @@ class ParseIntentTest(unittest.TestCase):
         p2 = self._p("what will it be like the week after next in berlin")
         self.assertEqual(p2["action"], "forecast")
 
-    def test_history(self):
+    def test_history(self) -> None:
         p = self.assertIntent("what was the weather yesterday", "history", None)
         self.assertEqual(p["date"], "2026-06-02")
         p = self.assertIntent("weather in berlin 3 days ago", "history", "berlin")
@@ -84,7 +86,7 @@ class ParseIntentTest(unittest.TestCase):
         p = self.assertIntent("history berlin 2026-05-20", "history", "berlin")
         self.assertEqual(p["date"], "2026-05-20")
 
-    def test_rain_and_snow_concerns(self):
+    def test_rain_and_snow_concerns(self) -> None:
         self.assertEqual(self._p("will it rain in london tomorrow?").get("concern"), "rain")
         self.assertEqual(self._p("is it raining?").get("concern"), "rain")
         self.assertEqual(self._p("is it raining?").get("action"), "current")
@@ -102,30 +104,30 @@ class ParseIntentTest(unittest.TestCase):
         self.assertEqual(self._p("is it going to snow in boston").get("concern"), "snow")
         self.assertIsNone(self._p("weather in paris").get("concern"))
 
-    def test_clothing_questions_are_weather_queries(self):
+    def test_clothing_questions_are_weather_queries(self) -> None:
         p = self._p("should i wear a jacket")
         self.assertEqual(p["action"], "current")
         self.assertEqual(p.get("concern"), "clothing")
         self.assertNotEqual(p["action"], "not_weather")
 
-    def test_fahrenheit(self):
+    def test_fahrenheit(self) -> None:
         self.assertEqual(self._p("temperature in cairo in fahrenheit").get("units"), "fahrenheit")
         self.assertNotIn("units", self._p("temperature in cairo"))  # celsius is implicit
 
-    def test_multiword_city_names_survive(self):
+    def test_multiword_city_names_survive(self) -> None:
         # "city"/"town" must not be stripped out of real place names
         self.assertIntent("weather in kansas city", "current", "kansas city")
         self.assertIntent("forecast for mexico city this week", "forecast", "mexico city")
         self.assertIntent("weather in cape town tomorrow", "forecast", "cape town")
 
-    def test_set_default(self):
+    def test_set_default(self) -> None:
         self.assertIntent("set default to Athens", "set-default", "Athens")
         self.assertIntent("set-default Tokyo", "set-default", "Tokyo")
         self.assertIntent("change my default location to Paris", "set-default", "Paris")
         self.assertIntent("remember my location as Athens", "set-default", "Athens")
         self.assertIntent("set my home to Thessaloniki", "set-default", "Thessaloniki")
 
-    def test_home_location_references_use_default_without_fake_location(self):
+    def test_home_location_references_use_default_without_fake_location(self) -> None:
         p = self._p("weather where I am")
         self.assertEqual(p["action"], "current")
         self.assertTrue(p.get("use_default_location"))
@@ -135,33 +137,33 @@ class ParseIntentTest(unittest.TestCase):
         self.assertTrue(p.get("use_default_location"))
         self.assertNotIn("location", p)
 
-    def test_self_location_statement_updates_default_location(self):
+    def test_self_location_statement_updates_default_location(self) -> None:
         p = self.assertIntent("im in athens gr silly", "current", "athens gr")
         self.assertTrue(p.get("update_default_location"))
         p = self.assertIntent("I'm near Thessaloniki", "current", "Thessaloniki")
         self.assertTrue(p.get("update_default_location"))
 
-    def test_json_passthrough(self):
+    def test_json_passthrough(self) -> None:
         p = parse_query('{"action": "forecast", "location": "Rome", "days": 4}', WED)
         self.assertEqual(p, {"action": "forecast", "location": "Rome", "days": 4})
 
-    def test_empty(self):
+    def test_empty(self) -> None:
         self.assertEqual(parse_query("", WED), {"action": "current"})
 
 
 class HelperTest(unittest.TestCase):
-    def test_clean_location_strips_noise(self):
+    def test_clean_location_strips_noise(self) -> None:
         self.assertIsNone(_clean_location("what is the weather tomorrow"))
         self.assertEqual(_clean_location("in london tomorrow"), "london")
 
-    def test_next_weekday(self):
+    def test_next_weekday(self) -> None:
         # Wed 2026-06-03; Friday is +2
         self.assertEqual(_next_weekday(WED, 4), date(2026, 6, 5))
         # same weekday returns today unless force_next
         self.assertEqual(_next_weekday(WED, 2), WED)
         self.assertEqual(_next_weekday(WED, 0, force_next=True), date(2026, 6, 8))
 
-    def test_label_for(self):
+    def test_label_for(self) -> None:
         self.assertEqual(_label_for(WED, WED), "today")
         self.assertEqual(_label_for(date(2026, 6, 4), WED), "tomorrow")
         self.assertEqual(_label_for(date(2026, 6, 2), WED), "yesterday")
@@ -169,10 +171,10 @@ class HelperTest(unittest.TestCase):
 
 
 class FormatTest(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self.agent = WeatherAgent(llm_provider=None, name="weather-agent")
 
-    def test_current_format(self):
+    def test_current_format(self) -> None:
         out = self.agent._format(
             {
                 "kind": "current",
@@ -192,7 +194,7 @@ class FormatTest(unittest.TestCase):
         self.assertIn("20", out)
         self.assertIn("°C", out)
 
-    def test_rain_verdict_yes(self):
+    def test_rain_verdict_yes(self) -> None:
         out = self.agent._format(
             {
                 "kind": "forecast",
@@ -215,7 +217,7 @@ class FormatTest(unittest.TestCase):
         self.assertIn("Yes", out)
         self.assertIn("umbrella", out.lower())
 
-    def test_rain_verdict_no(self):
+    def test_rain_verdict_no(self) -> None:
         out = self.agent._format(
             {
                 "kind": "forecast",
@@ -237,7 +239,7 @@ class FormatTest(unittest.TestCase):
         )
         self.assertIn("No", out)
 
-    def test_current_clothing_verdict(self):
+    def test_current_clothing_verdict(self) -> None:
         out = self.agent._format(
             {
                 "kind": "current",
@@ -255,26 +257,26 @@ class FormatTest(unittest.TestCase):
         )
         self.assertIn("No jacket needed", out)
 
-    def test_error_passthrough(self):
+    def test_error_passthrough(self) -> None:
         self.assertIn(
             "couldn't find", self.agent._format({"error": "I couldn't find a place called 'x'."})
         )
 
 
 class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
-    async def test_followups_reuse_last_successful_location(self):
+    async def test_followups_reuse_last_successful_location(self) -> None:
         class FakeWeatherAgent(WeatherAgent):
-            def __init__(self, *args, **kwargs):
+            def __init__(self, *args, **kwargs) -> None:
                 super().__init__(*args, **kwargs)
                 self.memory = {}
 
-            def persist(self, key, value):
+            def persist(self, key, value) -> None:
                 self.memory[key] = value
 
-            def recall(self, key, default=None):
+            def recall(self, key, default=None) -> Any:
                 return self.memory.get(key, default)
 
-            async def _current(self, location: str, units: str = "celsius") -> dict:
+            async def _current(self, location: str, units: str = "celsius") -> dict[str, Any]:
                 label = "Athens, Attica, Greece" if "athens" in location.lower() else location
                 return {
                     "kind": "current",
@@ -288,7 +290,9 @@ class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
                     "condition": "clear",
                 }
 
-            async def _forecast(self, location: str, units: str = "celsius", **kwargs) -> dict:
+            async def _forecast(
+                self, location: str, units: str = "celsius", **kwargs
+            ) -> dict[str, Any]:
                 label = "Athens, Attica, Greece" if "athens" in location.lower() else location
                 # Use tomorrow relative to today so the agent labels it "tomorrow"
                 # (the agent anchors to the real current date; a fixed date rots).
@@ -336,19 +340,19 @@ class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Pack", umbrella)
         self.assertNotIn("Austria", umbrella)
 
-    async def test_home_location_is_separate_from_last_discussed_city(self):
+    async def test_home_location_is_separate_from_last_discussed_city(self) -> None:
         class FakeWeatherAgent(WeatherAgent):
-            def __init__(self, *args, **kwargs):
+            def __init__(self, *args, **kwargs) -> None:
                 super().__init__(*args, **kwargs)
                 self.memory = {}
 
-            def persist(self, key, value):
+            def persist(self, key, value) -> None:
                 self.memory[key] = value
 
-            def recall(self, key, default=None):
+            def recall(self, key, default=None) -> Any:
                 return self.memory.get(key, default)
 
-            async def _current(self, location: str, units: str = "celsius") -> dict:
+            async def _current(self, location: str, units: str = "celsius") -> dict[str, Any]:
                 labels = {
                     "athens": "Athens, Attica, Greece",
                     "paris": "Paris, Ile-de-France, France",
@@ -383,19 +387,19 @@ class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Athens", home)
         self.assertNotIn("Paris", home)
 
-    async def test_self_location_statement_changes_where_i_am(self):
+    async def test_self_location_statement_changes_where_i_am(self) -> None:
         class FakeWeatherAgent(WeatherAgent):
-            def __init__(self, *args, **kwargs):
+            def __init__(self, *args, **kwargs) -> None:
                 super().__init__(*args, **kwargs)
                 self.memory = {}
 
-            def persist(self, key, value):
+            def persist(self, key, value) -> None:
                 self.memory[key] = value
 
-            def recall(self, key, default=None):
+            def recall(self, key, default=None) -> Any:
                 return self.memory.get(key, default)
 
-            async def _current(self, location: str, units: str = "celsius") -> dict:
+            async def _current(self, location: str, units: str = "celsius") -> dict[str, Any]:
                 label = "Athens, Attica, Greece" if "athens" in location.lower() else location
                 return {
                     "kind": "current",
@@ -433,7 +437,7 @@ class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
 
 
 class CatalogNativeWeatherTest(unittest.TestCase):
-    def test_native_recipe_info_hides_factory(self):
+    def test_native_recipe_info_hides_factory(self) -> None:
         from wactorz.agents.catalog_agent import CatalogAgent
 
         catalog = CatalogAgent(name="catalog-test")

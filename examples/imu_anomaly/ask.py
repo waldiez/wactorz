@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Start the detector and ask it two questions from the same program.
 
 The shortest way to see `wactorz.ask`: the system runs on this script's loop

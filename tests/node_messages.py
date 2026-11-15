@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Messages as a node publishes them: signed with its key, as main receives them.
 
 Main takes a node's heartbeat, report, manifest or reply only when the node

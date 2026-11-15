@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every feed entry carries a ``source`` discriminator.
 
 The unified feed view renders two kinds of entry — broker-derived agent activity
@@ -11,20 +12,23 @@ wire to every connected browser, so deriving new fields from broker payloads
 would widen what browsers receive — the projection-not-enrichment rule.
 """
 
+from collections.abc import Iterator
+from typing import Any
+
 import pytest
 
 from wactorz.web import events, runtime
 
 
 @pytest.fixture(autouse=True)
-def _isolate_feed():
+def _isolate_feed() -> "Iterator[None]":
     original = list(runtime.state.get("log_feed", []))
     runtime.state["log_feed"] = []
     yield
     runtime.state["log_feed"] = original
 
 
-def feed() -> list[dict]:
+def feed() -> list[dict[str, Any]]:
     return runtime.state["log_feed"]
 
 

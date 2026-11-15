@@ -1,8 +1,10 @@
-"""Rate limiting for sign-in attempts.
+# SPDX-License-Identifier: Apache-2.0
+"""Rate limiting for attempts at the key, on the sign-in form and in a header.
 
-One shared key and no user accounts means guessing is the only attack on the
-form, and nothing about the form slows it down: a key short enough for a person
-to type is short enough to try repeatedly over a LAN. A delay per attempt is not
+One shared key and no user accounts means guessing is the only attack, and
+nothing about the form or the header slows it down: a key short enough for a
+person to type is short enough to try repeatedly over a LAN. Both spend one
+allowance per address, or a guesser would simply use the other. A delay per attempt is not
 enough on its own either — a fixed `sleep` is defeated by firing requests in
 parallel, because sleeping the handler does not stop the next request starting.
 Counting is what works: attempts are refused outright once there have been too
@@ -15,6 +17,10 @@ guesser rotating that header would get a fresh allowance for every attempt,
 which is worse than no limit at all because it looks like one. Behind a proxy
 nobody listed, every request shares the proxy's address and a lockout is global
 rather than per-client. That is the safe direction to fail.
+
+A script holding a stale key is counted like a guesser, so it can lock out a
+script with the right key on the same address until the window passes. Sessions
+and Home Assistant's ingress are not affected: they present no key.
 
 Nothing here reads configuration or touches aiohttp.
 """
@@ -41,6 +47,9 @@ BACKOFF_BASE_SECONDS = 1.0
 #: has to outlive the wait it produced, or the lockout only ever catches the
 #: impatient.
 FORGET_AFTER_SECONDS = LOCKOUT_SECONDS
+
+#: What a caller with no address is counted under.
+UNKNOWN_ADDRESS = "an unknown address"
 
 
 class LoginThrottle:
@@ -99,9 +108,9 @@ class LoginThrottle:
         """Forget addresses that have been quiet since well before the lockout.
 
         The dict is keyed by address, so without this a guesser walking a subnet
-        leaves an entry per address for as long as the process runs. Called from
-        the login path rather than a timer: the only thing that grows this is a
-        sign-in attempt, so that is where it is worth tidying.
+        leaves an entry per address for as long as the process runs. Called where
+        attempts are counted rather than on a timer: the only thing that grows this
+        is a failed attempt, so that is where it is worth tidying.
 
         Keyed on the last failure rather than on the wait it produced. Forgetting
         as soon as the wait elapsed would hand a patient script a clean record
@@ -122,4 +131,4 @@ class LoginThrottle:
 
 
 #: The running server's failed sign-in attempts.
-throttle = LoginThrottle()
+throttle: "LoginThrottle" = LoginThrottle()

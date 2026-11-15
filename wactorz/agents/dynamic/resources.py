@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Releasing what generated code left open when the agent stops.
 
 `cleanup()` is optional and often missing or incomplete, so anything holding a
@@ -11,7 +12,7 @@ import logging
 import types
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Values that cannot hold an OS resource, so they are never probed.
 SKIP_TYPES = (

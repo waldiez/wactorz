@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What every provider implements, and the shapes they exchange.
 
 The three public methods check the spend cap, apply the retry and timeout policy
@@ -9,7 +10,7 @@ both. They also record how each request ended and how long it took, for
 
 import logging
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
@@ -19,10 +20,10 @@ from .retry import ProviderUnavailable, call_with_retry, stream_with_retry
 
 T = TypeVar("T")
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
-def _resolve_temperature(kwargs: dict) -> float | None:
+def _resolve_temperature(kwargs: dict[str, Any]) -> float | None:
     """Explicit call-site ``temperature`` kwarg, else the global
     ``LLM_TEMPERATURE`` env setting, else None (keep the provider's default).
     """
@@ -34,13 +35,13 @@ def _resolve_temperature(kwargs: dict) -> float | None:
     return CONFIG.llm_temperature
 
 
-def _temp_params(kwargs: dict) -> dict:
+def _temp_params(kwargs: dict[str, Any]) -> dict[str, Any]:
     """``{"temperature": t}`` when a temperature is configured, else ``{}``."""
     temperature = _resolve_temperature(kwargs)
     return {} if temperature is None else {"temperature": temperature}
 
 
-def _ollama_options(kwargs: dict) -> dict:
+def _ollama_options(kwargs: dict[str, Any]) -> dict[str, Any]:
     """Ollama takes sampling settings under ``options``, not at the top level."""
     temperature = _resolve_temperature(kwargs)
     return {} if temperature is None else {"options": {"temperature": temperature}}
@@ -88,7 +89,9 @@ class LLMProvider:
         self._record(started, None)
         return result
 
-    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+    async def complete(
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         """Returns (text, usage) where usage = {input_tokens, output_tokens, cost_usd}"""
         check_cost_limit()
         return await self._measured(
@@ -99,11 +102,14 @@ class LLMProvider:
 
     async def complete_with_tools(
         self,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
     ) -> "ToolCompletion":
+        """The model's reply to ``messages`` with ``tools`` offered, retried as every call is;
+        refused when the spend limit is reached.
+        """
         check_cost_limit()
         return await self._measured(
             lambda: call_with_retry(
@@ -113,9 +119,9 @@ class LLMProvider:
         )
 
     async def stream(
-        self, messages: list[dict], system: str = "", **kwargs: Any
-    ) -> AsyncGenerator[str, None]:
-        """Yield response chunks as they arrive.
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> AsyncGenerator[str | dict[str, Any], None]:
+        """Yield response chunks as they arrive, a final usage dict last.
 
         The check runs on first iteration rather than at call time, because
         that is when the request is actually made — and it is where a caller
@@ -161,19 +167,23 @@ class LLMProvider:
 
     # ── Provider implementations ────────────────────────────────────────────
 
-    async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+    async def _complete(
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         raise NotImplementedError
 
     async def _complete_with_tools(
         self,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
     ) -> "ToolCompletion":
         raise NotImplementedError(f"{self.__class__.__name__} does not support tool calls")
 
-    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
+    async def _stream(
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> AsyncIterator[str | dict[str, Any]]:
         raise NotImplementedError(f"{self.__class__.__name__} does not support streaming")
         yield ""  # pragma: no cover - unreachable, makes this an async generator
 

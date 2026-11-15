@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """WhatsApp carries an agent's question out, numbered, and the number back.
 
 Twilio offers no buttons, so the options go as a numbered list under the
@@ -19,6 +20,8 @@ from aiohttp.test_utils import TestClient, TestServer
 RequestValidator = pytest.importorskip(
     "twilio.request_validator", reason="the whatsapp extra is not installed"
 ).RequestValidator
+
+from aiohttp import web
 
 from wactorz.core.outbound import Answer
 from wactorz.interfaces.chat.outbound import Outbox
@@ -88,14 +91,16 @@ def interface_fixture(monkeypatch: pytest.MonkeyPatch) -> WhatsAppInterface:
 
 
 @pytest.fixture(name="client")
-async def client_fixture(interface: WhatsAppInterface) -> AsyncGenerator[TestClient, None]:
+async def client_fixture(
+    interface: WhatsAppInterface,
+) -> AsyncGenerator[TestClient[web.Request, web.Application], None]:
     client = TestClient(TestServer(interface.build_app()))
     await client.start_server()
     yield client
     await client.close()
 
 
-def _signed_post(client: TestClient, body: str) -> Any:
+def _signed_post(client: TestClient[web.Request, web.Application], body: str) -> Any:
     form = {"Body": body, "From": f"whatsapp:{ALLOWED}"}
     url = str(client.make_url("/webhook/whatsapp"))
     signature = RequestValidator(AUTH_TOKEN).compute_signature(url, form)
@@ -107,7 +112,7 @@ async def _replies(interface: WhatsAppInterface) -> None:
 
 
 async def test_the_question_goes_out_numbered_to_the_whatsapp_number(
-    client: TestClient, interface: WhatsAppInterface
+    client: TestClient[web.Request, web.Application], interface: WhatsAppInterface
 ) -> None:
     message_id = await interface.send(
         f"whatsapp:{ALLOWED}",
@@ -127,7 +132,7 @@ async def test_the_question_goes_out_numbered_to_the_whatsapp_number(
 
 
 async def test_the_number_comes_back_as_the_answer_and_not_as_a_turn(
-    client: TestClient, interface: WhatsAppInterface
+    client: TestClient[web.Request, web.Application], interface: WhatsAppInterface
 ) -> None:
     await interface.send(
         ALLOWED, "Changed?", ["maintenance", "real problem"], message_id="m1", agent_id="agent-1"
@@ -161,7 +166,7 @@ async def test_the_number_comes_back_as_the_answer_and_not_as_a_turn(
 
 
 async def test_a_reply_that_picks_nothing_is_a_message(
-    client: TestClient, interface: WhatsAppInterface
+    client: TestClient[web.Request, web.Application], interface: WhatsAppInterface
 ) -> None:
     await interface.send(ALLOWED, "Changed?", ["yes", "no"], message_id="m1", agent_id="agent-1")
 
@@ -188,7 +193,7 @@ async def test_before_the_webhook_runs_there_is_nothing_to_send_with() -> None:
 
 
 async def test_a_user_with_no_number_is_refused(
-    client: TestClient, interface: WhatsAppInterface
+    client: TestClient[web.Request, web.Application], interface: WhatsAppInterface
 ) -> None:
     with pytest.raises(ValueError, match="phone number"):
         await interface.send("whatsapp:", "hi")

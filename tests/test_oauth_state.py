@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The OAuth callback must prove it is answering *our* authorization request.
 
 The callback is an unauthenticated local URL, so anything that can reach it
@@ -10,6 +11,7 @@ an account they do not own.
 
 import hmac
 import secrets
+from pathlib import Path
 
 import pytest
 
@@ -59,7 +61,6 @@ class TestTheStateIsWorthComparing:
     def test_the_source_keeps_it_for_the_comparison(self) -> None:
         # The regression this guards: the value used to be inlined into the
         # request dict and thrown away, so nothing could compare it later.
-        from pathlib import Path
 
         source = Path("wactorz/core/integrations/google_mcp.py").read_text(encoding="utf-8")
 

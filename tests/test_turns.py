@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One chat turn, followed wherever it goes.
 
 A turn starts where a person's message enters and travels with the work done to

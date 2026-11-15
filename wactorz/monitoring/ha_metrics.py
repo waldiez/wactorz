@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """How Home Assistant's WebSocket API answers.
 
 Every Home Assistant feature here goes through one WebSocket client: the

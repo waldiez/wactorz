@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The monitor's API key, and the rule that refuses to start without one.
 
  Two separate protections, and neither replaces the other. The key guards the
@@ -10,6 +11,8 @@ until the cookie work lands, so a guarded install answers 401 at the door rather
 than serving a page that loads and then fails every call it makes.
 """
 
+import dataclasses
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -119,7 +122,6 @@ class TestEverySeverIsCovered:
     """
 
     def test_the_refusal_runs_at_the_process_root(self) -> None:
-        from pathlib import Path
 
         source = Path("wactorz/app.py").read_text(encoding="utf-8")
 
@@ -128,7 +130,6 @@ class TestEverySeverIsCovered:
     def test_the_monitor_keeps_its_own_check(self) -> None:
         # `wactorz-monitor` is its own console script and never goes through
         # `app.py`, so both entry points need it.
-        from pathlib import Path
 
         source = Path("wactorz/web/app.py").read_text(encoding="utf-8")
 
@@ -142,7 +143,6 @@ def _with_key(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
     and the middleware imports it inside the function, so replacing the module
     attribute is what it sees.
     """
-    import dataclasses
 
     from wactorz import config
 
@@ -203,9 +203,9 @@ class TestWarningAboutAShortKey:
         assert "openssl rand" in warning
 
     def test_it_names_the_gap_the_throttle_does_not_close(self) -> None:
-        # The form is throttled; a request carrying the key as a header is not.
-        # That is the reason to replace the key rather than rely on the counter.
+        # The count is per address, so many addresses get as many tries. That is
+        # the reason to replace the key rather than rely on the counter.
         warning = auth.weak_key_warning("short")
 
         assert warning is not None
-        assert "header" in warning
+        assert "per address" in warning

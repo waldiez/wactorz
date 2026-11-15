@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent stopped from its card stays stopped, and is started again from there."""
 
 from harness import backend, browser, waiting

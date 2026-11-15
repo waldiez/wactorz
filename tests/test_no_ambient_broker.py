@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The fixture that keeps tests off a real broker.
 
 Worth its own tests because its failure mode is invisible where it matters

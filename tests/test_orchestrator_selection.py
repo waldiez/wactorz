@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Choosing the orchestrator: a script's, a deployment's, main's, or the model-free one.
 
 A deployment supplies its own orchestrator two ways, ``run(orchestrator=...)``

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What each node collaborator requires of the actor that owns it.
 
 Typing-only, in the spirit of `mixins/host.py`: nothing here runs, nothing is
@@ -20,12 +21,15 @@ if TYPE_CHECKING:
     import asyncio
 
     from ...core.actor import ActorState
+    from ...core.addresses import Address, Resolution
+    from ...core.manifests import AgentManifest
     from ..llm_agent import LLMProvider
     from ..prompts.assemble import PromptFragment
     from .artifact_service import ArtifactService
     from .migration import Migration
     from .nodes import NodeManager
     from .placement import Placement
+    from .spawn_registry import SpawnRegistry
 
 from ..mixins.host import ActorHost, LLMHost
 
@@ -43,16 +47,37 @@ class ListenerHost(Protocol):
     _mqtt_port: int
 
 
+class SpawnRegistryHost(Protocol):
+    """What reading main's spawn registry, and nothing else, needs."""
+
+    def _get_spawn_registry(self) -> SpawnRegistry: ...
+
+
 class VoiceHost(Protocol):
     """What deciding who may speak for an agent reads: main's own records of where agents are."""
 
     _registry: Any
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
+    def _get_spawn_registry(self) -> SpawnRegistry: ...
 
     @property
     def migration(self) -> Migration:
         """Where a move under way is taking an agent, before the registry says so."""
+        ...
+
+
+class AddressHost(VoiceHost, Protocol):
+    """What finding an agent by name or address reads: where main knows agents to be.
+
+    Its own process, the node table, and, while nodes have not yet reported
+    since main started, the spawn registry -- hence when main started.
+    """
+
+    metrics: Any
+
+    @property
+    def nodes(self) -> NodeManager:
+        """The node table, and who may speak for an agent."""
         ...
 
 
@@ -64,15 +89,33 @@ class ManifestHost(ListenerHost, VoiceHost, Protocol):
     listening — but removing an agent belongs to the lifecycle, not to a table
     of capabilities, so it hands the name over rather than growing the reach to
     act on it. Where agents are is read so a manifest is taken only from the
-    node main places its agent on.
+    node main places its agent on. Main's own id names its own manifest, which
+    is looked for where it was retained before a namespace was set.
     """
+
+    actor_id: str
 
     @property
     def _known_nodes(self) -> dict[str, dict[str, Any]]:
         """The heartbeat table: which node lists an agent main placed nowhere."""
         ...
 
-    async def agent_withdrew(self, actor_id: str, name: str = ...) -> bool: ...
+    async def agent_withdrew(self, actor_id: str, name: str = ...) -> bool:
+        """An agent took its manifest back; whether that stands."""
+        ...
+
+    def _queue_notification(self, notice: dict[str, Any]) -> None:
+        """Say something in chat: a topic of a node's agent that its broker account is refused."""
+        ...
+
+
+class LabelHost(ListenerHost, VoiceHost, Protocol):
+    """The label recorder needs a connection and where agents are, to take a book from the right node."""
+
+    @property
+    def _known_nodes(self) -> dict[str, dict[str, Any]]:
+        """The heartbeat table: which node lists an agent main placed nowhere."""
+        ...
 
 
 class SpawnHost(Protocol):
@@ -97,7 +140,7 @@ class SpawnHost(Protocol):
     placement: Placement
 
     @property
-    def _agent_manifests(self) -> dict[str, dict[str, Any]]:
+    def _agent_manifests(self) -> dict[str, AgentManifest]:
         """Read-only here: the actor owns this and hands it out."""
         ...
 
@@ -118,17 +161,29 @@ class SpawnHost(Protocol):
         """Whether a node builds a library agent from code sent with its spawn."""
         ...
 
+    def _node_takes_actor_ids(self, node_name: str) -> bool | None:
+        """Whether a node runs an agent under the id its spawn names; None before its manifest."""
+        ...
+
     async def _stop_for_replace(self, existing: Any, name: str) -> None: ...
 
-    def recall(self, key: str) -> Any: ...
+    def recall(self, key: str) -> Any:
+        """What the agent remembers under ``key``, or None."""
+        ...
 
-    def persist(self, key: str, value: Any) -> None: ...
+    def persist(self, key: str, value: Any) -> None:
+        """Remember ``value`` under ``key``, across restarts."""
+        ...
 
     def _match_catalog_recipe(
         self, name: str, capabilities: list[str] | None = ...
     ) -> str | None: ...
 
-    async def send(self, target_id: str, msg_type: Any, payload: dict[str, Any]) -> bool: ...
+    async def send(self, target_id: str, msg_type: Any, payload: dict[str, Any]) -> bool:
+        """Send ``target_id`` a message of ``msg_type`` carrying ``payload``; whether it was
+        delivered.
+        """
+        ...
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
@@ -141,6 +196,14 @@ class SpawnHost(Protocol):
     async def _spawn_local_from_config(
         self, config: dict[str, Any], *, register: bool = ..., from_registry: bool = ...
     ) -> Any: ...
+
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        """The registry the spawn service keeps, read through the actor like every reader."""
+        ...
+
+    def resolve_address(self, wanted: str, *, heard_within: float | None = ...) -> Resolution:
+        """Where main knows agents of a name to run."""
+        ...
 
 
 class DelegationHost(Protocol):
@@ -170,17 +233,35 @@ class DelegationHost(Protocol):
         ...
 
     @property
-    def _agent_manifests(self) -> dict[str, dict[str, Any]]:
+    def _agent_manifests(self) -> dict[str, AgentManifest]:
         """Read-only here: says whether a name is a catalogue recipe."""
         ...
 
-    async def send(self, target_id: str, msg_type: Any, payload: dict[str, Any]) -> bool: ...
+    async def send(self, target_id: str, msg_type: Any, payload: dict[str, Any]) -> bool:
+        """Send ``target_id`` a message of ``msg_type`` carrying ``payload``; whether it was
+        delivered.
+        """
+        ...
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
     ) -> None: ...
 
     async def _resolve_or_spawn(self, agent_name: str) -> tuple[Any, bool]: ...
+
+    def resolve_address(self, wanted: str, *, heard_within: float | None = ...) -> Resolution:
+        """Which agents ``wanted``, a bare name or ``name@node``, finds, counting only those
+        heard from within ``heard_within`` seconds when it is given.
+        """
+        ...
+
+    def task_refusal(self, address: Address) -> str | None:
+        """Why a task for the agent at ``address`` cannot be sent, or None if it can."""
+        ...
+
+    def task_topic_for(self, address: Address) -> str:
+        """The topic a task for the agent at ``address``, on a node, goes on."""
+        ...
 
     def _current_interface_source(self) -> str: ...
 
@@ -197,9 +278,11 @@ class NodeHost(ManifestHost, Protocol):
 
     _registry: Any
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
+    def _get_spawn_registry(self) -> SpawnRegistry: ...
 
-    def _remove_from_spawn_registry(self, name: str) -> None: ...
+    def _remove_from_spawn_registry(
+        self, name: str, node: str | None = ..., *, actor_id: str | None = ...
+    ) -> None: ...
 
     def _record_agent_deletion(self, name: str, reason: str = ...) -> None: ...
 
@@ -217,9 +300,13 @@ class NodeHost(ManifestHost, Protocol):
         self, node: str, new_config: dict[str, Any] | None = ..., remove_name: str | None = ...
     ) -> None: ...
 
-    async def settle_withdrawals(self, node: str, running: set[str]) -> None: ...
+    async def settle_withdrawals(self, node: str, running: set[str]) -> None:
+        """Decide the withdrawals held for ``node``, now that it reports ``running``."""
+        ...
 
-    def node_reported(self, node: str) -> None: ...
+    def node_reported(self, node: str) -> None:
+        """A heartbeat from ``node`` arrived."""
+        ...
 
 
 class LifecycleHost(Protocol):
@@ -234,22 +321,26 @@ class LifecycleHost(Protocol):
     _registry: Any
 
     @property
-    def _agent_manifests(self) -> dict[str, dict[str, Any]]:
+    def _agent_manifests(self) -> dict[str, AgentManifest]:
         """Read-write here: an entry is dropped when its agent is deleted."""
         ...
 
     @property
-    def _topic_registry(self) -> dict[str, list[dict[str, Any]]]:
+    def _topic_registry(self) -> dict[str, list[AgentManifest]]:
         """Read-write here: the deleted agent stops claiming its topics."""
         ...
 
     _conversation_history: list[dict[str, Any]]
 
-    def persist(self, key: str, value: Any) -> None: ...
+    def persist(self, key: str, value: Any) -> None:
+        """Remember ``value`` under ``key``, across restarts."""
+        ...
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
+    def _get_spawn_registry(self) -> SpawnRegistry: ...
 
-    def _remove_from_spawn_registry(self, name: str) -> None: ...
+    def _remove_from_spawn_registry(
+        self, name: str, node: str | None = ..., *, actor_id: str | None = ...
+    ) -> None: ...
 
     def _node_running_agent(self, name: str) -> str: ...
 
@@ -264,6 +355,42 @@ class LifecycleHost(Protocol):
     ) -> None: ...
 
 
+class StopStartHost(Protocol):
+    """What stopping an agent on a node, and starting it again, needs from the actor.
+
+    The spawn registry, where a stop is remembered; the node's desired state and
+    its control topics, which carry it out; and the spawn a start is.
+    """
+
+    name: str
+
+    def _get_spawn_registry(self) -> SpawnRegistry: ...
+
+    def _keep_stopped(self, actor_id: str, stopped: bool) -> None:
+        """Remember the agent as stopped, or as one that should run again."""
+        ...
+
+    def _online_node_names(self) -> list[str]: ...
+
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
+    ) -> None: ...
+
+    async def _update_node_desired_state(
+        self, node: str, new_config: dict[str, Any] | None = ..., remove_name: str | None = ...
+    ) -> None: ...
+
+    async def _spawn_remote(
+        self,
+        config: dict[str, Any],
+        node: str,
+        save: bool,
+        *,
+        restoring: bool = ...,
+        kept: bool = ...,
+    ) -> bool: ...
+
+
 class CodeRefreshHost(ListenerHost, Protocol):
     """What filing a node's repaired program needs from the actor.
 
@@ -273,9 +400,33 @@ class CodeRefreshHost(ListenerHost, Protocol):
     to read it in four lines.
     """
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
+    def _get_spawn_registry(self) -> SpawnRegistry: ...
 
     def _save_to_spawn_registry(self, config: dict[str, Any]) -> None: ...
+
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
+    ) -> None: ...
+
+
+class SwapHost(ListenerHost, Protocol):
+    """What reloading the agents that follow a moved pointer needs from the actor.
+
+    It reads the registry to find them, writes the one entry it re-pins, finds
+    an agent running here to swap it, republishes a node's desired state and
+    sends that node its command; ``actor_id`` is for the feed.
+    """
+
+    actor_id: str
+    _registry: Any
+
+    def _get_spawn_registry(self) -> SpawnRegistry: ...
+
+    def _save_to_spawn_registry(self, config: dict[str, Any]) -> None: ...
+
+    async def _update_node_desired_state(
+        self, node: str, new_config: dict[str, Any] | None = ..., remove_name: str | None = ...
+    ) -> None: ...
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
@@ -293,7 +444,7 @@ class ArtifactHost(ListenerHost, Protocol):
     actor_id: str
     migration: Migration
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
+    def _get_spawn_registry(self) -> SpawnRegistry: ...
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
@@ -312,11 +463,17 @@ class NodeReaders(Protocol):
 
     known: dict[str, dict[str, Any]]
 
-    def running_agent(self, name: str) -> str: ...
+    def running_agent(self, name: str) -> str:
+        """The online node running ``name``, or an empty string when none claims it."""
+        ...
 
-    def targets_of(self, node_name: str) -> list[str]: ...
+    def targets_of(self, node_name: str) -> list[str]:
+        """The library agents ``node_name`` says it can build, by import path."""
+        ...
 
-    def takes_bundles(self, node_name: str) -> bool: ...
+    def takes_bundles(self, node_name: str) -> bool:
+        """Whether ``node_name`` builds a library agent from code sent with its spawn."""
+        ...
 
 
 class MigrationHost(NodeHost, Protocol):
@@ -339,7 +496,7 @@ class MigrationHost(NodeHost, Protocol):
     spawns: Any
 
     @property
-    def _agent_manifests(self) -> dict[str, dict[str, Any]]:
+    def _agent_manifests(self) -> dict[str, AgentManifest]:
         """Read-only here: the actor owns this and hands it out."""
         ...
 
@@ -353,9 +510,13 @@ class MigrationHost(NodeHost, Protocol):
 
     # The migrations in flight are written down, so a restart does not drop the
     # token and leave both the ack and the rollback with nothing to match.
-    def recall(self, key: str) -> Any: ...
+    def recall(self, key: str) -> Any:
+        """What the agent remembers under ``key``, or None."""
+        ...
 
-    def persist(self, key: str, value: Any) -> None: ...
+    def persist(self, key: str, value: Any) -> None:
+        """Remember ``value`` under ``key``, across restarts."""
+        ...
 
     def _save_to_spawn_registry(self, config: dict[str, Any]) -> None: ...
 
@@ -383,7 +544,7 @@ class RoutingHost(LLMHost, Protocol):
     which integrations' intents to offer and accept.
     """
 
-    _result_futures: dict[str, asyncio.Future]
+    _result_futures: dict[str, asyncio.Future[Any]]
     _prompt_fragments: tuple[PromptFragment, ...]
 
 
@@ -409,18 +570,22 @@ class PlanningHost(ActorHost, Protocol):
     """
 
     llm: LLMProvider | None
-    _result_futures: dict[str, asyncio.Future]
-    _conversation_history: list[dict]
+    _result_futures: dict[str, asyncio.Future[Any]]
+    _conversation_history: list[dict[str, Any]]
     #: Handed to every planner main spawns, so it plans for the same integrations.
     _prompt_fragments: tuple[PromptFragment, ...]
 
-    def get_user_facts(self) -> dict: ...
+    def get_user_facts(self) -> dict[str, Any]:
+        """The facts main keeps about the user, by key."""
+        ...
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = False, qos: int = 0
     ) -> None: ...
 
-    def _remove_from_spawn_registry(self, name: str) -> None: ...
+    def _remove_from_spawn_registry(
+        self, name: str, node: str | None = ..., *, actor_id: str | None = ...
+    ) -> None: ...
 
     async def _clear_agent_manifest(self, name: str, actor_id: str | None = None) -> None: ...
 

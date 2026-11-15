@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which interface each server listens on is a setting, not a constant.
 
 `WACTORZ_BIND_HOST` decides where the dashboard, the REST API and the WhatsApp

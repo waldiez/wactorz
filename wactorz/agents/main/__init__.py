@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The orchestrator and the machinery only it uses.
 
 An agent is a file until it grows a second concern; then it becomes a package

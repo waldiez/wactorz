@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The provider that answers without a model.
 
 Its whole value is that a system built on it behaves the same way twice, so the
@@ -39,8 +40,17 @@ def user(text: str) -> list[dict[str, Any]]:
 
 
 async def collect(provider: FakeProvider, messages: list[dict[str, Any]], system: str = "") -> str:
-    """Everything `stream` yields, joined — what a caller ends up displaying."""
-    return "".join([chunk async for chunk in provider.stream(messages, system=system)])
+    """Everything `stream` yields, joined — what a caller ends up displaying.
+
+    `FakeProvider._stream` only ever yields text, never the trailing usage
+    dict a real provider's stream ends with, so the chunks are joined as
+    `str` outright rather than handled generically like a real caller would.
+    """
+    chunks: list[str] = []
+    async for chunk in provider.stream(messages, system=system):
+        assert isinstance(chunk, str)
+        chunks.append(chunk)
+    return "".join(chunks)
 
 
 class TestTheContractBoundCallSites:
@@ -369,4 +379,8 @@ class TestTheFactory:
 
 
 async def _chunks(provider: FakeProvider, messages: list[dict[str, Any]]) -> list[str]:
-    return [chunk async for chunk in provider.stream(messages)]
+    chunks: list[str] = []
+    async for chunk in provider.stream(messages):
+        assert isinstance(chunk, str)
+        chunks.append(chunk)
+    return chunks

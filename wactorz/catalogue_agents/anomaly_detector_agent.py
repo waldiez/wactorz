@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """CATALOG AGENT — anomaly-detector
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Learns "normal" patterns from historical time-series data (SQLite), then
@@ -83,10 +84,11 @@ import time
 from datetime import datetime
 from typing import Any
 
+from wactorz.agents.dynamic.api import AgentAPI
 from wactorz.core.mqtt import mqtt_client
-from wactorz.core.persistence import get_db
+from wactorz.core.persistence import WactorzDB, get_db
 
-logger = logging.getLogger("anomaly-detector")
+logger: logging.Logger = logging.getLogger("anomaly-detector")
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
 
@@ -121,23 +123,24 @@ class EntityBaseline:
     def __init__(self, entity_id: str, field: str) -> None:
         self.entity_id = entity_id
         self.field = field
-        self.hourly_mean = [0.0] * 24  # mean value per hour-of-day
-        self.hourly_std = [1.0] * 24  # std per hour-of-day
-        self.hourly_count = [0] * 24  # samples per hour slot
-        self.global_mean = 0.0
-        self.global_std = 1.0
-        self.p1 = 0.0  # 1st percentile
-        self.p99 = 0.0  # 99th percentile
-        self.max_rate = 0.0  # max |delta| between consecutive readings
-        self.mean_interval = 0.0  # mean seconds between readings
+        self.hourly_mean: list[float] = [0.0] * 24  # mean value per hour-of-day
+        self.hourly_std: list[float] = [1.0] * 24  # std per hour-of-day
+        self.hourly_count: list[int] = [0] * 24  # samples per hour slot
+        self.global_mean: float = 0.0
+        self.global_std: float = 1.0
+        self.p1: float = 0.0  # 1st percentile
+        self.p99: float = 0.0  # 99th percentile
+        self.max_rate: float = 0.0  # max |delta| between consecutive readings
+        self.mean_interval: float = 0.0  # mean seconds between readings
         self.total_samples = 0
-        self.last_value = None
-        self.last_ts = 0.0
+        self.last_value: float | None = None
+        self.last_ts: float = 0.0
         self.is_binary = False  # on/off sensor
-        self.transition_freq = 0.0  # state changes per hour (binary)
+        self.transition_freq: float = 0.0  # state changes per hour (binary)
         self.ready = False  # enough data to detect?
 
     def to_dict(self) -> dict[str, Any]:
+        """The baseline as JSON, for the agent to remember across restarts."""
         return {
             "entity_id": self.entity_id,
             "field": self.field,
@@ -158,6 +161,7 @@ class EntityBaseline:
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "EntityBaseline":
+        """The baseline :meth:`to_dict` wrote; a field missing from ``d`` keeps its default."""
         b = EntityBaseline(d["entity_id"], d["field"])
         for k in (
             "hourly_mean",
@@ -402,7 +406,12 @@ def _explain_anomaly(
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def setup(agent) -> None:
+async def setup(agent: AgentAPI) -> None:
+    """Read the settings and the baselines the agent remembers, declare its topics, and start
+    scoring readings as they arrive.
+
+    Detection starts inactive: the agent learns first.
+    """
     # Load config
     baseline_hours = int(agent.recall("baseline_hours") or DEFAULT_BASELINE_HOURS)
     learning_period_h = int(agent.recall("learning_period_hours") or DEFAULT_LEARNING_PERIOD_H)
@@ -459,7 +468,11 @@ async def setup(agent) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def process(agent) -> None:
+async def process(agent: AgentAPI) -> None:
+    """Turn detection on once the learning period is over or a baseline is ready, rebuild the
+    baselines when they are due, and report every entity silent for longer than its normal
+    interval.
+    """
     now = time.time()
     baselines = agent.state["baselines"]
 
@@ -512,7 +525,7 @@ async def process(agent) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def _rebuild_baselines(agent) -> None:
+async def _rebuild_baselines(agent: AgentAPI) -> None:
     """Query historical data and rebuild all baselines."""
     await agent.log("Rebuilding baselines from historical data...")
 
@@ -626,30 +639,31 @@ async def _rebuild_baselines(agent) -> None:
     await agent.log(f"Baselines rebuilt: {built} ready / {len(baselines)} total entities")
 
 
-async def _discover_entities(agent) -> list[str]:
-    """Auto-discover entities from the time-series store."""
-    entities = set()
+def _entity_ids(db: WactorzDB) -> list[str]:
+    """The entity ids the time-series tables hold, sorted. Run on a thread.
 
+    Through `transaction()`, which holds the store's lock: the connection is shared
+    with every other writer in the process. Not a newer helper of the store's: this
+    program runs on nodes too, which may be on an earlier release of the series.
+    """
+    found: set[str] = set()
+    with db.transaction() as conn:
+        for table in ("sensor_readings", "ha_state_changes"):
+            rows = conn.execute(
+                f"SELECT DISTINCT entity_id FROM {table} WHERE entity_id != '' LIMIT 200"  # noqa: S608 - table from the tuple above
+            ).fetchall()
+            found.update(str(r[0]) for r in rows)
+    return sorted(found)
+
+
+async def _discover_entities(agent: AgentAPI) -> list[str]:
+    """Auto-discover entities from the time-series store, read on a thread."""
     try:
-        # Check sensor_readings for distinct entity_ids
         db = get_db()
-        if db:
-            rows = db.conn.execute(
-                "SELECT DISTINCT entity_id FROM sensor_readings WHERE entity_id != '' LIMIT 200"
-            ).fetchall()
-            for r in rows:
-                entities.add(r[0])
-
-            # Check ha_state_changes for distinct entity_ids
-            rows = db.conn.execute(
-                "SELECT DISTINCT entity_id FROM ha_state_changes WHERE entity_id != '' LIMIT 200"
-            ).fetchall()
-            for r in rows:
-                entities.add(r[0])
+        return await asyncio.to_thread(_entity_ids, db) if db else []
     except Exception:
         logger.debug("could not list entities from the time-series tables", exc_info=True)
-
-    return sorted(entities)
+        return []
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -657,7 +671,7 @@ async def _discover_entities(agent) -> list[str]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def _mqtt_detector(agent) -> None:
+async def _mqtt_detector(agent: AgentAPI) -> None:
     """Subscribe to MQTT and score each reading against baselines."""
     while True:
         try:
@@ -684,7 +698,7 @@ async def _mqtt_detector(agent) -> None:
             await asyncio.sleep(5)
 
 
-async def _process_live_reading(agent, topic: str, payload: dict[str, Any]) -> None:
+async def _process_live_reading(agent: AgentAPI, topic: str, payload: dict[str, Any]) -> None:
     """Process a single live MQTT reading for anomaly detection."""
     now = time.time()
     baselines = agent.state["baselines"]
@@ -771,7 +785,7 @@ async def _process_live_reading(agent, topic: str, payload: dict[str, Any]) -> N
 
 
 async def _report_anomaly(
-    agent,
+    agent: AgentAPI,
     entity_id: str,
     field: str,
     value: float,
@@ -838,7 +852,12 @@ async def _report_anomaly(
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def handle_task(agent, payload: dict[str, Any]) -> dict[str, Any]:
+async def handle_task(agent: AgentAPI, payload: dict[str, Any]) -> dict[str, Any]:
+    """Answer an ``action``: ``status``, ``report``, ``train`` (or ``rebuild``), ``reset``,
+    ``configure``, ``baselines`` or ``entities``.
+
+    The payload may come as JSON in ``text``, as an @mention sends it, or as the bare action.
+    """
     # Parse JSON from "text" field when routed via @mention
     if isinstance(payload, dict) and not payload.get("action") and payload.get("text"):
         try:

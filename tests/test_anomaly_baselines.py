@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The anomaly detector reads a baseline stored before its newer fields existed.
 
 Fields were added to `EntityBaseline` over time (`is_binary`, `transition_freq`,

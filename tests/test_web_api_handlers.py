@@ -14,12 +14,15 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from wactorz.agents.catalog_agent import CatalogAgent
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.identity import derive_actor_id
 from wactorz.core.outbound import numbered
 from wactorz.core.persistence import PickleStore, WactorzDB
@@ -570,6 +573,45 @@ class TestReads:
 
         assert [a["name"] for a in listed] == ["weather"]
         assert listed[0]["messagesProcessed"] == 5
+
+    async def test_actor_details_supply_an_introduction_without_chat_history(
+        self,
+        client: TestClient[web.Request, web.Application],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        catalog = CatalogAgent(persistence_dir=str(tmp_path))
+        weather = {
+            "name": "weather-agent",
+            "actor_id": derive_actor_id("weather-agent"),
+            "type": "native",
+            "trusted": True,
+        }
+        helper = {
+            "name": "title-helper",
+            "actor_id": derive_actor_id("title-helper"),
+            "node": "edge",
+            "description": "I suggest article titles.",
+            "examples": ["Suggest a title for a garden article."],
+        }
+        saved = SpawnRegistry.from_ids({agent["actor_id"]: agent for agent in (weather, helper)})
+        main = SimpleNamespace(_get_spawn_registry=lambda: saved)
+        monkeypatch.setattr(api_actors, "find_main_actor", lambda _: main)
+        monkeypatch.setattr(
+            runtime, "registry", SimpleNamespace(get=lambda _: None, find_by_name=lambda _: catalog)
+        )
+        for agent in (weather, helper):
+            runtime.state["agents"][agent["actor_id"]] = {"name": agent["name"], "state": "running"}
+
+        weather_details = await (await client.get(f"/api/actors/{weather['actor_id']}")).json()
+        helper_details = await (await client.get(f"/api/actors/{helper['actor_id']}")).json()
+
+        assert "Open-Meteo" in weather_details["introduction"]
+        assert "What's the weather in Athens?" in weather_details["introduction"]
+        assert (
+            helper_details["introduction"]
+            == "I suggest article titles.\n\nTry:\n- Suggest a title for a garden article."
+        )
 
     async def test_history_from_the_actor_the_database_or_nowhere(
         self,

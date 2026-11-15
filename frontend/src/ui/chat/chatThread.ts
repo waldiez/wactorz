@@ -233,6 +233,19 @@ export function buildChatChoicesState(name: string, addresses: string[]): HTMLEl
     return empty;
 }
 
+/** The agent's introduction, displayed above messages and independent of chat history. */
+export function buildChatIntroduction(name: string, text?: string): HTMLElement {
+    const intro = el("section", "af-chat-introduction");
+    const heading = el("h2", "", `Meet @${name}`);
+    const description =
+        text ||
+        (name === MAIN_AGENT
+            ? "I coordinate agents and help you find the right one for a task."
+            : "Send me a message to get started.");
+    intro.append(heading, el("p", "", description));
+    return intro;
+}
+
 /** Placeholder shown when a thread has no messages yet. */
 export function buildChatEmptyState(chatTarget: string): HTMLElement {
     const empty = el("div", "af-chat-empty");

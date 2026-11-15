@@ -105,7 +105,7 @@ class SpawnConfig(TypedDict, total=False):
 
     Common to every kind:
         name, type, node, actor_id, replace, alongside, trusted, artifacts,
-        install, minimum_python, require_install_success, description,
+        install, minimum_python, require_install_success, description, examples,
         input_schema, output_schema, _initial_state, host, capabilities,
         max_restarts, restart_delay
     dynamic (and the `llm` bridge code synthesized for one spawned remotely):
@@ -140,6 +140,7 @@ class SpawnConfig(TypedDict, total=False):
     minimum_python: list[int]
     require_install_success: bool
     description: str
+    examples: list[str]
     input_schema: dict[str, str]
     output_schema: dict[str, str]
     poll_interval: float

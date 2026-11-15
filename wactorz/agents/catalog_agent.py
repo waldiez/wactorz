@@ -216,6 +216,10 @@ def _build_native_catalog() -> dict[str, Any]:
             "type": "native",
             "factory": WeatherAgent,
             "description": "Natural-language weather: current conditions, forecast, and history via Open-Meteo. No API key required.",
+            "examples": [
+                "What's the weather in Athens?",
+                "What's the forecast for Athens for the next three days?",
+            ],
             "capabilities": ["weather.current", "weather.forecast", "weather.history"],
             "input_schema": {
                 "action": "current | forecast | history | set-default",
@@ -573,6 +577,7 @@ def _build_catalog() -> dict[str, Any]:
                 "speech, opt-in voice conversation, gestures, and optional "
                 "Home Assistant actions."
             ),
+            "examples": ["health", "help"],
             "docs": (
                 "Setup:\n"
                 "0. Run Wactorz on Windows or macOS for everything; on Linux (Python "

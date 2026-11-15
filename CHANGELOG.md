@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Every agent chat opens with an introduction.** The introduction sits above the conversation, with a description and examples when available. It is visible before the first message and after a restart.
+
 ### Changed
 
 - **The Docker Hub guide names the image's version tags as they are published**: `waldiez/wactorz:v0.8.0` and `:v0.8.0-ultra`, with the `v`. It wrote them as `:<version>`, which reads as `:0.8.0`, a tag that does not exist.

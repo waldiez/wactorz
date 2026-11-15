@@ -1160,7 +1160,9 @@ describe("DashboardChat — history & misc state", () => {
         await dc.loadHistory("main");
         expect(thread(host).textContent).toContain("from history");
         await dc.loadHistory("main"); // already loaded → no second fetch
-        const historyRequests = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/api/chats?"));
+        const historyRequests = vi
+            .mocked(fetch)
+            .mock.calls.filter(([url]) => String(url).includes("/api/chats?"));
         expect(historyRequests).toHaveLength(1);
     });
 
@@ -1173,7 +1175,9 @@ describe("DashboardChat — history & misc state", () => {
         await dc.loadHistory("main");
         dc.clearAll();
         await dc.loadHistory("main"); // history-loaded set cleared → fetches again
-        const historyRequests = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/api/chats?"));
+        const historyRequests = vi
+            .mocked(fetch)
+            .mock.calls.filter(([url]) => String(url).includes("/api/chats?"));
         expect(historyRequests).toHaveLength(2);
     });
 

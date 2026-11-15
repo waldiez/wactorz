@@ -34,7 +34,6 @@ agent, the beta banner from main's manifests -- stay with main; the seam is for
 the turn itself.
 """
 
-import asyncio
 from collections.abc import AsyncIterator, Iterable
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
@@ -392,7 +391,7 @@ class DirectOrchestrator:
                 f"No agent called @{name} is running.\n"
                 f"Running: {_names(self._registry.all_actors())}"
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return f"[error] @{name} did not reply within {self._timeout:g}s."
         except RuntimeError as exc:
             # An error reply, or a mailbox that would not take the task: the

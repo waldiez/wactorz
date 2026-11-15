@@ -16,7 +16,7 @@ import json
 import logging
 import logging.handlers
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from wactorz import config
@@ -44,9 +44,7 @@ class JsonFormatter(logging.Formatter):
         stack when it has them.
         """
         entry = {
-            "ts": datetime.fromtimestamp(record.created, timezone.utc).isoformat(
-                timespec="milliseconds"
-            ),
+            "ts": datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds"),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),

@@ -12,7 +12,7 @@ reset stays a reset.
 import re
 from collections.abc import Iterator
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -52,7 +52,7 @@ class TestPeriods:
         class _Clock:
             @staticmethod
             def now() -> datetime:
-                return datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+                return datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
         monkeypatch.setattr(cost, "datetime", _Clock)
 

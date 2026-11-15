@@ -1025,8 +1025,8 @@ class CatalogAgent(Actor):
         if tuple(sys.version_info[:2]) < tuple(minimum):
             return {
                 "ok": False,
-                "message": f"'{resolved}' requires Python {'.'.join(map(str, minimum))}+; "
-                "core Wactorz remains supported on Python 3.10. No packages were installed.",
+                "message": f"'{resolved}' requires Python {'.'.join(map(str, minimum))}+. "
+                "No packages were installed.",
             }
 
         if not self._registry:
@@ -1180,7 +1180,7 @@ class CatalogAgent(Actor):
                             exc,
                             resolved,
                         )
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         logger.warning(
                             "[%s] Install timeout for '%s' — proceeding anyway", self.name, resolved
                         )

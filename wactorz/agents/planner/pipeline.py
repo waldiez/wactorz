@@ -854,7 +854,7 @@ class PipelineMixin(_Host):
             )
             said = result.get("result", "") if isinstance(result, dict) else result
             await self._log(f"Bootstrap — HA agent responded: {str(said)[:120]}")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await self._log("Bootstrap — HA agent timed out")
         except Exception as exc:
             await self._log(f"Bootstrap — error: {exc}")

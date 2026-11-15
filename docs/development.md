@@ -1,6 +1,6 @@
 # Installation
 
-Wactorz requires Python 3.10+ and a running MQTT broker (Mosquitto). The `wactorz` command starts the actor system and the web dashboard — start Mosquitto first with `docker compose up -d`.
+Wactorz requires Python 3.11+ and a running MQTT broker (Mosquitto). The `wactorz` command starts the actor system and the web dashboard — start Mosquitto first with `docker compose up -d`.
 
 ---
 

@@ -575,7 +575,7 @@ class PlanningMixin(_Host):
             if spawned_names:
                 answer += f"\n\n[System: Planner created new agents: {', '.join(spawned_names)} — saved for future use]"
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("[%s] Planner timed out for: %s", self.name, task[:60])
             return "The pipeline is taking longer than expected to set up. Check `/rules` in a moment to see if agents were spawned, or try again."
         except Exception:

@@ -142,7 +142,7 @@ class ContextMixin(_Host):
             result = await ask_through(
                 self, "home-assistant-agent", {"text": "list entities"}, timeout=8.0
             )
-        except (LookupError, RuntimeError, asyncio.TimeoutError):
+        except (TimeoutError, LookupError, RuntimeError):
             return []
         if not isinstance(result, dict):
             return []
@@ -320,7 +320,7 @@ async def collect_one_payload_per_topic(
         max_wait = min(15.0, 5.0 + 2.0 * len(topics))
     try:
         await asyncio.wait_for(_collect(), timeout=max_wait)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pass  # whatever arrived before the deadline is enough
 
     return received

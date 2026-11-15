@@ -594,7 +594,7 @@ class RuleAgent(Actor):
                 timeout=action.timeout or None,
                 context=str(_render(action.context, trigger)),
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("[%s] nobody answered %r; the question stays open", self.name, text[:60])
             return
         topic = action.topic or ANSWERS_TOPIC.format(rule=self.name)

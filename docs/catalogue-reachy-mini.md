@@ -44,8 +44,8 @@ uv run --no-sync wactorz
 ```
 
 SDK 1.12.0 publishes secure Starlette requirements for both pip and uv. No uv
-metadata override is used. Reachy requires Python 3.11+; core Wactorz still supports
-3.10. Client and HTTP middleware checks do not validate the full daemon dashboard
+metadata override is used. Reachy requires Python 3.11+, as Wactorz does. Client
+and HTTP middleware checks do not validate the full daemon dashboard
 or physical robot. Old saved Reachy recipes with changed dependency pins are
 refused at restore: respawn through `@catalog spawn reachy-mini` to use the normal
 package approval flow, then restart if requested. Saved runtime state is retained.

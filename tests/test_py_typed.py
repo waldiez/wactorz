@@ -9,10 +9,9 @@ drop it from one.
 
 import fnmatch
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import Any
-
-import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 MARKER = REPO / "wactorz" / "py.typed"
@@ -20,8 +19,6 @@ MARKER = REPO / "wactorz" / "py.typed"
 
 def _wheel() -> dict[str, Any]:
     """The wheel's build settings in pyproject.toml."""
-    # tomllib is in the standard library from Python 3.11.
-    tomllib = pytest.importorskip("tomllib")
     project = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
     return project["tool"]["hatch"]["build"]["targets"]["wheel"]
 

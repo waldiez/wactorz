@@ -149,7 +149,7 @@ async def _until(condition: Callable[[], bool]) -> None:
 
 
 async def _finish(task: "asyncio.Task[Any]") -> Any:
-    # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.10/3.11.
+    # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.11.
     done, _ = await asyncio.wait({task}, timeout=5)
     assert task in done, "the call did not finish"
     return task.result()

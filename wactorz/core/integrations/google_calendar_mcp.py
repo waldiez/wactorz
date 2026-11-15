@@ -49,7 +49,7 @@ def calendar_mcp_url() -> str:
 
 def _parse_iso(value: str) -> datetime | None:
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.fromisoformat(value)
     except Exception:
         return None
 

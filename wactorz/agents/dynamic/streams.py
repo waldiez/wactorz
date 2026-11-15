@@ -252,7 +252,7 @@ class StreamsMixin(_Host):
 
         try:
             await asyncio.wait_for(_fetch(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.debug("[%s] mqtt_get(%s) timed out after %ss", self.name, topic, timeout)
         return result[0] if result else None
 

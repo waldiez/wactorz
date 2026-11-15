@@ -12,7 +12,7 @@ the missing part completes it, so "add a meeting" followed by "tomorrow 3pm to
 4pm" creates one event rather than listing tomorrow's.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -101,7 +101,7 @@ class TestTimeZone:
         assert args["pageSize"] == 5 and args["timeZone"] == "UTC"
 
     def test_twelve_oclock_is_read_correctly(self) -> None:
-        day = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        day = datetime(2026, 1, 1, tzinfo=UTC)
 
         assert _time_on_day(day, 12, 0, "am").hour == 0
         assert _time_on_day(day, 12, 30, "pm").hour == 12
@@ -221,7 +221,7 @@ class TestServing:
 
         ((tool, args),) = client.calls
         assert (tool, args["summary"]) == ("create_event", "Gym")
-        day = (datetime.now(timezone.utc) + timedelta(days=day_offset)).date().isoformat()
+        day = (datetime.now(UTC) + timedelta(days=day_offset)).date().isoformat()
         assert args["startTime"].startswith(f"{day}T18:00:00")
         assert args["endTime"].startswith(f"{day}T19:00:00")
         assert done == {"result": "ok"}

@@ -43,9 +43,8 @@ class TestTheFrame:
         assert frame["llm_timeouts"] == 0
 
     async def test_a_request_main_never_answered_is_a_timeout(self, tmp_path: Path) -> None:
-        # Through the real request path: it waits with `asyncio.wait_for`, whose
-        # timeout is asyncio's own TimeoutError on Python 3.10 and the builtin
-        # from 3.11, and turns either into no reply.
+        # Through the real request path: it waits with `asyncio.wait_for`, and
+        # turns its timeout into no reply.
         agent = _agent(tmp_path)
 
         text, _usage = await BridgeProvider(agent)._complete(

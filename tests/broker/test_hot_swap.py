@@ -76,7 +76,7 @@ async def _serves_version(main: MainActor, name: str, version: int) -> None:
 
     try:
         await asyncio.wait_for(poll(), WAIT_S)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail(f"within {WAIT_S:g}s, {name} never served imu:{version}")
 
 

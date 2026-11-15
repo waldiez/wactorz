@@ -27,21 +27,18 @@ and record which platform and robot were actually tested.
 | Reachy Mini **Wireless** | Same Wi-Fi network as the computer | Nothing extra: the daemon runs on the robot. |
 | Reachy Mini **Lite** | USB cable | `reachy-mini-daemon -p <serial_port>` on the computer, left running. |
 
-Python: Wactorz supports 3.10 and newer; the robot SDK is pinned to `reachy-mini==1.12.0`
-and requires Python 3.11 or newer. Prefer 3.13 for the robot.
-Core Wactorz still supports Python 3.10, but Reachy installation/spawning is
-unsupported there: the extra intentionally installs no robot packages and the
-catalogue refuses to spawn it. Do not install an older insecure SDK as a workaround.
+Python: Wactorz and the robot SDK (pinned to `reachy-mini==1.12.0`) both need
+Python 3.11 or newer. Prefer 3.13 for the robot.
 SDK 1.12.0 declares the secure Starlette range for both pip and uv; no metadata
 override is used. Linux also needs the native libraries below.
 
 ## Option A: from a clone, with the lock file (recommended)
 
 This installs the exact locked versions. Both pip and uv use the SDK's published
-secure Starlette requirements. On Python 3.11 and newer the universal lock selects
-websockets 15 because the SDK requires versions below 16, including for default
-locked installs without Reachy. Python 3.10 retains websockets 16. Installing with
-pip resolves only the requested extras and does not apply the universal lock.
+secure Starlette requirements. The universal lock selects websockets 15 because
+the SDK requires versions below 16, including for default locked installs without
+Reachy. Installing with pip resolves only the requested extras and does not apply
+the universal lock.
 
 ```bash
 git clone https://github.com/waldiez/wactorz.git

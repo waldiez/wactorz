@@ -363,7 +363,7 @@ class TestCallService:
 
         agent._ha = ha  # pyright: ignore[reportAttributeAccessIssue]
         agent._ws_ready.set()
-        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.10/3.11.
+        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.11.
         done, _ = await asyncio.wait({call}, timeout=5)
 
         assert call in done

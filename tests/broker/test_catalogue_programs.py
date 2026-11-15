@@ -56,7 +56,7 @@ async def _publish_until_heard(
 
         try:
             await asyncio.wait_for(keep_publishing(), timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pytest.fail(f"within {timeout:g}s, never: {what}")
 
 

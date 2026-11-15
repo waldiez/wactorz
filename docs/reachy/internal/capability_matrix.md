@@ -6,9 +6,8 @@ verified with `scripts/reachy_sim_check.py` against the SDK's own daemon in
 `--mockup-sim --no-media` mode (real SDK and agent code, simulated motors, no audio/camera).
 
 This is historical SDK 1.8.4 evidence. The current integration uses SDK 1.12.0;
-its hardware/media behavior has not been revalidated here. See
-[the current safety audit](../../../REACHY_CORE_SAFETY_AUDIT.md) for current evidence
-and the NO-GO recommendation. Dashboard microphone input is deferred.
+its hardware/media behavior has not been revalidated here. Dashboard microphone
+input is deferred.
 
 ## Capabilities
 

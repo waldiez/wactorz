@@ -257,7 +257,7 @@ class TestAFailingSocket:
         monkeypatch.setattr(chat, "route_chat", _route)
 
         await ws.ws_handler(SimpleNamespace())  # pyright: ignore[reportArgumentType]
-        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.10/3.11.
+        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.11.
         waiter = asyncio.ensure_future(done.wait())
         finished, _ = await asyncio.wait({waiter}, timeout=5)
         assert waiter in finished

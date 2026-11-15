@@ -109,7 +109,7 @@ def follow(episode: Episode, scored: dict[str, Any]) -> str | None:
 
 def clock(ts: float) -> str:
     """``ts`` as the simulated building's time of day."""
-    return dt.datetime.fromtimestamp(ts, dt.timezone.utc).strftime("%H:%M")
+    return dt.datetime.fromtimestamp(ts, dt.UTC).strftime("%H:%M")
 
 
 def question(room: str, start: float, end: float, episode: Episode) -> str:

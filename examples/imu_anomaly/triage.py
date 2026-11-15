@@ -12,7 +12,6 @@ A burst of jolts is one event to a person, not twenty: a device is asked about
 at most once per `COOLDOWN_S`.
 """
 
-import asyncio
 import time
 
 import wactorz
@@ -54,5 +53,5 @@ async def triage(anomaly: dict, me: wactorz.FunctionAgent) -> None:
             timeout=WAIT_S,
             label={"source": source, "start": float(reading.get("ts", now)), "values": VALUES},
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return  # still open on the dashboard; a later answer still becomes a label

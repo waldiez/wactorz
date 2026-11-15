@@ -128,7 +128,7 @@ async def _finish(*tasks: "asyncio.Task[Any] | None") -> None:
     for task in pending:
         task.cancel()
     if pending:
-        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.10/3.11.
+        # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.11.
         await asyncio.wait(pending, timeout=5)
 
 

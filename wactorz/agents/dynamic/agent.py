@@ -514,7 +514,7 @@ class DynamicAgent(Actor):
             result = hook(self._api, question.to_dict(), option)
             if inspect.isawaitable(result):
                 await _bounded_call(result, self._HANDLE_TASK_TIMEOUT)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("[%s] on_answer() timed out", self.name)
         except _ProgramHalted as halted:
             if isinstance(halted.original, KeyboardInterrupt):
@@ -541,7 +541,7 @@ class DynamicAgent(Actor):
             result = hook(self._api, key, model)
             if inspect.isawaitable(result):
                 await _bounded_call(result, self._HANDLE_TASK_TIMEOUT)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("[%s] on_model() timed out", self.name)
         except _ProgramHalted as halted:
             if isinstance(halted.original, KeyboardInterrupt):
@@ -556,7 +556,7 @@ class DynamicAgent(Actor):
         if cleanup:
             try:
                 await _bounded_call(cleanup(self._api), 10.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("[%s] cleanup() timed out after 10s", self.name)
             except _ProgramHalted as halted:
                 if isinstance(halted.original, KeyboardInterrupt):
@@ -1150,7 +1150,7 @@ class DynamicAgent(Actor):
             try:
                 await self._one_process_cycle(process)
                 self._reset_error_count()
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self.metrics.errors += 1
                 logger.exception(
                     "[%s] process() timed out after %ss — likely a blocking call without run_in_executor",
@@ -1268,7 +1268,7 @@ class DynamicAgent(Actor):
             )
         except asyncio.CancelledError:
             raise
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._task_ended(agent_metrics.TIMED_OUT, started)
             raise
         except BaseException:
@@ -1300,7 +1300,7 @@ class DynamicAgent(Actor):
             await _bounded_call(process(self._api), self._PROCESS_TIMEOUT)
         except asyncio.CancelledError:
             raise
-        except asyncio.TimeoutError:
+        except TimeoutError:
             agent_metrics.PROCESS_TIMEOUTS.labels(agent=self.name).inc()
             raise
         except BaseException:
@@ -1334,7 +1334,7 @@ class DynamicAgent(Actor):
                 result = await self._run_handle_task(msg.payload)
                 if msg.sender_id and result is not None:
                     await self.send(msg.sender_id, MessageType.RESULT, _with_corr(result))
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.exception(
                     "[%s] handle_task() timed out after %ss", self.name, self._HANDLE_TASK_TIMEOUT
                 )

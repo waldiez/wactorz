@@ -76,7 +76,7 @@ def test_values_inside_lists_and_dicts_come_back_too() -> None:
     state = {
         "seen": [
             dt.date(2026, 1, 1),
-            {"at": dt.datetime(2026, 1, 1, 12, tzinfo=dt.timezone.utc), "ids": {3, 1}},
+            {"at": dt.datetime(2026, 1, 1, 12, tzinfo=dt.UTC), "ids": {3, 1}},
         ],
         "per_hour": {"weekday": {9: 4, 17: 6}},
     }

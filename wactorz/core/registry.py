@@ -238,7 +238,7 @@ class ActorRegistry:
                 raise AskError.mailbox_full(target)
             try:
                 reply = await asyncio.wait_for(future, timeout=timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 raise NoAnswerError.from_agent(target, timeout) from None
         return reply_value(reply, task_id=task_id, target=target)
 

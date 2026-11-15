@@ -6,7 +6,7 @@ may itself be cancelled while that wait is in progress — the Supervisor's watc
 loop is, every time `Supervisor.stop()` runs while a restart is under way. That
 cancellation belongs to the caller and has to survive.
 
-On Python 3.10 it did not. `asyncio.wait_for` returns the result from inside its
+On Python 3.11 it need not. `asyncio.wait_for` returns the result from inside its
 own `CancelledError` handler when the future it guards has completed:
 
     except exceptions.CancelledError:

@@ -205,7 +205,7 @@ class TestWhenNobodyAnswers:
         async def _wait(question_id: str, *, timeout: float | None = None) -> str:
             waits.append(timeout)
             if len(waits) == 1:
-                raise asyncio.TimeoutError
+                raise TimeoutError
             return await real_wait(question_id, timeout=None)
 
         monkeypatch.setattr(wired.actor, "wait_for_answer", _wait)

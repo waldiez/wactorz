@@ -31,7 +31,7 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 | ---- | ------- |
 | Install dev deps | `make install-dev` (uv from `uv.lock` if uv is on PATH, else pip; `USE_UV=0` forces pip) · after changing deps: `make lock` · `make audit` |
 | Run backend | `make run` · full dev stack: `make dev-full` |
-| Tests | `make test` (Python + frontend) · split: `make test-py` / `make test-frontend` · coverage: `make coverage` (or `-py` / `-frontend`) · every supported Python, opt-in: `make test-py-versions` (`PYTHONS="3.10 3.11"` to narrow) · main and a node over a real mosquitto: `make test-broker` (needs Docker) · the same two kept busy for a while, failing on anything that only grows: `make soak` (`DURATION=` seconds, default 300) · the whole product through a browser, with a real broker and a node deployed over SSH: `make e2e` (needs Docker; `make e2e-setup` once; see `e2e/README.md`) |
+| Tests | `make test` (Python + frontend) · split: `make test-py` / `make test-frontend` · coverage: `make coverage` (or `-py` / `-frontend`) · every supported Python, opt-in: `make test-py-versions` (`PYTHONS="3.11 3.14"` to narrow) · main and a node over a real mosquitto: `make test-broker` (needs Docker) · the same two kept busy for a while, failing on anything that only grows: `make soak` (`DURATION=` seconds, default 300) · the whole product through a browser, with a real broker and a node deployed over SSH: `make e2e` (needs Docker; `make e2e-setup` once; see `e2e/README.md`) |
 | Build frontend | `make build-frontend` (never raw `bun run build` — this also syncs the installed package) |
 | Lint | `make lint` (Python + frontend + license lines) · split: `make lint-py` (ruff + basedpyright) / `make lint-frontend` (typecheck + prettier + eslint + markdownlint) / `make lint-licenses` |
 | Format | `make fmt` (Python + frontend) · split: `make fmt-py` / `make fmt-frontend` |
@@ -62,7 +62,7 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 
 ## Python conventions
 
-- Python 3.10+. Tests are **pytest** (`asyncio_mode = auto`); new code and bug fixes ship with a test in `tests/`.
+- Python 3.11+. Tests are **pytest** (`asyncio_mode = auto`); new code and bug fixes ship with a test in `tests/`.
 - Async-first (`aiohttp` / `aiomqtt`) — prefer `async`/`await` over blocking calls in the event loop.
   A synchronous call inside `async def` freezes *every* actor in the process, not just its own —
   MQTT keepalive included. Anything that waits on the network or disk goes through `await`, or
@@ -101,7 +101,7 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 - **An exception says its own message.** Give the class a classmethod per reason
   (`ArtifactError.missing(path)`), or a class of its own with the message in `__init__`, and
   raise that; never `raise ValueError(f"...")` with the words at the raise. Keep the base the
-  callers catch (`ValueError` for rejected input, `asyncio.TimeoutError` for a wait that ran out).
+  callers catch (`ValueError` for rejected input, `TimeoutError` for a wait that ran out).
   Ruff's TRY family enforces it; tests and `e2e/` are exempt, since a fake fails with whatever
   message the test then looks for.
 - basedpyright (basic mode) is gated too, over `wactorz`, `tests` and `scripts` alike. In a test,

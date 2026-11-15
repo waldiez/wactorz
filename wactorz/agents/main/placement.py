@@ -282,7 +282,7 @@ class Placement:
         self._asking[question_id] = answered
         try:
             allowed = await asyncio.wait_for(asyncio.shield(answered), timeout=APPROVAL_TIMEOUT_S)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 "[%s] No answer within %gs about running %r on main",
                 self.host.name,

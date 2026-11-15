@@ -297,7 +297,7 @@ class TestTheCertificates:
         assert {"host-a", "host-b"} <= names
 
     def test_a_certificate_near_expiry_is_reissued(self, issued: broker_tls.BrokerFiles) -> None:
-        later = datetime.datetime.now(datetime.timezone.utc) + broker_tls.BROKER_LIFETIME
+        later = datetime.datetime.now(datetime.UTC) + broker_tls.BROKER_LIFETIME
         assert broker_tls.ensure(["broker.lan", "192.168.1.10"], now=later).issued is True
 
     def test_a_damaged_ca_is_an_error_not_a_new_ca(self, issued: broker_tls.BrokerFiles) -> None:

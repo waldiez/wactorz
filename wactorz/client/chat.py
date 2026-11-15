@@ -74,7 +74,7 @@ async def _next(listener: Listener, *, accepted: bool) -> Event | None:
         return await listener.get()
     try:
         return await asyncio.wait_for(listener.get(), ACCEPTED_TIMEOUT_S)
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise TurnInterruptedError from exc
 
 

@@ -129,7 +129,7 @@ class Stream:
         self._start()
         try:
             await asyncio.wait_for(self._connected.wait(), timeout)
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise self._failure or UnavailableError(self._transport.url, "no socket") from exc
         if self._failure is not None:
             raise self._failure
@@ -182,7 +182,7 @@ class Stream:
         while True:
             try:
                 self._socket = await self._transport.connect_websocket()
-            except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as exc:
+            except (TimeoutError, aiohttp.ClientError, OSError) as exc:
                 logger.debug("[client] Could not connect: %s", exc)
             except ClientError as exc:
                 if not isinstance(exc, UnavailableError):

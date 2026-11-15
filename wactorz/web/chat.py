@@ -729,7 +729,7 @@ async def _ask_node(main_actor: Any, name: str, node: str, text: str, channels: 
                 text_out = await asyncio.wait_for(
                     _node_reply(client, node, reply_topic), timeout=TASK_REPLY_SECONDS
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 await channels.finish(
                     f"[error] @{name} on {node} did not reply within {TASK_REPLY_SECONDS}s."
                 )
@@ -878,7 +878,7 @@ async def _task_through_mailbox(target: Any, name: str, text: str, channels: _Ch
             await target.handle_message(msg)
             payload = await asyncio.wait_for(reply, timeout=TASK_REPLY_SECONDS)
         await channels.reply(_result_text(payload))
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await channels.reply(f"[error] @{name} did not reply within {TASK_REPLY_SECONDS}s.")
     except Exception as exc:
         logger.exception("[io-gateway] task dispatch to %s failed", target.name)

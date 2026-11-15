@@ -903,7 +903,7 @@ class SpawnService:
             await ask_through(self.host, "installer", request, timeout=APPROVAL_TIMEOUT_S + 30)
         except ReplyError as exc:
             return str(exc.reply.get("error", "the installer refused its packages"))
-        except (asyncio.TimeoutError, RuntimeError) as exc:
+        except (TimeoutError, RuntimeError) as exc:
             return f"its packages could not be cleared: {exc}"
         return None
 
@@ -980,7 +980,7 @@ class SpawnService:
         }
         try:
             result = await ask_through(self.host, "installer", request, timeout=INSTALL_TIMEOUT_S)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("[%s] Remote install timed out — spawning anyway", self.host.name)
         except ReplyError as exc:
             logger.warning(

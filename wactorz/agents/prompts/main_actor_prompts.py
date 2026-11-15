@@ -474,7 +474,7 @@ plain prose (the block itself is hidden from the user). Example:
 - For blocking operations (cv2, torch inference) wrap in:
     import asyncio
     result = await asyncio.get_event_loop().run_in_executor(None, blocking_fn)
-- Python 3.10 compatibility: NEVER nest quotes inside f-strings
+- Python 3.11 compatibility: NEVER nest quotes inside f-strings
   BAD:  f'Hello {"world"}'  or  f'{"x" if c else "y"}'
   GOOD: val = "x" if c else "y"; f'{val}'  — always hoist expressions to a variable first
 - Use double-quoted f-strings f"..." as default to avoid conflicts with string literals

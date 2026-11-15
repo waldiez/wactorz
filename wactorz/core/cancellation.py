@@ -17,7 +17,7 @@ async def cancel_until_done(
 ) -> bool:
     """Cancel `task`, and cancel it again for as long as it keeps running.
 
-    On Python 3.10 and 3.11 a cancellation can be lost: ``asyncio.wait_for``
+    On Python 3.11 a cancellation can be lost: ``asyncio.wait_for``
     returns its result from inside its own ``CancelledError`` handler when the
     future it guards completes in the same instant, and the task carries on as
     though nothing had asked it to stop. A single ``cancel()`` followed by an

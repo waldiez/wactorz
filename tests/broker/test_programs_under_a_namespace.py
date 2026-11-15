@@ -79,7 +79,7 @@ async def _first_on(broker: tuple[str, int], topic: str, wait: float) -> str | N
 
         try:
             return await asyncio.wait_for(first(), wait)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
 

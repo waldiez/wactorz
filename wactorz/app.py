@@ -247,7 +247,7 @@ async def _stop_web_ui() -> None:
 
     Here rather than left to ``asyncio.run``, which cancels whatever is still
     running once ``app()`` returns and then waits on it without a limit. On
-    Python 3.10 and 3.11 that one request can be lost inside the broker listener,
+    Python 3.11 that one request can be lost inside the broker listener,
     when it lands while a subscribe is completing, and the process then never
     exits. :func:`cancel_until_done` asks again until the task has stopped.
     """
@@ -268,7 +268,7 @@ async def _stop_leftover_tasks() -> None:
     What ``asyncio.run`` does once ``app()`` returns, done here with
     :func:`cancel_until_done` instead of a single cancellation and an open-ended
     wait. A broker connection an agent opened and nothing closed, such as a topic
-    stream window, can lose that one request on Python 3.10 and 3.11 and hold the
+    stream window, can lose that one request on Python 3.11 and hold the
     process open.
 
     Ours, not every task on the loop: a host program that lent us its loop has
@@ -824,7 +824,7 @@ def _install_signal_handlers() -> None:
     def _keep_asking() -> None:
         """Cancel the app task, and ask again later until its shutdown has begun.
 
-        One request is not always enough. On Python 3.10 and 3.11 a cancellation
+        One request is not always enough. On Python 3.11 a cancellation
         that lands while startup is inside a wait_for is discarded — the broker and
         Home Assistant clients both wait that way — and startup then carries on as
         though nothing had asked it to stop. A timer rather than a task, so the
@@ -858,7 +858,7 @@ async def _build_system_or_stop(args: argparse.Namespace) -> tuple[Any, Any, Any
     before app() reaches the try whose finally shuts down. Left there, the agents
     that had started would never be stopped, so their state would not be written,
     and everything still running would get asyncio.run's single cancellation —
-    the one a lost request on Python 3.10 and 3.11 turns into a hang.
+    the one a lost request on Python 3.11 turns into a hang.
     """
     started: list[ActorSystem] = []
     try:

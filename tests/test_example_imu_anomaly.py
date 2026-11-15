@@ -277,7 +277,7 @@ class TestTheImuTriage:
     async def test_an_unanswered_question_ends_the_call_quietly(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        triage, me, asked = self._triage(monkeypatch, tmp_path, asyncio.TimeoutError())
+        triage, me, asked = self._triage(monkeypatch, tmp_path, TimeoutError())
 
         assert await triage.triage(self._jolt(), me) is None
         assert len(asked) == 1
@@ -419,7 +419,7 @@ class TestAskingTheImuDetector:
         [
             (LookupError("no agent named 'imu-anomaly' is running"), 503),
             (RuntimeError("'imu-anomaly' answered with an error: boom"), 502),
-            (asyncio.TimeoutError("'imu-anomaly' did not answer within 30s"), 504),
+            (TimeoutError("'imu-anomaly' did not answer within 30s"), 504),
         ],
         ids=["not running", "failed", "silent"],
     )

@@ -48,7 +48,7 @@ async def until(condition: Callable[[], object], what: str, timeout: float = WAI
 
     try:
         await asyncio.wait_for(poll(), timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail(f"within {timeout:g}s, never: {what}")
 
 

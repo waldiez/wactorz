@@ -65,7 +65,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -232,7 +232,7 @@ def _resolve_timezone(spec_tz: str | None, user_tz: str | None) -> Any:
             return local
     except Exception:  # noqa: S110  # falls through to the next timezone source
         pass
-    return timezone.utc
+    return UTC
 
 
 def _parse_hhmm(at: str) -> tuple[int, int]:
@@ -418,7 +418,7 @@ class ScheduledAgent(Actor):
                             self.name,
                             delta,
                         )
-                        await self._fire(now_utc=datetime.now(timezone.utc))
+                        await self._fire(now_utc=datetime.now(UTC))
                     else:
                         logger.info(
                             "[%s] One-shot fire missed by %.0fs (beyond %.0fs catchup) — exiting",
@@ -493,7 +493,7 @@ class ScheduledAgent(Actor):
                         timeout=sleep_for if sleep_for > 0 else 0.001,
                     )
                     manual = True
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     manual = False
 
                 # If we woke early via the bounded re-check (not at the deadline,
@@ -505,7 +505,7 @@ class ScheduledAgent(Actor):
 
                 # Time to fire (or manually triggered)
                 await self._fire(
-                    now_utc=datetime.now(timezone.utc),
+                    now_utc=datetime.now(UTC),
                     manual=manual,
                 )
 
@@ -528,7 +528,7 @@ class ScheduledAgent(Actor):
         try:
             dt = datetime.fromisoformat(self._state.last_fire_iso)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
             return dt.astimezone(tzinfo)
         except Exception:
             return None

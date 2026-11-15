@@ -105,9 +105,9 @@ async def process(agent):
 
 #: A moment already past when any journey asks. With its offset, so it means
 #: the same moment whatever time zone the server reads schedules in.
-_JUST_NOW = (
-    datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=30)
-).isoformat(timespec="seconds")
+_JUST_NOW = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=30)).isoformat(
+    timespec="seconds"
+)
 
 
 def _starts(words: str, **agent: object) -> str:

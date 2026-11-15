@@ -767,7 +767,7 @@ class MQTTPublisher:
         if self._task:
             # cancel_until_done rather than one cancel and an open-ended wait: the
             # drain loop publishes through aiomqtt, whose wait_for can lose a
-            # cancellation on Python 3.10 and 3.11, and the loop then waits for the
+            # cancellation on Python 3.11, and the loop then waits for the
             # next queued message for ever while the whole shutdown waits on it. A
             # cancellation aimed at the caller of disconnect() still gets through.
             if not await cancel_until_done(self._task, timeout=DRAIN_STOP_TIMEOUT_S):

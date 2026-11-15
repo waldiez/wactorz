@@ -5,9 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-- **Reachy remains opt-in.** Its SDK is updated to 1.12.0 with upstream's secure Starlette requirements and Python 3.11+ support; core Wactorz keeps Python 3.10 support. General Greek entity-selection changes are deferred. Trusted recipe code refresh is opt-in and refuses dependency migrations until a fresh approved catalogue spawn.
+- **Reachy remains opt-in.** Its SDK is updated to 1.12.0 with upstream's secure Starlette requirements. General Greek entity-selection changes are deferred. Trusted recipe code refresh is opt-in and refuses dependency migrations until a fresh approved catalogue spawn.
 
 - Reachy installation uses an opt-in strict recipe policy; other agents keep their existing best-effort startup and package approval controls.
+
+### Before you upgrade
+
+- **Wactorz now requires Python 3.11 or later; Python 3.10 is no longer supported.** Python 3.10 reached its end of life in October 2026. On 3.10, upgrade Python before you upgrade Wactorz: pip will not install this release there. Main and every edge node need 3.11 or later; the Docker images and Home Assistant add-ons already use a newer Python and need nothing. This also retires the Pillow 12.3 and filelock 4.0 advisories that had no fix on 3.10, so every locked install takes Pillow 13 and filelock 4.2.
+- **opentelemetry-api 1.45.2** in the locked installs, which fixes slow parsing of a crafted `traceparent` header (GHSA-mf5v-w3w3-f6cg). It comes with the Anthropic SDK and the Reachy extra.
 
 ### Changed
 

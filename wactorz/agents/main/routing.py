@@ -98,7 +98,7 @@ class RoutingMixin(_Host):
             token = (decision or "").strip().upper().split()[0] if decision else "OTHER"
             if token in intent_tokens(self._prompt_fragments):
                 return token
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("[%s] Intent classification timed out after 60s", self.name)
             return "OTHER"
         except Exception as e:
@@ -137,7 +137,7 @@ class RoutingMixin(_Host):
                         ha_result = await ask_through(
                             self, "home-assistant-agent", {"text": "list_entities"}, timeout=10.0
                         )
-                    except (asyncio.TimeoutError, RuntimeError, LookupError):
+                    except (TimeoutError, RuntimeError, LookupError):
                         ha_result = None
 
                     entities = []
@@ -188,7 +188,7 @@ class RoutingMixin(_Host):
             )
             result = await asyncio.wait_for(future, timeout=120.0)
             return result.get("result", "Done.")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return "Actuation timed out, please retry."
         finally:
             self._result_futures.pop(task_id, None)

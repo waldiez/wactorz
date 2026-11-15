@@ -192,7 +192,7 @@ class DelegationManager:
         try:
             try:
                 await asyncio.wait_for(subscribed.wait(), timeout=SUBSCRIBE_TIMEOUT_S)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "[%s] reply subscription for %s did not come up in %.0fs — sending anyway, "
                     "so a reply may be missed",
@@ -257,7 +257,7 @@ class DelegationManager:
                 # The agent's own account of its failure is the answer here;
                 # every caller reads the reply's fields and says what it finds.
                 return exc.reply
-            except (asyncio.TimeoutError, RuntimeError, LookupError):
+            except (TimeoutError, RuntimeError, LookupError):
                 # No answer is coming: a mailbox with no room is the same as an
                 # agent that never replies, without the wait.
                 return None
@@ -283,7 +283,7 @@ class DelegationManager:
             )
             try:
                 return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "[%s] delegate_task: %r on %r timed out after %ss",
                     self.host.name,
@@ -314,7 +314,7 @@ class DelegationManager:
         except ReplyError as exc:
             # A failed install is the installer's report, read by the caller.
             return exc.reply
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return {"error": f"Installer timed out after {timeout}s"}
         except RuntimeError as exc:
             return {"error": str(exc)}
@@ -601,7 +601,7 @@ class DelegationManager:
                 result = await asyncio.wait_for(
                     asyncio.shield(future), timeout=REMOTE_MENTION_TIMEOUT_S
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return (
                     f"{target_name} on {node} did not respond within "
                     f"{REMOTE_MENTION_TIMEOUT_S:.0f}s."

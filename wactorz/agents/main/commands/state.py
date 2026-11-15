@@ -9,7 +9,7 @@ channel never reaches this package at all.
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from ....config import CONFIG
@@ -118,7 +118,7 @@ async def show_rules(ctx: CommandContext, _argument: str) -> str:
         task = rule.get("task", "")[:]
         ts = rule.get("created_at", 0)
         created = (
-            datetime.fromtimestamp(ts, tz=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+            datetime.fromtimestamp(ts, tz=UTC).astimezone().strftime("%Y-%m-%d %H:%M")
             if ts
             else "unknown"
         )

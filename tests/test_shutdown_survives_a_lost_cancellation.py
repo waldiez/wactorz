@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shutdown finishes even when a cancellation is lost.
 
-On Python 3.10 and 3.11 ``asyncio.wait_for`` returns its result from inside its
+On Python 3.11 ``asyncio.wait_for`` returns its result from inside its
 own ``CancelledError`` handler when the future it guards completes in the same
 instant the caller is cancelled. aiomqtt subscribes and publishes through
 ``wait_for``, so a task holding a broker connection can lose the request to stop

@@ -76,7 +76,7 @@ class TestTheDockerfile:
 
     @pytest.mark.parametrize("flavour", FLAVOURS)
     def test_each_flavour_starts_from_a_pinned_python(self, flavour: str) -> None:
-        assert _python(flavour) >= (3, 10)
+        assert _python(flavour) >= (3, 11)
 
     def test_the_small_image_stays_small(self) -> None:
         assert _system_packages("default") == {"curl"}
@@ -110,7 +110,6 @@ class TestTheDockerfile:
 class TestTheLockedPyTorch:
     """On Linux the PyPI build is the CUDA one, with every NVIDIA library behind it."""
 
-    # Read as text: Python 3.10 has no TOML reader, and the suite runs there.
     def test_linux_takes_the_cpu_build(self) -> None:
         settings = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 

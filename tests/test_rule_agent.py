@@ -475,7 +475,7 @@ class TestAskingTheOperator:
         )
 
         async def ask(text: str, **kwargs: Any) -> str:
-            raise asyncio.TimeoutError("nobody")
+            raise TimeoutError("nobody")
 
         monkeypatch.setattr(rule, "ask_operator", ask)
 

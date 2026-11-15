@@ -23,7 +23,7 @@ def test_strict_installation_is_only_declared_by_the_robot_recipe() -> None:
     assert catalog["reachy-mini"]["minimum_python"] == [3, 11]
 
 
-async def test_python310_refuses_robot_before_any_install(
+async def test_a_python_below_the_recipe_minimum_refuses_robot_before_any_install(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     catalog = CatalogAgent(persistence_dir=str(tmp_path))

@@ -32,7 +32,7 @@ class MqttClientFactoryTest(unittest.TestCase):
         # it at the source module, not on wactorz.core.mqtt.
         with (
             mock.patch("wactorz.config.CONFIG", cfg),
-            mock.patch.object(m, "aiomqtt", fake_aiomqtt),
+            mock.patch.object(m, "Client", fake_aiomqtt.Client),
         ):
             m.mqtt_client("broker", 1883, **kwargs)
         return captured

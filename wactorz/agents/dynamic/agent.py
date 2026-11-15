@@ -873,7 +873,9 @@ class DynamicAgent(Actor):
         await self.notify_user(
             f"{self.name} could not start: the Python module '{module}' is not installed. "
             f"Spawn {self.name} again to install its packages, or install the package that "
-            f"provides '{module}' on this machine and then run /agents restart {self.name}."
+            f"provides '{module}' on this machine and then run /agents restart {self.name}. "
+            "If its packages were installed while Wactorz was running, restart Wactorz so "
+            "they load; it is not restarted automatically until then."
         )
 
     async def _run_setup(self) -> None:
@@ -898,6 +900,15 @@ class DynamicAgent(Actor):
         if last_error is not None:
             err = traceback.format_exc()
             logger.error("[%s] setup() failed permanently: %s", self.name, last_error)
+            if isinstance(last_error, ModuleNotFoundError):
+                # Before the state changes, so the Supervisor never sees one
+                # without the other: a restart in this process imports from the
+                # same environment and fails the same way.
+                # Typed as the base declares it: inferred here, as `str`, it would read
+                # to a type checker as a narrower attribute redeclared by this class.
+                self.restart_futile: str | None = (
+                    f"the Python module '{last_error.name or last_error}' is not installed"
+                )
             # ── Erlang/OTP: mark FAILED so Supervisor's watch_loop can see us ──
             self.state = ActorState.FAILED
             await self._publish_error(

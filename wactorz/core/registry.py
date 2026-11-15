@@ -665,6 +665,10 @@ class Supervisor:
             return None
 
         if actor.state == ActorState.FAILED:
+            # Failed for a reason it would meet again: restarting only repeats
+            # the failure, and opens and drops its connections each time.
+            if getattr(actor, "restart_futile", None):
+                return None
             return f"state is FAILED — applying {spec.strategy.value}"
 
         # Give a freshly started actor twice the timeout to warm up.

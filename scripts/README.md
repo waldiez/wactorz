@@ -13,4 +13,4 @@ Build and maintenance scripts.
 | `hooks/` | Hatch build hooks |
 | `start.ps1`, `start.bat`, `watch-costs.ps1` | Windows launchers |
 
-See [docs/quickstart.md](../docs/quickstart.md) for running Wactorz itself.
+See [docs/development.md](../docs/development.md) and [docs/windows.md](../docs/windows.md) for running Wactorz itself.

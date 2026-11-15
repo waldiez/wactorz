@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Wactorz on Windows — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="https://waldiez.github.io/media/images/wactorz/icon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    /* ── Nav bar ── */
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:#fff;text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    /* ── Layout ── */
+    .layout{display:flex;flex:1}
+
+    /* ── Sidebar ── */
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    /* Collapsible groups: only the active section is open by default */
+    details.sidebar-group > summary.sidebar-label{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none;transition:color .15s}
+    details.sidebar-group > summary.sidebar-label::-webkit-details-marker{display:none}
+    details.sidebar-group > summary.sidebar-label::after{content:'▸';font-size:.6rem;color:var(--muted);transition:transform .15s;transform:translateY(-1px)}
+    details.sidebar-group[open] > summary.sidebar-label::after{content:'▾'}
+    details.sidebar-group > summary.sidebar-label:hover{color:var(--muted-hi)}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
+
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.25rem 0}
+    .content strong{color:#fff;font-weight:500}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    /* ── Footer ── */
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+    footer a:hover{color:var(--text)}
+
+    /* ── Responsive ── */
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">Wactorz</a>
+  <nav class="topbar-links">
+    <a href="https://github.com/waldiez/wactorz">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/">PyPI</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <details class="sidebar-group" open>
+      <summary class="sidebar-label">Guide</summary>
+      <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
+      <a href="../guide/windows.html" class="active">Windows</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/library.html" class="">Library</a>
+      <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
+      <a href="../guide/interfaces.html" class="">Interfaces</a>
+      <a href="../guide/pipelines.html" class="">Pipelines</a>
+      <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
+      <a href="../guide/security.html" class="">Security</a>
+      <a href="../guide/prometheus.html" class="">Prometheus</a>
+      <a href="../guide/extensions.html" class="">Extensions</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
+    </details>
+    <details class="sidebar-group">
+      <summary class="sidebar-label">Catalogue agents</summary>
+      <a href="../catalogue/catalogue-agents.html" class="">Overview</a>
+      <a href="../catalogue/catalogue-google-setup.html" class="">Google — setup & login</a>
+      <a href="../catalogue/catalogue-google-calendar.html" class="">Google Calendar</a>
+      <a href="../catalogue/catalogue-gmail.html" class="">Gmail</a>
+      <a href="../catalogue/catalogue-weather.html" class="">Weather</a>
+      <a href="../catalogue/catalogue-smart-energy.html" class="">Smart Energy</a>
+      <a href="../catalogue/catalogue-reachy-mini.html" class="">Reachy Mini</a>
+      <a href="../catalogue/catalogue-anomaly-detector.html" class="">Anomaly Detector</a>
+      <a href="../catalogue/catalogue-manual.html" class="">Device Manuals</a>
+      <a href="../catalogue/catalogue-doc-to-pptx.html" class="">Doc → PPTX</a>
+      <a href="../catalogue/catalogue-timeseries.html" class="">Time-Series Collector</a>
+    </details>
+  </aside>
+  <main class="content">
+<h1 id="wactorz-on-windows">Wactorz on Windows</h1>
+<p>This guide covers x86-64 and ARM64 Windows machines, including Snapdragon X,
+Surface Pro X and Copilot+ PCs.</p>
+<hr />
+<h2 id="which-option-fits-you">Which option fits you?</h2>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Needs</th>
+<th>Best for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>A - Docker Compose</strong></td>
+<td>Git, Docker Desktop</td>
+<td>The full stack from a repository clone: broker, Wactorz, Prometheus</td>
+</tr>
+<tr>
+<td><strong>B - Docker Hub image</strong></td>
+<td>Docker Desktop</td>
+<td>Running Wactorz without cloning anything</td>
+</tr>
+<tr>
+<td><strong>C - pip install</strong></td>
+<td>Python 3.11 or later, Docker Desktop for the broker</td>
+<td>Running Wactorz natively, or using it as a library</td>
+</tr>
+<tr>
+<td><strong>D - Frontend development</strong></td>
+<td>Git, Docker Desktop, Python 3.11 or later, Bun</td>
+<td>Working on the dashboard</td>
+</tr>
+</tbody>
+</table>
+<p>Start with Option A if you want everything running from the repository. Use
+Option B if you only want to run Wactorz. Use Option C to install the package into
+a Python environment of your own, and Option D when you are editing the dashboard.</p>
+<hr />
+<h2 id="prerequisites">Prerequisites</h2>
+<p>Install only what your option needs. Each line runs in PowerShell or Windows
+Terminal.</p>
+<div class="highlight"><pre><span></span><code><span class="n">winget</span> <span class="n">install</span> <span class="n">Microsoft</span><span class="p">.</span><span class="n">WindowsTerminal</span>
+<span class="n">winget</span> <span class="n">install</span> <span class="n">Git</span><span class="p">.</span><span class="n">Git</span>
+<span class="n">winget</span> <span class="n">install</span> <span class="n">Docker</span><span class="p">.</span><span class="n">DockerDesktop</span>
+<span class="n">winget</span> <span class="n">install</span> <span class="n">Python</span><span class="p">.</span><span class="n">Python</span><span class="p">.</span><span class="n">3</span><span class="p">.</span><span class="n">13</span>      <span class="c"># Options C and D</span>
+<span class="n">winget</span> <span class="n">install</span> <span class="n">Oven-sh</span><span class="p">.</span><span class="n">Bun</span>             <span class="c"># Option D</span>
+</code></pre></div>
+
+<p>After Docker Desktop is installed, open it and wait for the engine to start.</p>
+<p>Wactorz needs <strong>Python 3.11 or later</strong>. Check which one you have with
+<code>py --version</code>, and see every installed version with <code>py --list</code>. Python 3.10 and
+earlier cannot install current releases: pip reports
+<code>requires a different Python</code>.</p>
+<p>ARM64 Windows runs <code>linux/arm64</code> containers natively and <code>linux/amd64</code> containers
+through emulation. The published Wactorz images are multi-arch, so Docker picks the
+native one.</p>
+<hr />
+<h2 id="option-a-docker-compose-from-the-repository">Option A - Docker Compose from the repository</h2>
+<div class="highlight"><pre><span></span><code><span class="n">git</span> <span class="n">clone</span> <span class="n">https</span><span class="p">://</span><span class="n">github</span><span class="p">.</span><span class="n">com</span><span class="p">/</span><span class="n">waldiez</span><span class="p">/</span><span class="n">wactorz</span>
+<span class="nb">cd </span><span class="n">wactorz</span>
+<span class="nb">Copy-Item</span> <span class="p">.</span><span class="n">env</span><span class="p">.</span><span class="n">template</span> <span class="p">.</span><span class="n">env</span>
+<span class="n">notepad</span> <span class="p">.</span><span class="n">env</span>
+</code></pre></div>
+
+<p>Set at least these values in <code>.env</code>:</p>
+<div class="highlight"><pre><span></span><code>MQTT_PASSWORD=choose-a-long-random-password
+LLM_PROVIDER=anthropic
+LLM_API_KEY=your-key-here
+</code></pre></div>
+
+<p>The broker refuses to start without <code>MQTT_PASSWORD</code>. To use a local model instead
+of a cloud provider, set <code>LLM_PROVIDER=ollama</code> (see <a href="../guide/development.html">Installation</a>).</p>
+<p>Start the stack:</p>
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">compose</span> <span class="p">-</span><span class="n">-profile</span> <span class="n">python</span> <span class="n">up</span> <span class="n">-d</span>
+</code></pre></div>
+
+<p>Open:</p>
+<ul>
+<li>Dashboard: http://localhost:8888</li>
+<li>REST API: http://localhost:8000</li>
+<li>Prometheus: http://localhost:9090</li>
+</ul>
+<p>Follow the logs with <code>docker compose logs -f wactorz-python</code>, and stop the stack
+with:</p>
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">compose</span> <span class="p">-</span><span class="n">-profile</span> <span class="n">python</span> <span class="n">down</span>
+</code></pre></div>
+
+<p>To include the bundled Home Assistant development container, use
+<code>--profile full</code> instead of <code>--profile python</code>.</p>
+<p>To update, pull the repository and rebuild:</p>
+<div class="highlight"><pre><span></span><code><span class="n">git</span> <span class="n">pull</span>
+<span class="n">docker</span> <span class="n">compose</span> <span class="p">-</span><span class="n">-profile</span> <span class="n">python</span> <span class="n">up</span> <span class="n">-d</span> <span class="p">-</span><span class="n">-build</span>
+</code></pre></div>
+
+<hr />
+<h2 id="option-b-docker-hub-image">Option B - Docker Hub image</h2>
+<p>Use the Docker Hub guide when you do not need a repository clone:
+<a href="../guide/dockerhub.html">Docker Hub</a>. It is the simplest way to try Wactorz on Windows.</p>
+<hr />
+<h2 id="option-c-pip-install">Option C - pip install</h2>
+<p>Make a virtual environment with Python 3.11 or later, and install Wactorz into it:</p>
+<div class="highlight"><pre><span></span><code><span class="n">py</span> <span class="p">-</span><span class="n">3</span><span class="p">.</span><span class="n">13</span> <span class="n">-m</span> <span class="n">venv</span> <span class="nv">$env:USERPROFILE</span><span class="p">\</span><span class="n">wactorz-venv</span>
+<span class="p">&amp;</span> <span class="s2">"$env:USERPROFILE\wactorz-venv\Scripts\python.exe"</span> <span class="n">-m</span> <span class="n">pip</span> <span class="n">install</span> <span class="s2">"wactorz[all]"</span>
+</code></pre></div>
+
+<p>Calling the environment's own <code>python.exe</code> avoids PowerShell's script execution
+policy, which can block <code>Activate.ps1</code>.</p>
+<p>Wactorz needs an MQTT broker. For one on this machine only, run Mosquitto in
+Docker with its no-authentication configuration, published on loopback:</p>
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">run</span> <span class="n">-d</span> <span class="p">-</span><span class="n">-name</span> <span class="n">mosquitto</span> <span class="n">-p</span> <span class="n">127</span><span class="p">.</span><span class="n">0</span><span class="p">.</span><span class="n">0</span><span class="p">.</span><span class="n">1</span><span class="p">:</span><span class="n">1883</span><span class="p">:</span><span class="n">1883</span> <span class="n">eclipse-mosquitto</span><span class="p">:</span><span class="n">2</span><span class="p">.</span><span class="n">1</span><span class="p">.</span><span class="n">2-alpine</span> <span class="n">mosquitto</span> <span class="n">-c</span> <span class="p">/</span><span class="n">mosquitto-no-auth</span><span class="p">.</span><span class="n">conf</span>
+</code></pre></div>
+
+<p>Then start Wactorz, with your provider's key in the environment or in a <code>.env</code>
+file in the folder you start it from:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">$env:LLM_API_KEY</span> <span class="p">=</span> <span class="s2">"your-key-here"</span>
+<span class="p">&amp;</span> <span class="s2">"$env:USERPROFILE\wactorz-venv\Scripts\wactorz.exe"</span>
+</code></pre></div>
+
+<p>Open the dashboard at http://localhost:8888. A broker without authentication is
+only safe while it is published on <code>127.0.0.1</code>; before you connect other machines
+to it, set up accounts as described in <a href="../guide/security.html">Security</a>.</p>
+<p>To upgrade, run the same <code>pip install</code> with <code>--upgrade</code>.</p>
+<hr />
+<h2 id="option-d-frontend-development">Option D - Frontend development</h2>
+<p>The development stack runs the broker and the backend in containers, with the
+development credentials (<code>wactorz</code> / <code>wactorz-dev</code>) already filled in:</p>
+<div class="highlight"><pre><span></span><code><span class="n">git</span> <span class="n">clone</span> <span class="n">https</span><span class="p">://</span><span class="n">github</span><span class="p">.</span><span class="n">com</span><span class="p">/</span><span class="n">waldiez</span><span class="p">/</span><span class="n">wactorz</span>
+<span class="nb">cd </span><span class="n">wactorz</span>
+<span class="nb">Copy-Item</span> <span class="p">.</span><span class="n">env</span><span class="p">.</span><span class="n">template</span> <span class="p">.</span><span class="n">env</span>
+<span class="n">notepad</span> <span class="p">.</span><span class="n">env</span>       <span class="c"># set LLM_API_KEY</span>
+<span class="n">docker</span> <span class="n">compose</span> <span class="o">-f</span> <span class="n">compose</span><span class="p">.</span><span class="n">dev</span><span class="p">.</span><span class="n">yaml</span> <span class="p">-</span><span class="n">-profile</span> <span class="n">app</span> <span class="n">up</span> <span class="n">-d</span>
+</code></pre></div>
+
+<p>Then start Vite with hot reload:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">cd </span><span class="n">frontend</span>
+<span class="n">bun</span> <span class="n">install</span>
+<span class="n">bun</span> <span class="n">run</span> <span class="n">dev</span>
+</code></pre></div>
+
+<p>Open http://localhost:3000. Vite sends API and WebSocket calls to the backend on
+port 8888.</p>
+<p>Stop the stack with:</p>
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">compose</span> <span class="o">-f</span> <span class="n">compose</span><span class="p">.</span><span class="n">dev</span><span class="p">.</span><span class="n">yaml</span> <span class="p">-</span><span class="n">-profile</span> <span class="n">app</span> <span class="n">down</span>
+</code></pre></div>
+
+<p>Without <code>--profile app</code>, <code>compose.dev.yaml</code> starts only the broker. Use that to run
+the backend from the repository on the host instead, which needs Python 3.11 or
+later and <code>pip install -e ".[all]"</code>. The Makefile's <code>make dev-full</code> does this, and
+needs Git Bash or WSL2 (see below).</p>
+<hr />
+<h2 id="running-shell-scripts-and-make-on-windows">Running shell scripts and make on Windows</h2>
+<p>The repository's <code>run.sh</code> and the Makefile expect a Unix shell. Use Git Bash or
+WSL2 for them.</p>
+<p>Git Bash:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/c/Users/&lt;your-name&gt;/wactorz
+./run.sh
+</code></pre></div>
+
+<p>WSL2:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/mnt/c/Users/&lt;your-name&gt;/wactorz
+./run.sh
+</code></pre></div>
+
+<p>PowerShell runs Docker, Python and Bun commands directly, but it does not execute
+<code>.sh</code> scripts without a shell.</p>
+<hr />
+<h2 id="ssh-keys-for-remote-nodes">SSH keys for remote nodes</h2>
+<p>Deploying an edge node with <code>/deploy</code> connects over SSH, and key auth is
+preferred over a password. Windows 10 and 11 include the OpenSSH client, so
+generate a dedicated key:</p>
+<div class="highlight"><pre><span></span><code><span class="n">ssh-keygen</span> <span class="n">-t</span> <span class="n">ed25519</span> <span class="n">-C</span> <span class="s2">"wactorz-deploy"</span> <span class="o">-f</span> <span class="s2">"$env:USERPROFILE\.ssh\wactorz_deploy"</span> <span class="n">-N</span> <span class="s1">'""'</span>
+</code></pre></div>
+
+<p>Copy the public key to the remote host:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">type </span><span class="s2">"$env:USERPROFILE\.ssh\wactorz_deploy.pub"</span> <span class="p">|</span> <span class="n">ssh</span> <span class="n">pi</span><span class="nv">@192</span><span class="p">.</span><span class="n">168</span><span class="p">.</span><span class="n">1</span><span class="p">.</span><span class="n">50</span> <span class="s2">"mkdir -p ~/.ssh &amp;&amp; cat &gt;&gt; ~/.ssh/authorized_keys"</span>
+</code></pre></div>
+
+<p>Point the node's deploy target at it in <code>.env</code>:</p>
+<div class="highlight"><pre><span></span><code>DEPLOY_TARGETS=rpi-kitchen
+DEPLOY_RPI_KITCHEN_HOST=192.168.1.50
+DEPLOY_RPI_KITCHEN_USER=pi
+DEPLOY_RPI_KITCHEN_KEY=~/.ssh/wactorz_deploy
+DEPLOY_RPI_KITCHEN_BROKER=192.168.1.10
+</code></pre></div>
+
+<p>The node needs Python 3.11 or later too. See <a href="../guide/remote-nodes.html">Remote nodes</a> for
+the rest of the setup.</p>
+<hr />
+<h2 id="environment-variable-gotchas">Environment variable gotchas</h2>
+<p>Save <code>.env</code> as UTF-8 without BOM. VS Code and current Notepad do this by default.</p>
+<p>Use forward slashes or escaped backslashes for paths:</p>
+<div class="highlight"><pre><span></span><code>DEPLOY_RPI_KITCHEN_KEY=~/.ssh/wactorz_deploy
+DEPLOY_RPI_KITCHEN_KEY=C:/Users/alice/.ssh/wactorz_deploy
+</code></pre></div>
+
+<p>Avoid unescaped Windows backslashes:</p>
+<div class="highlight"><pre><span></span><code>DEPLOY_RPI_KITCHEN_KEY=C:\Users\alice\.ssh\wactorz_deploy
+</code></pre></div>
+
+<p>If a shell script reads <code>.env</code>, LF line endings are safest. In VS Code, click the
+line-ending indicator in the status bar and choose <code>LF</code>.</p>
+<hr />
+<h2 id="troubleshooting">Troubleshooting</h2>
+<h3 id="requires-a-different-python"><code>requires a different Python</code></h3>
+<p>pip is running under Python 3.10 or earlier. Install Python 3.11 or later, then
+make the virtual environment again with it (<code>py -3.13 -m venv ...</code>).</p>
+<h3 id="set-mqtt_password-in-env"><code>set MQTT_PASSWORD in .env</code></h3>
+<p>Docker Compose stops before starting the broker because <code>MQTT_PASSWORD</code> is empty.
+Set it in <code>.env</code> and run the command again.</p>
+<h3 id="docker-command-not-found-in-git-bash"><code>docker: command not found</code> in Git Bash</h3>
+<p>Docker Desktop may be available in PowerShell but not Git Bash. Run Docker
+commands in PowerShell, or add Docker to Git Bash's <code>PATH</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">PATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$PATH</span><span class="s2">:/c/Program Files/Docker/Docker/resources/bin"</span>
+</code></pre></div>
+
+<h3 id="docker-desktop-is-not-running">Docker Desktop is not running</h3>
+<p>Open Docker Desktop from the Start menu and wait for the engine to start. Then
+run the Docker command again.</p>
+<h3 id="port-already-in-use">Port already in use</h3>
+<p>Change the port in <code>.env</code>, or stop the process using it. For the dashboard:</p>
+<div class="highlight"><pre><span></span><code>MONITOR_PORT=8080
+</code></pre></div>
+
+<p>Then open http://localhost:8080. <code>REST_EXTERNAL_PORT</code>, <code>PROMETHEUS_EXTERNAL_PORT</code>
+and <code>MQTT_EXTERNAL_PORT</code> move the other published ports.</p>
+<h3 id="mqtt_host-connection-refused"><code>MQTT_HOST</code> connection refused</h3>
+<p>Inside Docker Compose, Wactorz reaches the broker by its service name, which the
+compose file sets for you. For Wactorz running on the host, against a broker
+published on the host, use:</p>
+<div class="highlight"><pre><span></span><code>MQTT_HOST=localhost
+</code></pre></div>
+
+<p>Check the broker container with <code>docker compose ps</code>.</p>
+<h3 id="arm64-image-issues">ARM64 image issues</h3>
+<p>If Docker reports an architecture error, update Docker Desktop and make sure it can
+run emulated Linux containers.</p>
+<hr />
+<h2 id="recommended-arm64-windows-setup">Recommended ARM64 Windows setup</h2>
+<div class="highlight"><pre><span></span><code><span class="n">winget</span> <span class="n">install</span> <span class="n">Git</span><span class="p">.</span><span class="n">Git</span> <span class="n">Microsoft</span><span class="p">.</span><span class="n">WindowsTerminal</span> <span class="n">Docker</span><span class="p">.</span><span class="n">DockerDesktop</span> <span class="n">Python</span><span class="p">.</span><span class="n">Python</span><span class="p">.</span><span class="n">3</span><span class="p">.</span><span class="n">13</span> <span class="n">Oven-sh</span><span class="p">.</span><span class="n">Bun</span>
+<span class="n">wsl</span> <span class="p">-</span><span class="n">-install</span>
+
+<span class="n">git</span> <span class="n">clone</span> <span class="n">https</span><span class="p">://</span><span class="n">github</span><span class="p">.</span><span class="n">com</span><span class="p">/</span><span class="n">waldiez</span><span class="p">/</span><span class="n">wactorz</span>
+<span class="nb">cd </span><span class="n">wactorz</span>
+<span class="nb">Copy-Item</span> <span class="p">.</span><span class="n">env</span><span class="p">.</span><span class="n">template</span> <span class="p">.</span><span class="n">env</span>
+<span class="n">notepad</span> <span class="p">.</span><span class="n">env</span>       <span class="c"># set MQTT_PASSWORD and LLM_API_KEY</span>
+
+<span class="n">docker</span> <span class="n">compose</span> <span class="p">-</span><span class="n">-profile</span> <span class="n">python</span> <span class="n">up</span> <span class="n">-d</span>
+</code></pre></div>
+
+<p>For frontend work, continue with <a href="#option-d-frontend-development">Option D</a>.</p>
+  </main>
+</div>
+
+<footer>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+</footer>
+</body>
+</html>

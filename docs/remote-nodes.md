@@ -33,6 +33,8 @@ These differ on a node, and nothing else does:
 
 #### 1. Install Wactorz
 
+The device needs Python 3.11 or later (`python3 --version`). Raspberry Pi OS Bookworm and Ubuntu 24.04 ship one; Raspberry Pi OS Bullseye and Ubuntu 22.04 ship an older Python, on which pip refuses to install Wactorz, so install a newer one first or move to a newer OS. `/deploy` uses the device's `python3`, so the same applies to a node deployed from main.
+
 ```bash
 python3 -m venv ~/wactorz/venv
 ~/wactorz/venv/bin/pip install wactorz

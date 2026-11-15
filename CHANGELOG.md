@@ -13,8 +13,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Wactorz now requires Python 3.11 or later; Python 3.10 is no longer supported.** Python 3.10 reached its end of life in October 2026. On 3.10, upgrade Python before you upgrade Wactorz: pip will not install this release there. Main and every edge node need 3.11 or later; the Docker images and Home Assistant add-ons already use a newer Python and need nothing. This also retires the Pillow 12.3 and filelock 4.0 advisories that had no fix on 3.10, so every locked install takes Pillow 13 and filelock 4.2.
 - **opentelemetry-api 1.45.2** in the locked installs, which fixes slow parsing of a crafted `traceparent` header (GHSA-mf5v-w3w3-f6cg). It comes with the Anthropic SDK and the Reachy extra.
+- **Redeploy every edge node** with `/deploy <node>`. Main and a node must run the same release series, so until a node is deployed again main sends it no new agents or migrations. Each node needs Python 3.11 or later too.
+- **Packages that register agents, pipelines or extensions through entry points load only when named** in `WACTORZ_EXTENSIONS` (`*` loads everything installed, as before); see *Installed packages load only when named* below.
 
 ### Changed
+
+- **The documentation covers installing and upgrading on 0.8.** The guide has a Windows page (Docker Compose, the Docker Hub image, pip, and frontend development), and Installation has an Upgrading section. The broker command it gives for a pip install now works with Mosquitto 2, published on loopback only. The separate Quickstart page, which described the Windows start scripts, is retired in favour of the Windows page.
 
 - **A node's agents may use a pipeline's tick, a model's drift alarm and a trial's answers** under the node access
   list (`pipelines/#`, `models/+/drift`, `shadow/#`). A pipeline step or a drift agent placed on a node with its own

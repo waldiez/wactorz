@@ -16,6 +16,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **The Windows launcher works on 0.8.** `scripts\start.bat` now only runs the `start.ps1` beside it and exits with its code. `start.ps1` uses the checkout it is in, and updates it only when given `-Update`; it no longer clones or pulls on its own. It requires Python 3.11 or later before it installs anything or starts Docker, and installs into the checkout's `.venv`, reused on later runs and never deleted for you. It asks for `MQTT_PASSWORD` when it is empty (Enter generates one, kept out of the output), asks for an API key only when the chosen `LLM_PROVIDER` needs one, starts the broker with the repository's authenticated Compose service, and prints the dashboard's real address, `http://localhost:8888` by default. Each failure stops with what to do.
+
 - **A node's agents may use a pipeline's tick, a model's drift alarm and a trial's answers** under the node access
   list (`pipelines/#`, `models/+/drift`, `shadow/#`). A pipeline step or a drift agent placed on a node with its own
   broker account went unheard until now. `WACTORZ_NODE_TOPICS` now also refuses a filter that reaches `models/`,

@@ -392,6 +392,73 @@ reach a constructor that names them or takes <code>**kwargs</code>.</p>
 JSON, <code>{"raw": text}</code> for text, <code>{"raw": bytes}</code> for anything else, such as a
 camera frame. Messages on one topic are handled one at a time, in order,
 unless the subscription says otherwise (below).</p>
+<h3 id="the-agents-avatar">The agent's avatar</h3>
+<p>The dashboard draws a small character for every agent: on its card, in chat,
+on its Wiring box and on its notifications. With nothing said, the character
+is made up from the agent's name, so it is the same one after every restart.
+A function agent holds an <em>f(x)</em> card; each differs a little by its name.</p>
+<p>A class picks one of the ready-made characters with <code>AVATAR_KIND</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">PumpWatch</span><span class="p">(</span><span class="n">Actor</span><span class="p">):</span>
+    <span class="n">AVATAR_KIND</span> <span class="o">=</span> <span class="s2">"monitor"</span>
+</code></pre></div>
+
+<p>The kinds are <code>main</code>, <code>planner</code>, <code>llm</code>, <code>monitor</code>, <code>home-assistant</code>,
+<code>ha-actuator</code>, <code>ha-map</code>, <code>ha-state-bridge</code>, <code>installer</code>, <code>train</code>, <code>recorder</code>,
+<code>rule</code>, <code>scheduled</code>, <code>function</code>, <code>catalog</code>, and the catalogue's recipes by
+name (<code>weather-agent</code>, <code>flic</code>, <code>gmail-agent</code>, <code>google-calendar-agent</code>,
+<code>doc-to-pptx-agent</code>, <code>anomaly-detector</code>, <code>smart-energy</code>, <code>manual-agent</code>,
+<code>reachy-mini</code>, <code>timeseries-collector</code>).</p>
+<p>A spawn config may carry an <code>avatar</code> of its own, a kind or parts over one:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pump-watch"</span><span class="p">,</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"dynamic"</span><span class="p">,</span><span class="w"> </span><span class="nt">"code"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<span class="w"> </span><span class="nt">"avatar"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"monitor"</span><span class="p">,</span><span class="w"> </span><span class="nt">"accent"</span><span class="p">:</span><span class="w"> </span><span class="s2">"#2bb3a3"</span><span class="p">,</span><span class="w"> </span><span class="nt">"top"</span><span class="p">:</span><span class="w"> </span><span class="s2">"hardhat"</span><span class="p">,</span><span class="w"> </span><span class="nt">"prop"</span><span class="p">:</span><span class="w"> </span><span class="s2">"gear"</span><span class="p">}}</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Values</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>accent</code></td>
+<td>a colour, <code>#rrggbb</code></td>
+</tr>
+<tr>
+<td><code>outfit</code></td>
+<td><code>vest</code>, <code>suit</code>, <code>stripes</code></td>
+</tr>
+<tr>
+<td><code>neck</code></td>
+<td><code>gem</code>, <code>tie</code>, <code>bowtie</code>, <code>none</code></td>
+</tr>
+<tr>
+<td><code>specs</code></td>
+<td><code>round</code>, <code>square</code>, <code>shades</code>, <code>monocle</code>, <code>none</code></td>
+</tr>
+<tr>
+<td><code>face</code></td>
+<td><code>smile</code>, <code>blush</code>, <code>beard</code>, <code>mustache</code>, <code>open</code></td>
+</tr>
+<tr>
+<td><code>top</code></td>
+<td><code>""</code>, <code>gradcap</code>, <code>hardhat</code>, <code>tophat</code>, <code>captain</code>, <code>beanie</code>, <code>headset</code></td>
+</tr>
+<tr>
+<td><code>ant</code></td>
+<td><code>0</code>, <code>1</code>, <code>2</code>, <code>"left"</code>, <code>"right"</code> (antennae; a hat hides them)</td>
+</tr>
+<tr>
+<td><code>prop</code></td>
+<td><code>""</code>, <code>envelope</code>, <code>calendar</code>, <code>clock</code>, <code>magnifier</code>, <code>gear</code>, <code>books</code>, <code>book</code>, <code>slides</code>, <code>button</code>, <code>mic</code>, <code>spike</code>, <code>pin</code>, <code>switch</code>, <code>sync</code>, <code>function</code>, <code>wave</code>, <code>sun</code>, <code>clipboard</code>, <code>thought</code>, <code>database</code>, <code>bolt</code>, <code>house</code>, <code>chart</code></td>
+</tr>
+</tbody>
+</table>
+<p>An avatar is decoration: a kind or a part the dashboard does not know is
+passed over, and one that is not a small dictionary of words is left out with
+a warning in the log; neither stops the agent. The eyes show how the agent is
+doing, which is the dashboard's to decide, not the agent's.</p>
 <h2 id="more-than-one-at-a-time">More than one at a time</h2>
 <p>By default an agent handles one message of a topic at a time, in order, and
 one task at a time, so a function that keeps state between calls is never run

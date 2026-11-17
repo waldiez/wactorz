@@ -69,6 +69,7 @@ const CAST: Record<string, Member> = {
     },
     scheduled: { accent: "#ff6fa5", neck: "bowtie", ant: 1, prop: "clock" },
     function: { accent: "#3fbf5f", prop: "function", varied: true },
+    dynamic: { prop: "code", varied: true },
     catalog: {
         accent: "#c98a4b",
         specs: "square",

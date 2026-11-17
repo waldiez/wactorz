@@ -271,7 +271,8 @@ class PumpWatch(Actor):
 
 The kinds are `main`, `planner`, `llm`, `monitor`, `home-assistant`,
 `ha-actuator`, `ha-map`, `ha-state-bridge`, `installer`, `train`, `recorder`,
-`rule`, `scheduled`, `function`, `catalog`, and the catalogue's recipes by
+`rule`, `scheduled`, `function`, `dynamic` (an agent generated from code, holding a
+screen of `</>`), `catalog`, and the catalogue's recipes by
 name (`weather-agent`, `flic`, `gmail-agent`, `google-calendar-agent`,
 `doc-to-pptx-agent`, `anomaly-detector`, `smart-energy`, `manual-agent`,
 `reachy-mini`, `timeseries-collector`).
@@ -292,7 +293,7 @@ A spawn config may carry an `avatar` of its own, a kind or parts over one:
 | `face` | `smile`, `blush`, `beard`, `mustache`, `open` |
 | `top` | `""`, `gradcap`, `hardhat`, `tophat`, `captain`, `beanie`, `headset` |
 | `ant` | `0`, `1`, `2`, `"left"`, `"right"` (antennae; a hat hides them) |
-| `prop` | `""`, `envelope`, `calendar`, `clock`, `magnifier`, `gear`, `books`, `book`, `slides`, `button`, `mic`, `spike`, `pin`, `switch`, `sync`, `function`, `wave`, `sun`, `clipboard`, `thought`, `database`, `bolt`, `house`, `chart` |
+| `prop` | `""`, `envelope`, `calendar`, `clock`, `magnifier`, `gear`, `books`, `book`, `slides`, `button`, `mic`, `spike`, `pin`, `switch`, `sync`, `function`, `code`, `wave`, `sun`, `clipboard`, `thought`, `database`, `bolt`, `house`, `chart` |
 
 An avatar is decoration: a kind or a part the dashboard does not know is
 passed over, and one that is not a small dictionary of words is left out with

@@ -100,6 +100,10 @@ const PROPS: Record<string, Prop> = {
     function: (_accent, light) =>
         `<rect x="96" y="98" width="27" height="26" rx="5" fill="${light}" ${S26}/>` +
         `<path d="M116 103 Q109 101 109 108 V117 Q109 121 104 120 M104 109 H115" fill="none" ${S26}/>`,
+    code: accent =>
+        `<rect x="95" y="98" width="30" height="26" rx="4" fill="${INK}" ${S26}/>` +
+        `<rect x="95" y="98" width="30" height="5" rx="2" fill="${accent}"/>` +
+        `<path d="M103.5 106.5 L99 111 L103.5 116.5 M116.5 105.5 L121 111 L116.5 116.5 M112.5 103.5 L107.5 118.5" fill="none" stroke="${SKIN}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>`,
     wave: accent =>
         `<rect x="95" y="99" width="30" height="25" rx="4" fill="${SKIN}" ${S26}/>` +
         `<path d="M99 112 Q102 103 105 112 T111 112 T117 112 T121 110" fill="none" stroke="${accent}" stroke-width="2.6" stroke-linecap="round"/>` +

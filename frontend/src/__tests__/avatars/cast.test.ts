@@ -39,6 +39,7 @@ describe("the character an agent gets", () => {
             "rule",
             "scheduled",
             "function",
+            "dynamic",
             "catalog",
             "gmail-agent",
             "google-calendar-agent",
@@ -72,6 +73,16 @@ describe("the character an agent gets", () => {
         const looks = names.map(name => lookFor(name, { kind: "function" }, "running"));
         expect(looks.every(look => look.prop === "function")).toBe(true);
         expect(new Set(looks.map(look => JSON.stringify(look))).size).toBeGreaterThan(2);
+    });
+
+    it("gives a generated agent a screen of code, and the rest from its name", () => {
+        const looks = ["reminder-bot", "translator", "stock-tracker"].map(name => [
+            lookFor(name, { kind: "dynamic" }, "running"),
+            lookFor(name, undefined, "running"),
+        ]);
+        for (const [generated, unnamed] of looks) {
+            expect(generated).toEqual({ ...unnamed, prop: "code" });
+        }
     });
 
     it("takes the parts a spawn asks for, each only when it is one there is", () => {

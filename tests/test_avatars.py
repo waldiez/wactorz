@@ -17,6 +17,7 @@ import pytest
 from aiohttp import web
 
 from wactorz.agents.catalog_agent import _build_catalog
+from wactorz.agents.dynamic.agent import DynamicAgent
 from wactorz.agents.function_agent import FunctionAgent
 from wactorz.agents.rule_agent import RuleAgent
 from wactorz.core.actor import Actor
@@ -126,12 +127,19 @@ class TestWhatAnActorWears:
     def test_the_shipped_agents_name_their_characters(self) -> None:
         assert RuleAgent.AVATAR_KIND == "rule"
         assert FunctionAgent.AVATAR_KIND == "function"
+        assert DynamicAgent.AVATAR_KIND == "dynamic"
 
     def test_an_agent_on_a_node_wears_what_its_spawn_gave(self, tmp_path: Path) -> None:
         runner = NodeRunner("localhost", 1883, "rpi", state_dir=str(tmp_path))
         agent = NodeAgent({"name": "edge", "code": "", "avatar": {"kind": "flic"}}, runner)
 
         assert agent._build_heartbeat()["avatar"] == {"kind": "flic"}
+
+    def test_a_generated_agent_on_a_node_is_drawn_as_one(self, tmp_path: Path) -> None:
+        runner = NodeRunner("localhost", 1883, "rpi", state_dir=str(tmp_path))
+        agent = NodeAgent({"name": "edge", "code": ""}, runner)
+
+        assert agent._build_heartbeat()["avatar"] == {"kind": "dynamic"}
 
 
 class TestTheCatalogue:

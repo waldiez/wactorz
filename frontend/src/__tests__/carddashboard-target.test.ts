@@ -64,6 +64,38 @@ afterEach(() => {
     cd?.destroy();
 });
 
+it("reads introductions once per batch of arrivals and never when switching to a stale agent", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async input => {
+        const path = String(input);
+        if (path.endsWith("/api/introductions")) {
+            return new Response(JSON.stringify({ weather: "I give local forecasts." }));
+        }
+        if (/\/api\/actors\/[^/]+$/.test(path)) {
+            return new Response(null, { status: 404 });
+        }
+        return new Response("[]");
+    });
+    try {
+        open([agent("main"), agent("weather", { node: "edge" }), agent("stale")]);
+        goTo("chat", "weather");
+        await vi.waitFor(() => expect(document.body.textContent).toContain("I give local forecasts."));
+
+        pick("stale");
+        expect(document.body.textContent).toContain("Send me a message to get started.");
+        store.removeAgent("stale");
+        await settled();
+        emit("af-agents-settled", { reason: "reset" });
+        pick("weather");
+        expect(document.body.textContent).toContain("I give local forecasts.");
+
+        const paths = fetch.mock.calls.map(([input]) => String(input));
+        expect(paths.filter(path => path.endsWith("/api/introductions"))).toHaveLength(1);
+        expect(paths.filter(path => /\/api\/actors\/[^/]+$/.test(path))).toEqual([]);
+    } finally {
+        fetch.mockRestore();
+    }
+});
+
 describe("the chat-target dropdown never shows blank", () => {
     // If the target matches no option -- main absent, or an agent that cannot
     // be messaged -- the control would come up empty, so it shows a messageable

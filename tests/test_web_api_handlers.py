@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from aiohttp import web
@@ -560,6 +561,7 @@ class TestReads:
         assert listed == one
         assert (listed["name"], listed["costUsd"]) == ("cam", 1.0)
         assert (await client.get("/api/actors/zz")).status == 404
+        assert await (await client.get("/api/introductions")).json() == {}
 
     async def test_a_deleted_actor_is_left_out_of_the_list(
         self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
@@ -574,7 +576,7 @@ class TestReads:
         assert [a["name"] for a in listed] == ["weather"]
         assert listed[0]["messagesProcessed"] == 5
 
-    async def test_actor_details_supply_an_introduction_without_chat_history(
+    async def test_introductions_cover_saved_agents_and_live_manifests(
         self,
         client: TestClient[web.Request, web.Application],
         monkeypatch: pytest.MonkeyPatch,
@@ -594,18 +596,44 @@ class TestReads:
             "description": "I suggest article titles.",
             "examples": ["Suggest a title for a garden article."],
         }
-        saved = SpawnRegistry.from_ids({agent["actor_id"]: agent for agent in (weather, helper)})
-        main = SimpleNamespace(_get_spawn_registry=lambda: saved)
-        monkeypatch.setattr(api_actors, "find_main_actor", lambda _: main)
-        monkeypatch.setattr(
-            runtime, "registry", SimpleNamespace(get=lambda _: None, find_by_name=lambda _: catalog)
+        deleted = {
+            "actor_id": derive_actor_id("deleted"),
+            "name": "deleted",
+            "description": "A deleted agent.",
+        }
+        saved = SpawnRegistry.from_ids(
+            {agent["actor_id"]: agent for agent in (weather, helper, deleted)}
         )
+        main = SimpleNamespace(_get_spawn_registry=Mock(return_value=saved))
+        monkeypatch.setattr(api_actors, "find_main_actor", lambda _: main)
+        live = SimpleNamespace(
+            actor_id="live", _published_manifest={"description": "I report from a live manifest."}
+        )
+        silent = SimpleNamespace(actor_id="silent")
+        actors = {actor.actor_id: actor for actor in (live, silent)}
+        monkeypatch.setattr(
+            runtime,
+            "registry",
+            SimpleNamespace(
+                get=actors.get, all_actors=actors.values, find_by_name=lambda _: catalog
+            ),
+        )
+        runtime.mark_deleted(deleted["actor_id"])
+        reply = await client.get("/api/introductions")
+        assert reply.status == 200
+        introductions = await reply.json()
+        main._get_spawn_registry.assert_called_once_with()
+
         for agent in (weather, helper):
             runtime.state["agents"][agent["actor_id"]] = {"name": agent["name"], "state": "running"}
-
         weather_details = await (await client.get(f"/api/actors/{weather['actor_id']}")).json()
         helper_details = await (await client.get(f"/api/actors/{helper['actor_id']}")).json()
 
+        assert introductions == {
+            weather["actor_id"]: weather_details["introduction"],
+            helper["actor_id"]: helper_details["introduction"],
+            "live": "I report from a live manifest.",
+        }
         assert "Open-Meteo" in weather_details["introduction"]
         assert "What's the weather in Athens?" in weather_details["introduction"]
         assert (

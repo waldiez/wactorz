@@ -7,6 +7,7 @@
  * host only for the shared root element, the agents (read-only), and view switching.
  */
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
+import type { AgentChanges } from "../../agents/AgentStore";
 import type { View } from "../shell/types";
 import { canOpenThread, messageableNames } from "../overview/agentState";
 import { renderChatSidebar } from "./chatSidebar";
@@ -28,7 +29,8 @@ import { ChatAnswers } from "./chatAnswers";
 import { ChatStreamUI } from "./chatStreaming";
 import { streamKey } from "../../io/agentStreams";
 import { postOrWarn } from "../shell/mutate";
-import { apiUrl, requestJson } from "../../io/api";
+import { apiUrl } from "../../io/api";
+import { readIntroductions } from "../../io/introductionsApi";
 import { toast } from "../ToastManager";
 import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attachTray";
 import { emit, Listeners } from "../../events";
@@ -78,6 +80,7 @@ export class DashboardChat {
     /** Every message the chat holds; nothing else writes them. */
     private _log = new ChatLog();
     private _introductions = new Map<string, string>();
+    private _introductionRequest = 0;
     /** Getting what the person says to the agent they address. */
     private _sending = new ChatSending({
         log: this._log,
@@ -198,6 +201,7 @@ export class DashboardChat {
 
     /** Let everything go (the dashboard goes). */
     destroy(): void {
+        this._introductionRequest++;
         this.unwire();
         this._barListeners.off();
     }
@@ -205,15 +209,43 @@ export class DashboardChat {
     /** Drop all chat state (a full reset / wipe). */
     clearAll(): void {
         this._log.clear();
+        this._introductionRequest++;
         this._introductions.clear();
         this._sending.turns.clear();
         this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
     }
 
-    /** Forget that the agent `id`'s history was loaded (so it re-fetches if re-added). */
-    forgetHistory(id: string): void {
-        this._log.forgetHistory(id);
-        this._introductions.delete(id);
+    /** Forget departed agents and refresh introductions once for a batch of arrivals. */
+    agentsChanged({ added, removed }: Pick<AgentChanges, "added" | "removed">): void {
+        for (const id of removed.keys()) {
+            this._log.forgetHistory(id);
+            this._introductions.delete(id);
+        }
+        if (added.size) {
+            void this._refreshIntroductions();
+        }
+    }
+
+    private async _refreshIntroductions(): Promise<void> {
+        const request = ++this._introductionRequest;
+        const introductions = await readIntroductions();
+        if (request === this._introductionRequest && introductions) {
+            this.setIntroductions(introductions);
+        }
+    }
+
+    /** Replace introductions with the server's latest snapshot for agents on the page. */
+    setIntroductions(introductions: Readonly<Record<string, string>>): void {
+        const before = this._introductions.get(this.chatTarget);
+        this._introductions.clear();
+        for (const [id, text] of Object.entries(introductions)) {
+            if (typeof text === "string" && this.host.agents.has(id)) {
+                this._introductions.set(id, text);
+            }
+        }
+        if (this.host.getView() === "chat" && before !== this._introductions.get(this.chatTarget)) {
+            this.renderChatThread();
+        }
     }
 
     /** Build the chat view element (sidebar + pane); renders run again in afterMount once attached. */
@@ -400,7 +432,6 @@ export class DashboardChat {
     /** Fetch and merge the persisted chat history of the agent `id` once (kept by
      *  id, since two agents may share a name; subsequent calls no-op). */
     async loadHistory(id: string): Promise<void> {
-        void this._loadIntroduction(id);
         // No target chosen yet — there is no conversation to fetch.
         if (!id || this._log.historyLoaded(id)) {
             return;
@@ -413,22 +444,6 @@ export class DashboardChat {
         }
         this._log.addHistory(id, incoming);
         if (incoming.length) {
-            this.renderChatThread();
-        }
-    }
-
-    private async _loadIntroduction(id: string): Promise<void> {
-        if (!id || this._introductions.has(id)) {
-            return;
-        }
-        const reply = await requestJson<{ introduction?: string }>(
-            apiUrl(`/api/actors/${encodeURIComponent(id)}`),
-        );
-        if (!reply.ok || typeof reply.value?.introduction !== "string" || !this.host.agents.has(id)) {
-            return;
-        }
-        this._introductions.set(id, reply.value.introduction);
-        if (id === this.chatTarget) {
             this.renderChatThread();
         }
     }

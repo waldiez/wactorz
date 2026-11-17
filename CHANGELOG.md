@@ -17,6 +17,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`GET /api/actors/{id}` answers for an agent that has just started.** In the seconds between an agent being registered and its first heartbeat, the route answered `404` for it, though `GET /api/actors` already listed it as starting. A chat opened on such an agent, right after a start or a restart, logged the error in the browser and showed no introduction until the thread was opened again. The route now answers with the agent as starting, and its introduction.
+
 - **`python -m wactorz.broker_certificates` no longer warns that the module is already loaded**, which made it fail under `python -W error`. The server's own use of the broker files now lives in a module of its own, so the command compose and the add-on run before the broker starts is loaded only when it runs.
 
 - **On Windows, Ctrl-Break stops Wactorz the way Ctrl-C does**, stopping the agents and saving their state, instead of ending the process on the spot. Unlike Ctrl-C, which reaches every program on the console, Ctrl-Break can be sent to Wactorz alone, so a supervisor or script on Windows can now ask it to shut down cleanly. This covers `wactorz`, not yet `wactorz-node`. The end-to-end suite (`make e2e`) uses it, and now runs on Windows.

@@ -254,7 +254,7 @@ async def actors_handler(request: web.Request) -> Response:
 async def actor_handler(request: web.Request) -> Response:
     """Return a single actor's card payload."""
     actor_id = request.match_info["actor_id"]
-    ag = runtime.state["agents"].get(actor_id)
+    ag = runtime.state["agents"].get(actor_id) or _not_heard_from_yet(actor_id)
     if ag is None:
         return web.json_response({"error": "actor not found"}, status=404)
     payload = _actor_payload(ag)
@@ -262,6 +262,25 @@ async def actor_handler(request: web.Request) -> Response:
     if introduction:
         payload["introduction"] = introduction
     return web.json_response(payload)
+
+
+def _not_heard_from_yet(actor_id: str) -> dict[str, Any] | None:
+    """What is known of an agent of this process that has reported nothing yet, or None.
+
+    An agent is registered before its first heartbeat opens its entry. The
+    list of actors shows it from then on, as starting; asked for by its id it
+    is the same agent, not a missing one.
+    """
+    actor = runtime.registry.get(actor_id) if runtime.registry is not None else None
+    if actor is None or runtime.is_deleted(actor_id):
+        return None
+    return {
+        "agent_id": actor.actor_id,
+        "name": actor.name,
+        "state": events.STARTING,
+        "protected": bool(getattr(actor, "protected", False)),
+        "essential": bool(getattr(actor, "essential", False)),
+    }
 
 
 async def _actor_introduction(actor_id: str) -> str:

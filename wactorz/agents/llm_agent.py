@@ -55,6 +55,8 @@ class LLMAgent(Actor):
     Maintains conversation history and supports tool use.
     """
 
+    AVATAR_KIND = "llm"
+
     def __init__(
         self,
         llm_provider: LLMProvider | None = None,

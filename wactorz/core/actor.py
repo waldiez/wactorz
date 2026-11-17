@@ -28,6 +28,7 @@ from ..monitoring.agent_metrics import RecentDurations
 from . import models, topic_bus
 from .artifacts import ArtifactError
 from .atomic_io import quarantine_unreadable, write_bytes
+from .avatars import Avatar
 from .cancellation import cancel_all_until_done
 from .heartbeats import AgentHeartbeat
 from .identity import derive_actor_id
@@ -518,13 +519,26 @@ class Actor(ABC):
     Actors are fully async and communicate only through messages.
     """
 
+    #: Which of the dashboard's ready-made characters stands for agents of this
+    #: class; empty for a character drawn from the agent's name.
+    AVATAR_KIND: str = ""
+
     def __init__(
         self,
         actor_id: str | None = None,
         name: str | None = None,
         persistence_dir: str | None = None,
         mailbox_size: int = 1000,
+        avatar: Avatar | None = None,
     ) -> None:
+        #: The character the dashboard draws for this actor, carried in every
+        #: heartbeat: the one a spawn asked for, else this class's kind, else
+        #: nothing, and the dashboard draws one from the name.
+        self.avatar: Avatar = (
+            dict(avatar)
+            if avatar is not None
+            else ({"kind": self.AVATAR_KIND} if self.AVATAR_KIND else {})
+        )
         if actor_id:
             self.actor_id = actor_id
         elif name:
@@ -1077,6 +1091,7 @@ class Actor(ABC):
             "protected": self.protected,
             "essential": self.essential,
             "node": self._node,
+            "avatar": self.avatar,
         }
 
     def _build_metrics(self) -> dict[str, Any]:

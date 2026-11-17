@@ -28,6 +28,7 @@ function makeHost(over: Partial<Host> = {}): Host {
         thread: () => document.createElement("div"),
         scrollThread: vi.fn(),
         commit: vi.fn(),
+        senderAvatar: () => document.createElement("span"),
         ...over,
     };
 }

@@ -34,6 +34,7 @@ import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attac
 import { emit, Listeners } from "../../events";
 import { ChatSending } from "./chatSending";
 import { ChatTarget } from "./chatTarget";
+import { senderAvatars } from "./chatAvatars";
 
 /** What the chat controller needs from its host (CardDashboard). */
 export interface ChatHost {
@@ -114,7 +115,10 @@ export class DashboardChat {
         commit: msg => {
             this._log.add(msg);
         },
+        senderAvatar: from => this._avatarOf(from),
     });
+    /** The avatar before each agent's name in a thread. */
+    private _avatarOf = senderAvatars(() => this.host.agents.values());
     /**
      * Mobile master–detail: the pane is open unless the user asked for the list.
      * Derived in `_syncPaneVisibility` rather than toggled at each call site —
@@ -387,7 +391,7 @@ export class DashboardChat {
             return;
         }
         thread.querySelector(".af-chat-empty")?.remove();
-        thread.appendChild(buildChatMessageEl(msg));
+        thread.appendChild(buildChatMessageEl(msg, this._avatarOf));
     }
 
     private _scrollThread(): void {

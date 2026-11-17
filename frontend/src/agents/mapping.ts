@@ -27,6 +27,7 @@ import type { StatePatchAgent, LogFeedItem } from "../types/ws";
 import type { FeedItem } from "../types/feed";
 import type { ChatHandler } from "../io/WSClient";
 import { uid } from "../ids";
+import { avatarField } from "./avatarSpec";
 import { nameFromWid, resolveAgentName } from "./naming";
 import { parseAgentState } from "./states";
 
@@ -52,6 +53,7 @@ export function toAgentInfo(a: StatePatchAgent): AgentInfo {
         state: parseAgentState(a.state ?? a.status),
         protected: a.protected ?? false,
         essential: a.essential ?? false,
+        ...avatarField(a.avatar),
     };
     if (a.messages_processed != null) {
         update.messagesProcessed = a.messages_processed;
@@ -91,7 +93,15 @@ export function reconcileActorList(actors: AgentInfo[], isDeleted: (id: string) 
     // like every other path's, or a "failed" there would show as itself, green.
     return actors
         .filter(a => !isDeleted(a.id))
-        .map(a => ({ ...a, name: resolveAgentName(a.name, a.id), state: parseAgentState(a.state) }));
+        .map(a => {
+            const { avatar: said, ...rest } = a;
+            return {
+                ...rest,
+                name: resolveAgentName(a.name, a.id),
+                state: parseAgentState(a.state),
+                ...avatarField(said),
+            };
+        });
 }
 
 /**

@@ -120,10 +120,7 @@ export class CardDashboard {
         this.root = this.buildRoot();
         this._heartbeats = new Heartbeats(this.root);
         this._moments = new CardMoments(this.root, this._heartbeats);
-        this._inboxView = new InboxView(this._inbox, question => {
-            const agent = store.get(question.agent_id);
-            return agent ? store.label(agent) : question.agent;
-        });
+        this._inboxView = new InboxView(this._inbox, store);
         this._unsubscribeInbox = this._inbox.subscribe(state =>
             renderInboxCount(this.root, state.open.length),
         );

@@ -47,6 +47,8 @@ export interface WiringAgent {
     reads_fields: string[];
     /** The models it serves. */
     models: WiringModel[];
+    /** What it says of the character drawn for it; checked where it is read. */
+    avatar?: unknown;
     /** What it has asked a person; null when nothing. */
     asks: WiringAsks | null;
 }

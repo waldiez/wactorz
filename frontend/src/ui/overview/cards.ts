@@ -9,6 +9,7 @@
 import type { AgentInfo } from "../../types/agent";
 import { stateColor, stateLabel, relTime, canDirectMessage } from "./agentState";
 import type { CostLimitInfo } from "../../io/costApi";
+import { avatar, moodOf, paintAvatar, setAvatarMood, type Mood } from "../avatars";
 import { button, el, labelled, listItem, testId } from "../dom";
 import { lastValue, type Point } from "../charts";
 import { buildSparkline } from "./trend";
@@ -293,7 +294,49 @@ export function paintCard(card: HTMLElement, agent: AgentInfo, label: string): v
     if (name) {
         name.textContent = label;
     }
+    const face = card.querySelector<HTMLElement>(".af-avatar");
+    if (face) {
+        paintAvatar(face, agent, moodOf(agent.state, dot !== null && isLate(dot)));
+    }
     setCardNode(card, agent);
+}
+
+/** Whether a card's dot says its agent has not been heard from lately. */
+function isLate(dot: HTMLElement): boolean {
+    return dot.classList.contains("af-card-quiet") || dot.classList.contains("af-card-missing");
+}
+
+/** The moods a card's own state names; any other state is an agent that runs. */
+const CARD_MOODS: readonly Mood[] = ["initializing", "stopped", "failed"];
+
+/**
+ * Put a card's avatar in the mood the card shows: its state, or late when its
+ * dot says the agent has gone quiet. For when time passes and nothing else of
+ * the agent has changed.
+ */
+export function paintCardMood(card: HTMLElement): void {
+    const face = card.querySelector<HTMLElement>(".af-avatar");
+    const dot = card.querySelector<HTMLElement>(".af-card-state-dot");
+    if (!face || !dot) {
+        return;
+    }
+    const state = CARD_MOODS.find(mood => mood === card.dataset["state"]);
+    setAvatarMood(face, state ?? (isLate(dot) ? "late" : "running"));
+}
+
+/**
+ * The top of a card: the avatar with the dot, and the lines beside them. They
+ * sit in wrappers that take no part in the layout unless avatars are shown on
+ * cards: without them the dot and the lines are the card's own rows.
+ */
+function cardHead(face: HTMLElement, dot: HTMLElement, lines: HTMLElement[]): HTMLElement {
+    const faced = el("span", "af-card-face");
+    faced.append(face, dot);
+    const who = el("div", "af-card-who");
+    who.append(...lines);
+    const head = el("div", "af-card-head");
+    head.append(faced, who);
+    return head;
 }
 
 /** The dot + name + node + state label + meta line (everything above the controls). */
@@ -322,7 +365,7 @@ function appendCardHeader(card: HTMLElement, agent: AgentInfo, hbMs: number, lab
         meta.appendChild(el("span", "", `$${cost.toFixed(4)}`));
     }
 
-    card.append(dot, name, node, stateLbl, meta);
+    card.append(cardHead(avatar(agent, moodOf(agent.state), "card"), dot, [name, node, stateLbl]), meta);
     setCardNode(card, agent);
     appendTokenLine(card, agent);
 }

@@ -16,6 +16,7 @@ import { AgentStreams, streamKey } from "../../io/agentStreams";
 import { stripActionBlocks } from "../../agents/actionBlocks";
 import { renderAgentMarkdown } from "./chatThread";
 import { el, live, testId } from "../dom";
+import { showSender } from "./chatAvatars";
 
 /** Everything the stream UI needs from the chat controller. */
 export interface StreamHost {
@@ -31,14 +32,22 @@ export interface StreamHost {
     scrollThread(): void;
     /** Record a completed stream as a chat message. */
     commit(msg: ChatMessage): void;
+    /** The avatar shown before the name of the agent called `from`. */
+    senderAvatar(from: string): HTMLElement;
 }
 
 /** The live streaming bubble (plain text while chunks accumulate; swapped for
  *  rendered markdown on stream-end). Returns the row and its text body. */
-function buildStreamRow(from: string, initialText = ""): { row: HTMLElement; body: HTMLElement } {
+function buildStreamRow(
+    from: string,
+    face: HTMLElement,
+    initialText = "",
+): { row: HTMLElement; body: HTMLElement } {
     const row = testId(el("div", "af-chat-msg af-chat-msg-agent"), "agent-message");
     const body = testId(el("div", "af-chat-msg-bubble", initialText), "message-body");
-    row.append(testId(el("div", "af-chat-msg-from", from), "message-from"), body);
+    const sender = testId(el("div", "af-chat-msg-from", from), "message-from");
+    showSender(sender, face);
+    row.append(sender, body);
     return { row, body };
 }
 
@@ -48,8 +57,8 @@ function buildStreamRow(from: string, initialText = ""): { row: HTMLElement; bod
  *  buffer behind it, so anything that rebuilds from the buffers would drop it,
  *  and a turn that ends without a single token would leave it on screen.
  */
-function buildWaitingRow(from: string): HTMLElement {
-    const { row, body } = buildStreamRow(from);
+function buildWaitingRow(from: string, face: HTMLElement): HTMLElement {
+    const { row, body } = buildStreamRow(from, face);
     body.className = "af-chat-msg-bubble af-chat-waiting";
     // Announced once rather than per dot, and the dots themselves are decorative.
     testId(live(body, "status", `${from} is working`), "message-waiting");
@@ -156,7 +165,7 @@ export class ChatStreamUI {
         if (!thread) {
             return;
         }
-        this._waitingRow = buildWaitingRow(this._awaitingName);
+        this._waitingRow = buildWaitingRow(this._awaitingName, this.host.senderAvatar(this._awaitingName));
         thread.appendChild(this._waitingRow);
         this.host.scrollThread();
     }
@@ -280,7 +289,8 @@ export class ChatStreamUI {
     }
 
     private _buildRow(thread: HTMLElement, from: string, initialText = ""): void {
-        const { row, body } = buildStreamRow(this._senders.get(from) ?? from, initialText);
+        const sender = this._senders.get(from) ?? from;
+        const { row, body } = buildStreamRow(sender, this.host.senderAvatar(sender), initialText);
         thread.appendChild(row);
         this._row = row;
         this._body = body;

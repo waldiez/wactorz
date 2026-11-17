@@ -42,6 +42,9 @@ import {
     type Placed,
     type Routed,
 } from "../../wiring/layout";
+import { readAvatarSpec } from "../../agents/avatarSpec";
+import type { WiringAgent } from "../../types/wiring";
+import { avatar } from "../avatars";
 import { el, pressed } from "../dom";
 import { movable, wasDragged } from "./wiringDrag";
 import type { Shown } from "./wiringZoom";
@@ -103,6 +106,15 @@ export function joinedTo(routed: readonly Routed[], selected: string): Set<strin
     return joined;
 }
 
+/**
+ * An agent's avatar, for its box and its details. The wiring says what an
+ * agent publishes and reads, not how it is doing, so the character is its
+ * awake one.
+ */
+export function agentFace(agent: WiringAgent): HTMLElement {
+    return avatar({ name: agent.name, avatar: readAvatarSpec(agent.avatar) }, "running", "small");
+}
+
 function nodeButton(node: GraphNode, host: GraphHost): HTMLButtonElement {
     const box = el("button", nodeClasses(node));
     box.type = "button";
@@ -117,7 +129,7 @@ function nodeButton(node: GraphNode, host: GraphHost): HTMLButtonElement {
     if (kind) {
         box.append(spoken(`${kind} `));
     }
-    box.append(el("span", "af-wire-node-name", first ?? ""));
+    box.append(...(node.agent ? [agentFace(node.agent)] : []), el("span", "af-wire-node-name", first ?? ""));
     for (const line of rest) {
         const problem = line.startsWith("missing: ") ? " problem" : "";
         box.append(spoken(", "), el("span", `af-wire-node-line${problem}`, line));

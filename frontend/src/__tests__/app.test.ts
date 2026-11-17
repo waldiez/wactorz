@@ -122,7 +122,7 @@ const fakeLedger = async (apiBase: string) =>
               listed: { questions: [], askedAt: 0 },
           }) as Awaited<ReturnType<AppParts["readLedger"]>>;
 
-vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn(), close: vi.fn() } }));
+vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn(), close: vi.fn(), facesFrom: vi.fn() } }));
 
 const fakeParts = (): Partial<AppParts> =>
     ({

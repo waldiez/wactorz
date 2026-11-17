@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Every agent has an avatar.** A small character stands for each agent on its overview card, in the chat's agent list, header and before each reply, on its Wiring box and details, on its notifications and in the Inbox. Its eyes show how the agent is doing: awake, starting, not heard from lately, stopped, or failed. The shipped agents and the catalogue's recipes each have a character of their own; any other agent gets one made up from its name, the same after every restart. Settings → Avatars chooses, for this browser, whether they show at all and where, the disc behind them (purple by default, three more, any colour, or none), and whether the state shows as a dot on the avatar's corner, as the ring round the disc, or both; switched off, a place looks as it did. Overview cards now put the agent's name, node and state beside the avatar. For code that uses Wactorz: a class names a ready-made character with `AVATAR_KIND`, a spawn config may carry an `avatar` of a kind and parts, and the heartbeat, `GET /api/actors` and `GET /api/wiring` carry it as `avatar` (the library guide's *The agent's avatar*).
+
 - **Every agent chat opens with an introduction.** The introduction sits above the conversation, with a description and examples when available. It is visible before the first message and after a restart.
 
 ### Changed

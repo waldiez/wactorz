@@ -34,6 +34,7 @@ import type {
 import { readingsFrom } from "./nodeReadings";
 import { NODE_EVICT_MS, STALE_MS } from "./liveness";
 import { addressOf } from "./addresses";
+import { sameAvatar } from "./avatarSpec";
 import { isStandInName } from "./naming";
 
 /** A moment worth showing on an agent's card, as it happened. */
@@ -62,7 +63,12 @@ export type AgentListener = (changes: AgentChanges) => void;
 
 /** Whether a heartbeat changed something a view shows, beyond when it came. */
 function visiblyChanged(before: AgentInfo, after: AgentInfo): boolean {
-    return before.state !== after.state || before.node !== after.node || before.task !== after.task;
+    return (
+        before.state !== after.state ||
+        before.node !== after.node ||
+        before.task !== after.task ||
+        !sameAvatar(before.avatar, after.avatar)
+    );
 }
 
 /** Whether a listed node says something about itself the page does not hold yet. */
@@ -227,6 +233,7 @@ export class AgentStore {
             ...(payload.cpu !== undefined && { cpu: payload.cpu }),
             ...(payload.memory_mb !== undefined && { mem: payload.memory_mb }),
             ...(payload.task !== undefined && { task: payload.task }),
+            ...(payload.avatar !== undefined && { avatar: payload.avatar }),
         };
         this._lastHeard.set(payload.agentId, Date.now());
         this._put(next, existing, existing === undefined || visiblyChanged(existing, next));

@@ -3,7 +3,7 @@
 
 The graph is `wactorz.core.wiring`'s, read from main's topic registry at the
 time of asking, with where each served model's pointers stand, what each
-agent has asked a person, and which topics the dashboard itself reads: what
+agent has asked a person, each agent's avatar, and which topics the dashboard itself reads: what
 this server relays to browsers (`wactorz.web.relay`), its feed's and its
 panels' topics among them. The registry lives in main, so a monitor with no
 actor system in its process has nothing to show and says so.
@@ -67,7 +67,7 @@ async def wiring_handler(_request: web.Request) -> web.Response:
         asked=asked_by(),
         dashboard=relay.is_relayed,
     )
-    return web.json_response(displayed(graph), dumps=_dumps)
+    return web.json_response(dressed(displayed(graph)), dumps=_dumps)
 
 
 def displayed(graph: dict[str, Any]) -> dict[str, Any]:
@@ -84,6 +84,25 @@ def displayed(graph: dict[str, Any]) -> dict[str, Any]:
             entry["topic"] = display_topic(entry["topic"])
     for source in graph.get("sources", []):
         source["topics"] = [display_topic(t) for t in source.get("topics", [])]
+    return graph
+
+
+def dressed(graph: dict[str, Any]) -> dict[str, Any]:
+    """``graph`` with each agent's avatar.
+
+    The registry the graph is read from knows what an agent publishes and
+    reads, not what it looks like. An agent of this process says so itself;
+    one on a node said so in its last heartbeat, which this server keeps by
+    the agent's id. An agent not heard from has none, and the page draws one
+    from its name.
+    """
+    heard = runtime.state.get("agents") or {}
+    for agent in graph.get("agents", []):
+        actor = runtime.registry.get(agent.get("id")) if runtime.registry is not None else None
+        avatar = (
+            actor.avatar if actor is not None else (heard.get(agent.get("id")) or {}).get("avatar")
+        )
+        agent["avatar"] = avatar if isinstance(avatar, dict) else {}
     return graph
 
 

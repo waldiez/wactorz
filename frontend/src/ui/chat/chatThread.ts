@@ -16,6 +16,7 @@ import { timeLabel } from "../../time";
 import { button, clickable, el, externalLink, pressed, testId } from "../dom";
 import { emit } from "../../events";
 import { formatRoute } from "../../router";
+import { showSender, type SenderAvatar } from "./chatAvatars";
 
 /** Where a url is about to be used. The allow-list differs by destination, and
  *  a single list for both is what let `data:` reach an anchor href. */
@@ -175,8 +176,11 @@ function buildMsgBubble(msg: ChatMessage, isUser: boolean): HTMLElement {
 /** The test id of a message row, by whose message it is. */
 const MESSAGE_ROW = { user: "user-message", agent: "agent-message" } as const;
 
-/** Build a detached chat message row (user vs agent styling, optional time). */
-export function buildChatMessageEl(msg: ChatMessage): HTMLElement {
+/**
+ * Build a detached chat message row (user vs agent styling, optional time).
+ * `avatarOf` gives the avatar shown before an agent's name.
+ */
+export function buildChatMessageEl(msg: ChatMessage, avatarOf?: SenderAvatar): HTMLElement {
     const isUser = msg.from === "user";
     const surfaceLabel = msg.source === "voice" ? msg.surfaceLabel?.trim() || msg.surface?.trim() || "" : "";
 
@@ -189,6 +193,9 @@ export function buildChatMessageEl(msg: ChatMessage): HTMLElement {
         from.textContent = `you${via} · ${timeLabel(msg.timestampMs)}`;
     } else {
         from.textContent = surfaceLabel && msg.from === msg.surface ? surfaceLabel : msg.from;
+        if (avatarOf) {
+            showSender(from, avatarOf(msg.from));
+        }
     }
 
     row.append(from, buildMsgBubble(msg, isUser));

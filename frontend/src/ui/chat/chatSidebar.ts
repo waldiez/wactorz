@@ -10,15 +10,23 @@
  */
 import type { AgentInfo } from "../../types/agent";
 import { canDirectMessage, canOpenThread, stateColor } from "../overview/agentState";
+import { avatar, moodOf, paintAvatar } from "../avatars";
 import { button, el } from "../dom";
 
-/** Create a sidebar row button that selects the agent `id` on click. */
-function createRow(id: string, onSelect: (id: string) => void): HTMLButtonElement {
+/**
+ * Create a sidebar row button that selects `agent` on click. Its avatar and
+ * its dot share a wrapper that takes no part in the layout unless the chat
+ * shows avatars, where the dot then sits on the avatar's corner.
+ */
+function createRow(agent: AgentInfo, onSelect: (id: string) => void): HTMLButtonElement {
+    const id = agent.id;
     const row = button();
     row.dataset["id"] = id;
     const lock = el("span", "af-chat-agent-lock");
     lock.setAttribute("aria-hidden", "true");
-    row.append(el("span", "af-chat-agent-dot"), el("span", "af-chat-agent-name"), lock);
+    const face = el("span", "af-chat-agent-face");
+    face.append(avatar(agent, moodOf(agent.state), "small"), el("span", "af-chat-agent-dot"));
+    row.append(face, el("span", "af-chat-agent-name"), lock);
     row.addEventListener("click", () => onSelect(id));
     return row;
 }
@@ -61,6 +69,14 @@ function patchRow(
     }
 }
 
+/** Show on `row` its agent's avatar as the agent is now. */
+function faceRow(row: HTMLElement, agent: AgentInfo): void {
+    const face = row.querySelector<HTMLElement>(".af-avatar");
+    if (face) {
+        paintAvatar(face, agent, moodOf(agent.state));
+    }
+}
+
 /** Show `name` on `row`: an agent's label changes once another takes its name. */
 function nameRow(row: HTMLElement, name: string): void {
     const shown = row.querySelector<HTMLElement>(".af-chat-agent-name");
@@ -93,10 +109,11 @@ export function renderChatSidebar(
     });
 
     sorted.forEach((agent, idx) => {
-        const row = existing.get(agent.id) ?? createRow(agent.id, onSelect);
+        const row = existing.get(agent.id) ?? createRow(agent, onSelect);
         const name = label(agent);
         patchRow(row, agent, name, chatTarget, asking);
         nameRow(row, name);
+        faceRow(row, agent);
         const sibling = list.children[idx];
         if (sibling !== row) {
             list.insertBefore(row, sibling ?? null);

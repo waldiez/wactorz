@@ -87,6 +87,8 @@ class AgentHeartbeat(TypedDict):
     protected: bool
     essential: bool
     node: str | None
+    #: The character the dashboard draws: see `wactorz.core.avatars`.
+    avatar: dict[str, str | int]
 
 
 class DynamicAgentHeartbeat(AgentHeartbeat):

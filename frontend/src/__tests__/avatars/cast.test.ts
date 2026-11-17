@@ -13,6 +13,15 @@ describe("the character an agent gets", () => {
         expect(lookFor("someone-else", { kind: "main" }, "running")).toEqual(main);
     });
 
+    it("draws the manual's agent as a librarian with an open book", () => {
+        expect(lookFor("manual-agent", { kind: "manual-agent" }, "running")).toMatchObject({
+            specs: "square",
+            neck: "bowtie",
+            face: "smile",
+            prop: "book",
+        });
+    });
+
     it("has a ready-made character for every kind the server names", () => {
         // What `Actor.AVATAR_KIND` is set to on the shipped agents, and each dynamic catalogue recipe's name.
         const named = [

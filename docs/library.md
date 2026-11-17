@@ -292,7 +292,7 @@ A spawn config may carry an `avatar` of its own, a kind or parts over one:
 | `face` | `smile`, `blush`, `beard`, `mustache`, `open` |
 | `top` | `""`, `gradcap`, `hardhat`, `tophat`, `captain`, `beanie`, `headset` |
 | `ant` | `0`, `1`, `2`, `"left"`, `"right"` (antennae; a hat hides them) |
-| `prop` | `""`, `envelope`, `calendar`, `clock`, `magnifier`, `gear`, `books`, `slides`, `button`, `mic`, `spike`, `pin`, `switch`, `sync`, `function`, `wave`, `sun`, `clipboard`, `thought`, `database`, `bolt`, `house`, `chart` |
+| `prop` | `""`, `envelope`, `calendar`, `clock`, `magnifier`, `gear`, `books`, `book`, `slides`, `button`, `mic`, `spike`, `pin`, `switch`, `sync`, `function`, `wave`, `sun`, `clipboard`, `thought`, `database`, `bolt`, `house`, `chart` |
 
 An avatar is decoration: a kind or a part the dashboard does not know is
 passed over, and one that is not a small dictionary of words is left out with

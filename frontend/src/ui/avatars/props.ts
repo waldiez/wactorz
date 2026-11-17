@@ -63,6 +63,11 @@ const PROPS: Record<string, Prop> = {
         `<rect x="97" y="108" width="26" height="8" rx="2" fill="${light}" ${S2}/>` +
         `<rect x="95" y="100" width="27" height="8" rx="2" fill="#ef5b6b" ${S2}/>` +
         `<path d="M98 104 H112 M101 112 H115 M98 120 H110" stroke="${SKIN}" stroke-width="1.6" stroke-linecap="round"/>`,
+    book: (accent, light) =>
+        `<path d="M95 104 Q102.5 100 110 104 Q117.5 100 125 104 V123 Q117.5 119 110 123 Q102.5 119 95 123 Z" fill="${SKIN}" ${S26}/>` +
+        `<path d="M110 104 V123" ${stroke(2.2)}/>` +
+        `<path d="M99 108.5 Q102.5 107 106 108.5 M99 113.5 Q102.5 112 106 113.5 M114 108.5 Q117.5 107 121 108.5 M114 113.5 Q117.5 112 121 113.5" fill="none" stroke="${accent}" stroke-width="1.8" stroke-linecap="round"/>` +
+        `<path d="M116 100 V107 L118.5 105 L121 107 V101" fill="${light}" ${stroke(1.4)}/>`,
     slides: (accent, light) =>
         `<path d="M100 116 L96 126 M120 116 L124 126 M110 116 V124" ${S26}/>` +
         `<rect x="94" y="96" width="32" height="21" rx="2.5" fill="${SKIN}" ${S26}/>` +

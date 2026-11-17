@@ -228,7 +228,7 @@ export class DashboardChat {
 
     private async _refreshIntroductions(): Promise<void> {
         const request = ++this._introductionRequest;
-        // The reset event and the store batch can describe the same change.
+        // A change to the server's introductions can arrive with the agents themselves.
         await Promise.resolve();
         if (request !== this._introductionRequest || !this.host.agents.size) {
             return;
@@ -632,6 +632,7 @@ export class DashboardChat {
 
     private _wireChatEvents(): void {
         this._answers.wire(this._listeners);
+        this._listeners.on("af-introductions-changed", () => void this._refreshIntroductions());
         this._listeners.on("af-agents-settled", ({ reason }) => {
             if (reason === "reset") {
                 void this._refreshIntroductions();

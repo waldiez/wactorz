@@ -130,6 +130,31 @@ it("refreshes introductions after a wipe or reconnect when the same agent remain
     }
 });
 
+it("updates the open thread when its introduction becomes available", async () => {
+    const introductions: Record<string, string> = {};
+    const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async input =>
+            String(input).endsWith("/api/introductions") ? Response.json(introductions) : Response.json([]),
+        );
+    try {
+        open([agent("weather")]);
+        goTo("chat", "weather");
+        await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/introductions", expect.anything()));
+        expect(document.body.textContent).toContain("Send me a message to get started.");
+
+        introductions["weather"] = "I give local forecasts.";
+        emit("af-introductions-changed");
+        await vi.waitFor(() => expect(document.body.textContent).toContain("I give local forecasts."));
+        expect(paneTitle()).toBe("@weather");
+        expect(fetch.mock.calls.filter(([url]) => String(url).endsWith("/api/introductions"))).toHaveLength(
+            2,
+        );
+    } finally {
+        fetch.mockRestore();
+    }
+});
+
 describe("the chat-target dropdown never shows blank", () => {
     // If the target matches no option -- main absent, or an agent that cannot
     // be messaged -- the control would come up empty, so it shows a messageable

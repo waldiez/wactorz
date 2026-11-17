@@ -14,6 +14,7 @@ from typing import Any
 
 from ..core import outbound
 from ..core.questions import QUESTIONS_LEAF
+from ..core.spawn_introduction import introductions_revision
 from ..core.topics import AGENTS, NODES, SYSTEM, own_topic_parts
 from . import chat, cost, runtime
 from . import questions as question_ledger
@@ -612,6 +613,7 @@ def snapshot(include_totals: bool = True) -> dict[str, Any]:
 
     if not include_totals:
         return {
+            "introductions_revision": introductions_revision(),
             "agents": list(runtime.state["agents"].values()),
             "nodes": list(runtime.state["nodes"].values()),
             "alerts": runtime.state["alerts"][:10],
@@ -671,6 +673,7 @@ def snapshot(include_totals: bool = True) -> dict[str, Any]:
     )
     total_msgs = live_msgs + cost.historical_messages(live_names)
     return {
+        "introductions_revision": introductions_revision(),
         "agents": list(runtime.state["agents"].values()),
         "nodes": list(runtime.state["nodes"].values()),
         "alerts": runtime.state["alerts"][:10],

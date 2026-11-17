@@ -35,6 +35,7 @@ from ...core.packages import (
     allowed_by_env,
     unlisted,
 )
+from ...core.spawn_introduction import mark_introductions_changed
 from ...core.topics import agent_topic, node_topic, topic_name_error
 from ...plugins import MODULE_TYPE, for_target, is_module_config
 from ..catalog_agent import current_recipe_config
@@ -390,6 +391,11 @@ class SpawnService:
             self.host.recall(STOPPED_AGENTS_KEY),
         )
 
+    def _persist_spawn_registry(self, registry: SpawnRegistry) -> None:
+        """Save the registry before telling introduction readers it has changed."""
+        self.host.persist(SPAWN_REGISTRY_KEY, registry.stored_form())
+        mark_introductions_changed()
+
     def _keep_stopped(self, actor_id: str, stopped: bool) -> None:
         """Keep the agent ``actor_id`` as stopped, or as one that should run again.
 
@@ -473,7 +479,7 @@ class SpawnService:
             reg = reg.with_stopped(actor_id, False)
             self.host.persist(STOPPED_AGENTS_KEY, reg.stopped_form())
         reg = reg.with_entry({**without_transient_keys(config), "actor_id": actor_id})
-        self.host.persist(SPAWN_REGISTRY_KEY, reg.stored_form())
+        self._persist_spawn_registry(reg)
         logger.info("[%s] Spawn registry: %s", self.host.name, sorted(reg.names()))
 
     def _remove_from_spawn_registry(
@@ -498,14 +504,14 @@ class SpawnService:
                 )
             return
         reduced = reg.without(entry["actor_id"])
-        self.host.persist(SPAWN_REGISTRY_KEY, reduced.stored_form())
+        self._persist_spawn_registry(reduced)
         if reg.is_stopped(entry["actor_id"]):
             self.host.persist(STOPPED_AGENTS_KEY, reduced.stopped_form())
         logger.info("[%s] Removed %s from spawn registry.", self.host.name, address_of(entry))
 
     def _clear_spawn_registry(self) -> None:
         """Forget every agent main spawned."""
-        self.host.persist(SPAWN_REGISTRY_KEY, {})
+        self._persist_spawn_registry(SpawnRegistry())
         self.host.persist(STOPPED_AGENTS_KEY, [])
 
     def _supervised_names(self) -> set[str]:

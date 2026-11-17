@@ -100,6 +100,7 @@ export type LogFeedHandler = (items: LogFeedItem[]) => void;
 /** Shape of the `state` payload carried by reset / delete / patch frames. */
 interface StatePatch {
     agents?: StatePatchAgent[];
+    introductions_revision?: number;
     total_cost_usd?: number;
     total_messages?: number;
     log_feed?: LogFeedItem[];
@@ -137,6 +138,7 @@ function told(type: unknown, data: Record<string, unknown>): boolean {
 
 export class WSClient {
     private readonly _handlers: { [K in keyof WSEvents]?: Set<WSEvents[K]> } = {};
+    private _introductionsRevision: number | undefined;
     private ws: WebSocket | null = null;
     private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     /** Debounces "dropped" so a brief close/reopen doesn't flip the UI to disconnected. */
@@ -424,6 +426,11 @@ export class WSClient {
             stats.totalMessages = patch.total_messages;
         }
         this._emit("statePatch", patch?.agents ?? [], removedId, stats);
+        const revision = patch?.introductions_revision;
+        if (typeof revision === "number" && revision !== this._introductionsRevision) {
+            this._introductionsRevision = revision;
+            emit("af-introductions-changed");
+        }
         if (patch?.log_feed?.length) {
             this._emit("logFeed", patch.log_feed);
         }

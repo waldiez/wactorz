@@ -56,6 +56,26 @@ beforeEach(() => {
 });
 
 describe("WSClient", () => {
+    it("notifies the page once for each introduction revision", () => {
+        const changed = vi.fn();
+        const stop = listen("af-introductions-changed", changed);
+        const client = new WSClient();
+        client.connect("ws://localhost/ws");
+        try {
+            ws().emit("message", {
+                data: JSON.stringify({ type: "full_snapshot", state: { introductions_revision: 1 } }),
+            });
+            for (const revision of [1, 2, 2]) {
+                ws().emit("message", {
+                    data: JSON.stringify({ type: "patch", state: { introductions_revision: revision } }),
+                });
+            }
+            expect(changed).toHaveBeenCalledTimes(2);
+        } finally {
+            stop();
+            client.disconnect();
+        }
+    });
     it("keeps a first handler when a second subscribes", () => {
         const c = new WSClient();
         const first = vi.fn();

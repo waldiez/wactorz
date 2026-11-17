@@ -16,19 +16,21 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.agents.catalog_agent import CatalogAgent
+from wactorz.agents.main import MainActor
 from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.identity import derive_actor_id
 from wactorz.core.outbound import numbered
 from wactorz.core.persistence import PickleStore, WactorzDB
 from wactorz.core.persistence.stores import install_stores
-from wactorz.web import api_actors, chat, cost, lifecycle, questions, runtime, ws
+from wactorz.core.registry import ActorRegistry
+from wactorz.web import api_actors, chat, cost, events, lifecycle, questions, runtime, ws
 from wactorz.web.app import build_app
 from wactorz.web.lifecycle import Dispatched
 
@@ -640,6 +642,42 @@ class TestReads:
             helper_details["introduction"]
             == "I suggest article titles.\n\nTry:\n- Suggest a title for a garden article."
         )
+
+    async def test_introduction_revision_follows_saved_config_and_manifest_changes(
+        self,
+        client: TestClient[web.Request, web.Application],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        registry = ActorRegistry()
+        main = MainActor(persistence_dir=str(tmp_path))
+        await registry.register(main)
+        monkeypatch.setattr(runtime, "registry", registry)
+        monkeypatch.setattr(main, "_mqtt_publish", AsyncMock())
+        helper_id = derive_actor_id("title-helper")
+        runtime.state["agents"][helper_id] = {
+            "agent_id": helper_id,
+            "name": "title-helper",
+            "state": "running",
+        }
+        before = events.snapshot()["introductions_revision"]
+        assert await (await client.get("/api/introductions")).json() == {}
+
+        main._save_to_spawn_registry({"name": "title-helper", "description": "I suggest titles."})
+        saved = events.snapshot(include_totals=False)["introductions_revision"]
+        assert saved > before
+        assert await (await client.get("/api/introductions")).json() == {
+            helper_id: "I suggest titles."
+        }
+
+        await main._send_manifest({"description": "I coordinate agents."})
+        published = events.snapshot()["introductions_revision"]
+        assert published > saved
+        assert (await (await client.get("/api/introductions")).json())[main.actor_id] == (
+            "I coordinate agents."
+        )
+        await main._send_manifest({"description": "I coordinate agents.", "publishes": ["ticks"]})
+        assert events.snapshot(include_totals=False)["introductions_revision"] == published
 
     async def test_history_from_the_actor_the_database_or_nowhere(
         self,

@@ -84,13 +84,47 @@ it("reads introductions once per batch of arrivals and never when switching to a
         expect(document.body.textContent).toContain("Send me a message to get started.");
         store.removeAgent("stale");
         await settled();
-        emit("af-agents-settled", { reason: "reset" });
+        emit("af-agents-settled", { reason: "deleted" });
         pick("weather");
         expect(document.body.textContent).toContain("I give local forecasts.");
 
         const paths = fetch.mock.calls.map(([input]) => String(input));
         expect(paths.filter(path => path.endsWith("/api/introductions"))).toHaveLength(1);
         expect(paths.filter(path => /\/api\/actors\/[^/]+$/.test(path))).toEqual([]);
+    } finally {
+        fetch.mockRestore();
+    }
+});
+
+it("refreshes introductions after a wipe or reconnect when the same agent remains", async () => {
+    let description = "Original introduction";
+    const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async input =>
+            String(input).endsWith("/api/introductions")
+                ? Response.json({ weather: description })
+                : Response.json([]),
+        );
+    const weather = agent("weather");
+    try {
+        open([weather]);
+        goTo("chat", weather.name);
+        await vi.waitFor(() => expect(document.body.textContent).toContain(description));
+
+        description = "Survived the reset";
+        emit("af-wipe-all", { survivors: [weather.id] });
+        store.clearAll();
+        store.addOrUpdateAgent(weather);
+        emit("af-agents-settled", { reason: "reset" });
+        await vi.waitFor(() => expect(document.body.textContent).toContain(description));
+
+        description = "Refreshed after reconnect";
+        emit("af-socket", { open: false });
+        emit("af-socket", { open: true });
+        await vi.waitFor(() => expect(document.body.textContent).toContain(description));
+        expect(fetch.mock.calls.filter(([url]) => String(url).endsWith("/api/introductions"))).toHaveLength(
+            3,
+        );
     } finally {
         fetch.mockRestore();
     }

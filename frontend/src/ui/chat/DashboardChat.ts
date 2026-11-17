@@ -228,6 +228,11 @@ export class DashboardChat {
 
     private async _refreshIntroductions(): Promise<void> {
         const request = ++this._introductionRequest;
+        // The reset event and the store batch can describe the same change.
+        await Promise.resolve();
+        if (request !== this._introductionRequest || !this.host.agents.size) {
+            return;
+        }
         const introductions = await readIntroductions();
         if (request === this._introductionRequest && introductions) {
             this.setIntroductions(introductions);
@@ -627,6 +632,11 @@ export class DashboardChat {
 
     private _wireChatEvents(): void {
         this._answers.wire(this._listeners);
+        this._listeners.on("af-agents-settled", ({ reason }) => {
+            if (reason === "reset") {
+                void this._refreshIntroductions();
+            }
+        });
         this._listeners.on("af-chat-message", detail => {
             const msg = detail.msg;
             const stored = filedWithLastSent(msg, this._sending.lastSent, this._target.mainId());
@@ -691,7 +701,12 @@ export class DashboardChat {
     private _wireStreamEvents(): void {
         // The socket closing means no reply is arriving for anything outstanding,
         // whichever agent it was sent to; its opening lets what waits go.
-        this._listeners.on("af-socket", detail => this._sending.turns.connection(detail.open));
+        this._listeners.on("af-socket", ({ open }) => {
+            this._sending.turns.connection(open);
+            if (open) {
+                void this._refreshIntroductions();
+            }
+        });
         this._listeners.on("af-stream-chunk", detail => {
             this._streamUI.onChunk(detail);
             this._sending.turns.chunk(streamKey(detail.agentId, detail.from), detail.turnId);

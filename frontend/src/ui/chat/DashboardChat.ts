@@ -30,7 +30,7 @@ import { ChatStreamUI } from "./chatStreaming";
 import { streamKey } from "../../io/agentStreams";
 import { postOrWarn } from "../shell/mutate";
 import { apiUrl } from "../../io/api";
-import { readIntroductions } from "../../io/introductionsApi";
+import { IntroductionReader } from "../../io/introductionsApi";
 import { toast } from "../ToastManager";
 import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attachTray";
 import { emit, Listeners } from "../../events";
@@ -80,7 +80,9 @@ export class DashboardChat {
     /** Every message the chat holds; nothing else writes them. */
     private _log = new ChatLog();
     private _introductions = new Map<string, string>();
-    private _introductionRequest = 0;
+    private _introductionReader = new IntroductionReader(introductions =>
+        this.setIntroductions(introductions),
+    );
     /** Getting what the person says to the agent they address. */
     private _sending = new ChatSending({
         log: this._log,
@@ -201,7 +203,7 @@ export class DashboardChat {
 
     /** Let everything go (the dashboard goes). */
     destroy(): void {
-        this._introductionRequest++;
+        this._introductionReader.stop();
         this.unwire();
         this._barListeners.off();
     }
@@ -209,7 +211,7 @@ export class DashboardChat {
     /** Drop all chat state (a full reset / wipe). */
     clearAll(): void {
         this._log.clear();
-        this._introductionRequest++;
+        this._introductionReader.stop();
         this._introductions.clear();
         this._sending.turns.clear();
         this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
@@ -221,21 +223,16 @@ export class DashboardChat {
             this._log.forgetHistory(id);
             this._introductions.delete(id);
         }
-        if (added.size) {
+        if (!this.host.agents.size) {
+            this._introductionReader.stop();
+        } else if (added.size) {
             void this._refreshIntroductions();
         }
     }
 
     private async _refreshIntroductions(): Promise<void> {
-        const request = ++this._introductionRequest;
-        // A change to the server's introductions can arrive with the agents themselves.
-        await Promise.resolve();
-        if (request !== this._introductionRequest || !this.host.agents.size) {
-            return;
-        }
-        const introductions = await readIntroductions();
-        if (request === this._introductionRequest && introductions) {
-            this.setIntroductions(introductions);
+        if (this.host.agents.size) {
+            await this._introductionReader.refresh();
         }
     }
 
@@ -610,6 +607,7 @@ export class DashboardChat {
     wire(): void {
         this._wireChatEvents();
         this._wireStreamEvents();
+        void this._refreshIntroductions();
         // Wired unconditionally — `wire()` can run before /api/config answers.
         // The event only originates from the drop zone and the paste handler,
         // both of which check first, so with uploads off nothing ever arrives.
@@ -628,6 +626,7 @@ export class DashboardChat {
     /** Remove all event listeners added by wire() (call when the dashboard is hidden). */
     unwire(): void {
         this._listeners.off();
+        this._introductionReader.stop();
     }
 
     private _wireChatEvents(): void {

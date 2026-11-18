@@ -17,7 +17,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Promoting or clearing a model trial while another page reads it no longer logs browser 404s.** Trial reads identify the trial shown on the page and return an empty result if it has ended or changed.
 
-- **Chat loads agent introductions together.** Switching threads after a server restart no longer makes requests for introductions from agents that have disappeared. Open threads update when their introduction becomes available.
+- **Chat loads agent introductions together.** Switching threads after a server restart no longer makes requests for introductions from agents that have disappeared. Open threads update when their introduction becomes available. Failed or malformed responses preserve loaded text and retry with a bounded delay.
 
 - **Asking main to spawn a catalogue agent by name starts it.** "spawn reachy mini", "start the anomaly detector" and other spellings of a recipe's name are handed to the catalog, the way `@catalog spawn reachy-mini` is, instead of main asking what code the new agent should run. A request with more in it reaches the model, whose prompt now lists the catalogue's recipes that are not running and how to have the catalog start one.
 

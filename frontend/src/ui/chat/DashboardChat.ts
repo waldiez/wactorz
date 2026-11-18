@@ -7,6 +7,7 @@
  * host only for the shared root element, the agents (read-only), and view switching.
  */
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
+import type { AgentChanges } from "../../agents/AgentStore";
 import type { View } from "../shell/types";
 import { canOpenThread, messageableNames } from "../overview/agentState";
 import { renderChatSidebar } from "./chatSidebar";
@@ -28,7 +29,8 @@ import { ChatAnswers } from "./chatAnswers";
 import { ChatStreamUI } from "./chatStreaming";
 import { streamKey } from "../../io/agentStreams";
 import { postOrWarn } from "../shell/mutate";
-import { apiUrl, requestJson } from "../../io/api";
+import { apiUrl } from "../../io/api";
+import { IntroductionReader } from "../../io/introductionsApi";
 import { toast } from "../ToastManager";
 import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attachTray";
 import { emit, Listeners } from "../../events";
@@ -78,6 +80,9 @@ export class DashboardChat {
     /** Every message the chat holds; nothing else writes them. */
     private _log = new ChatLog();
     private _introductions = new Map<string, string>();
+    private _introductionReader = new IntroductionReader(introductions =>
+        this.setIntroductions(introductions),
+    );
     /** Getting what the person says to the agent they address. */
     private _sending = new ChatSending({
         log: this._log,
@@ -198,6 +203,7 @@ export class DashboardChat {
 
     /** Let everything go (the dashboard goes). */
     destroy(): void {
+        this._introductionReader.stop();
         this.unwire();
         this._barListeners.off();
     }
@@ -205,15 +211,43 @@ export class DashboardChat {
     /** Drop all chat state (a full reset / wipe). */
     clearAll(): void {
         this._log.clear();
+        this._introductionReader.stop();
         this._introductions.clear();
         this._sending.turns.clear();
         this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
     }
 
-    /** Forget that the agent `id`'s history was loaded (so it re-fetches if re-added). */
-    forgetHistory(id: string): void {
-        this._log.forgetHistory(id);
-        this._introductions.delete(id);
+    /** Forget departed agents and refresh introductions once for a batch of arrivals. */
+    agentsChanged({ added, removed }: Pick<AgentChanges, "added" | "removed">): void {
+        for (const id of removed.keys()) {
+            this._log.forgetHistory(id);
+            this._introductions.delete(id);
+        }
+        if (!this.host.agents.size) {
+            this._introductionReader.stop();
+        } else if (added.size) {
+            void this._refreshIntroductions();
+        }
+    }
+
+    private async _refreshIntroductions(): Promise<void> {
+        if (this.host.agents.size) {
+            await this._introductionReader.refresh();
+        }
+    }
+
+    /** Replace introductions with the server's latest snapshot for agents on the page. */
+    setIntroductions(introductions: Readonly<Record<string, string>>): void {
+        const before = this._introductions.get(this.chatTarget);
+        this._introductions.clear();
+        for (const [id, text] of Object.entries(introductions)) {
+            if (typeof text === "string" && this.host.agents.has(id)) {
+                this._introductions.set(id, text);
+            }
+        }
+        if (this.host.getView() === "chat" && before !== this._introductions.get(this.chatTarget)) {
+            this.renderChatThread();
+        }
     }
 
     /** Build the chat view element (sidebar + pane); renders run again in afterMount once attached. */
@@ -400,7 +434,6 @@ export class DashboardChat {
     /** Fetch and merge the persisted chat history of the agent `id` once (kept by
      *  id, since two agents may share a name; subsequent calls no-op). */
     async loadHistory(id: string): Promise<void> {
-        void this._loadIntroduction(id);
         // No target chosen yet — there is no conversation to fetch.
         if (!id || this._log.historyLoaded(id)) {
             return;
@@ -413,22 +446,6 @@ export class DashboardChat {
         }
         this._log.addHistory(id, incoming);
         if (incoming.length) {
-            this.renderChatThread();
-        }
-    }
-
-    private async _loadIntroduction(id: string): Promise<void> {
-        if (!id || this._introductions.has(id)) {
-            return;
-        }
-        const reply = await requestJson<{ introduction?: string }>(
-            apiUrl(`/api/actors/${encodeURIComponent(id)}`),
-        );
-        if (!reply.ok || typeof reply.value?.introduction !== "string" || !this.host.agents.has(id)) {
-            return;
-        }
-        this._introductions.set(id, reply.value.introduction);
-        if (id === this.chatTarget) {
             this.renderChatThread();
         }
     }
@@ -590,6 +607,7 @@ export class DashboardChat {
     wire(): void {
         this._wireChatEvents();
         this._wireStreamEvents();
+        void this._refreshIntroductions();
         // Wired unconditionally — `wire()` can run before /api/config answers.
         // The event only originates from the drop zone and the paste handler,
         // both of which check first, so with uploads off nothing ever arrives.
@@ -608,10 +626,17 @@ export class DashboardChat {
     /** Remove all event listeners added by wire() (call when the dashboard is hidden). */
     unwire(): void {
         this._listeners.off();
+        this._introductionReader.stop();
     }
 
     private _wireChatEvents(): void {
         this._answers.wire(this._listeners);
+        this._listeners.on("af-introductions-changed", () => void this._refreshIntroductions());
+        this._listeners.on("af-agents-settled", ({ reason }) => {
+            if (reason === "reset") {
+                void this._refreshIntroductions();
+            }
+        });
         this._listeners.on("af-chat-message", detail => {
             const msg = detail.msg;
             const stored = filedWithLastSent(msg, this._sending.lastSent, this._target.mainId());
@@ -676,7 +701,12 @@ export class DashboardChat {
     private _wireStreamEvents(): void {
         // The socket closing means no reply is arriving for anything outstanding,
         // whichever agent it was sent to; its opening lets what waits go.
-        this._listeners.on("af-socket", detail => this._sending.turns.connection(detail.open));
+        this._listeners.on("af-socket", ({ open }) => {
+            this._sending.turns.connection(open);
+            if (open) {
+                void this._refreshIntroductions();
+            }
+        });
         this._listeners.on("af-stream-chunk", detail => {
             this._streamUI.onChunk(detail);
             this._sending.turns.chunk(streamKey(detail.agentId, detail.from), detail.turnId);

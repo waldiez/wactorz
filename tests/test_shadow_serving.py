@@ -1180,6 +1180,35 @@ class TestTheTrialRoutes:
         assert body["pairs"] == 2
         assert (await client.get("/api/models/imu/trial", params={"since": "soon"})).status == 400
 
+    async def test_a_dashboard_read_of_an_ended_or_replaced_trial_is_empty(
+        self,
+        client: TestClient[web.Request, web.Application],
+        later: float,
+        store: ArtifactStore,
+        state: Path,
+    ) -> None:
+        shadow = store.pointer("imu", "shadow")
+        assert shadow is not None
+        _pairs(state, shadow.moved_at, 2)
+        params = {"started_at": shadow.moved_at}
+        matching = await client.get("/api/models/imu/trial", params=params)
+        assert matching.status == 200
+        assert (await matching.json())["pairs"] == 2
+
+        # The same pointer may be replaced between reading model details and its figures.
+        for started_at in (shadow.moved_at - 1, shadow.moved_at):
+            if started_at == shadow.moved_at:
+                store.clear("shadow", "imu", by="test")
+            asked = {"started_at": started_at}
+            trial = await client.get("/api/models/imu/trial", params=asked)
+            chart = await client.get("/api/models/imu/trial/series", params=asked)
+            assert trial.status == chart.status == 200
+            assert await trial.json() is None
+            assert (await chart.json())["buckets"] == []
+
+        invalid = await client.get("/api/models/imu/trial", params={"started_at": "nan"})
+        assert invalid.status == 400
+
     async def test_the_outcomes_of_ended_trials_are_listed(
         self, client: TestClient[web.Request, web.Application], graph: Provenance
     ) -> None:

@@ -207,7 +207,10 @@ export class ModelCatalog {
             trialSeries: same ? this._state.trialSeries : [],
             trialReading: true,
         });
-        const [got, overTime] = await Promise.all([this.api.trial(name), this.api.trialSeries(name)]);
+        const [got, overTime] = await Promise.all([
+            this.api.trial(name, shadow.moved_at),
+            this.api.trialSeries(name, shadow.moved_at),
+        ]);
         if (read !== this._trialReads) {
             return;
         }
@@ -215,7 +218,7 @@ export class ModelCatalog {
             trial: got.ok ? got.value : null,
             trialError: got.ok ? "" : got.error,
             // The charts are a part the figures can be shown without.
-            trialSeries: overTime.ok ? overTime.value : [],
+            trialSeries: got.ok && got.value === null ? [] : overTime.ok ? overTime.value : [],
             trialReading: false,
         });
     }

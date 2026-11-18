@@ -79,6 +79,8 @@ export interface AppEventMap {
      *  is gone" is now a fact rather than a race with agents re-registering.
      *  The reason only picks the wording the user is shown. */
     "af-agents-settled": { reason: "reset" | "deleted" };
+    /** The server has a new version of the agent introductions. */
+    "af-introductions-changed": void;
     "af-clear-feed": void;
     /** Application-log records the server pushed as it wrote them. Untyped
      *  entries: they arrive off the socket and are validated where they are

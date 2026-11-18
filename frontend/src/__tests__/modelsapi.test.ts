@@ -19,6 +19,18 @@ afterEach(() => {
 });
 
 describe("reading models", () => {
+    it("identifies the trial shown by the page and accepts an ended trial", async () => {
+        const fetched = answering(200, null);
+        vi.stubGlobal("fetch", fetched);
+        const api = new ModelsApi("/ingress");
+        expect(await api.trial("a b", 123.5)).toEqual({ ok: true, value: null });
+        fetched.mockImplementationOnce(async () => Response.json({ buckets: [] }));
+        expect(await api.trialSeries("a b", 123.5)).toEqual({ ok: true, value: [] });
+        expect(fetched.mock.calls.map(([url]) => url)).toEqual([
+            "/ingress/api/models/a%20b/trial?started_at=123.5",
+            "/ingress/api/models/a%20b/trial/series?started_at=123.5",
+        ]);
+    });
     it("lists them, under the ingress path", async () => {
         const fetched = answering(200, { models: [{ name: "hvac" }] });
         vi.stubGlobal("fetch", fetched);

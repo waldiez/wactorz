@@ -19,7 +19,6 @@
 
 import { CardMoments, patchedCards } from "./overview/cardMoments";
 import { ingressBase } from "../io/api";
-import type { AgentInfo } from "../types/agent";
 import type { AgentChanges, AgentStore } from "../agents/AgentStore";
 import { safeStorage } from "../safeStorage";
 import {
@@ -263,7 +262,8 @@ export class CardDashboard {
 
     /** Draw what a batch of the store's changes did. */
     private _onAgentsChanged(changes: AgentChanges): void {
-        changes.removed.forEach((agent, id) => this._forget(id, agent));
+        changes.removed.forEach((_agent, id) => this._heartbeats.forget(id));
+        this._chat.agentsChanged(changes);
         if (changes.added.size > 0 || changes.removed.size > 0 || changes.placement) {
             this._wiringData.changed();
         }
@@ -272,12 +272,6 @@ export class CardDashboard {
             this._drawChanges(changes);
         }
         changes.activity.forEach(moment => this._moments.show(moment, visible));
-    }
-
-    /** Let go of what is kept for an agent that left, shown or not. */
-    private _forget(id: string, agent: AgentInfo): void {
-        this._heartbeats.forget(id); // else churned agents leak dead entries the refresh scans
-        this._chat.forgetHistory(agent.id);
     }
 
     private _drawChanges(changes: AgentChanges): void {

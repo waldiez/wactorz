@@ -163,7 +163,7 @@ class Dashboard:
     page: Page
     base_url: str
     context: BrowserContext | None = None
-    #: How many agent messages a scenario has claimed, in each agent's thread.
+    #: How many messages were claimed in each thread, by the agent's stable id.
     _claimed: dict[str, int] = field(default_factory=dict)
     #: Errors the page itself reported: its console, and exceptions nothing caught.
     page_errors: list[str] = field(default_factory=list)
@@ -566,34 +566,44 @@ class Dashboard:
 
     def unclaimed(self) -> list[Said]:
         """Agent messages in the thread on screen that no scenario has said it expected."""
-        return self.said()[self._claimed.get(self.talking_to, 0) :]
+        return self.said()[self._claimed.get(self._target_select().input_value(), 0) :]
 
-    def _every_thread(self) -> dict[str, list[Said]]:
-        """What each agent's thread holds, by agent. Leaves the screen as it was."""
+    def _every_thread(self) -> dict[str, tuple[str, list[Said]]]:
+        """The label and messages of each thread, by stable agent id. Restores the selection."""
         self.show("chat")
-        was = self.talking_to
-        threads: dict[str, list[Said]] = {}
-        for agent in self._targets():
+        was = self._target_select().input_value()
+        threads: dict[str, tuple[str, list[Said]]] = {}
+        ids = (
+            self._target_select()
+            .locator("option")
+            .evaluate_all("options => options.map(o => o.value)")
+        )
+        for actor_id in ids:
             # An agent can leave the list between reading it and choosing it:
             # one on a node goes when the node does. Checking first narrows that
             # window without closing it, so a choice that finds the option gone
             # moves on rather than waiting out Playwright's default for it.
-            if agent not in self._targets():
+            offered = (
+                self._target_select()
+                .locator("option")
+                .evaluate_all("options => options.map(o => o.value)")
+            )
+            if actor_id not in offered:
                 continue
             try:
-                self._target_select().select_option(label=f"@{agent}", timeout=GONE_MS)
+                self._target_select().select_option(value=actor_id, timeout=GONE_MS)
             except PlaywrightTimeoutError:
                 continue
-            threads[agent] = self.said()
-        if was in self._targets():
-            self.read_thread_of(was)
+            threads[actor_id] = self.talking_to, self.said()
+        if was in threads:
+            self._target_select().select_option(value=was, timeout=GONE_MS)
         return threads
 
     def all_unclaimed(self) -> dict[str, list[Said]]:
         """Agent messages no scenario has said it expected, in every thread, by agent."""
         pending = {
-            agent: said[self._claimed.get(agent, 0) :]
-            for agent, said in self._every_thread().items()
+            label: said[self._claimed.get(actor_id, 0) :]
+            for actor_id, (label, said) in self._every_thread().items()
         }
         return {agent: said for agent, said in pending.items() if said}
 
@@ -604,7 +614,7 @@ class Dashboard:
 
     def all_said(self) -> list[Said]:
         """Every agent message in every thread."""
-        return [said for thread in self._every_thread().values() for said in thread]
+        return [said for _label, thread in self._every_thread().values() for said in thread]
 
     def expect(self, sender: str, text: str, *, timeout: float = REPLY_TIMEOUT) -> Said:
         """The next agent message in the thread on screen is from ``sender`` and says exactly ``text``.
@@ -661,7 +671,7 @@ class Dashboard:
             pending = self.unclaimed()
             so_far = f"; so far it has said {pending[0].text!r}" if pending else "; nothing came"
             raise UnexpectedReply(f"{exc}{so_far}") from exc
-        thread = self.talking_to
+        thread = self._target_select().input_value()
         self._claimed[thread] = self._claimed.get(thread, 0) + 1
         return found
 

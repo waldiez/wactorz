@@ -15,7 +15,9 @@ from aiohttp.web import Response
 
 from ..agents.catalog_agent import CatalogAgent
 from ..agents.lookup import find_main_actor
+from ..agents.main.spawn_registry import SpawnRegistry
 from ..core.actor import forbidden
+from ..core.registry import ActorRegistry
 from ..core.spawn_introduction import spawn_introduction
 from . import chat, cost, events, lifecycle, runtime, ws
 
@@ -258,20 +260,43 @@ async def actor_handler(request: web.Request) -> Response:
     if ag is None:
         return web.json_response({"error": "actor not found"}, status=404)
     payload = _actor_payload(ag)
-    introduction = await _actor_introduction(actor_id)
-    if introduction:
-        payload["introduction"] = introduction
+    registry = runtime.registry
+    if registry is not None:
+        saved = await _saved_spawns(registry)
+        introduction = _actor_introduction(registry, actor_id, saved.by_id(actor_id) or {})
+        if introduction:
+            payload["introduction"] = introduction
     return web.json_response(payload)
 
 
-async def _actor_introduction(actor_id: str) -> str:
-    """Describe this actor using its saved configuration or its live manifest."""
+async def introductions_handler(request: web.Request) -> Response:
+    """Return introductions by id for local actors and agents spawned on nodes."""
     registry = runtime.registry
     if registry is None:
-        return ""
+        return web.json_response({})
+    saved = await _saved_spawns(registry)
+    configs = saved.stored_form()
+    for actor in registry.all_actors():
+        configs.setdefault(actor.actor_id, {})
+    introductions: dict[str, str] = {}
+    for actor_id, config in configs.items():
+        if not runtime.is_deleted(actor_id):
+            text = _actor_introduction(registry, actor_id, config)
+            if text:
+                introductions[actor_id] = text
+    return web.json_response(introductions)
+
+
+async def _saved_spawns(registry: ActorRegistry) -> SpawnRegistry:
+    """Read main's spawn registry without blocking the event loop."""
     main = find_main_actor(registry)
-    saved = await asyncio.to_thread(main._get_spawn_registry) if main is not None else None
-    config = (saved.by_id(actor_id) if saved is not None else None) or {}
+    return (
+        await asyncio.to_thread(main._get_spawn_registry) if main is not None else SpawnRegistry()
+    )
+
+
+def _actor_introduction(registry: ActorRegistry, actor_id: str, config: dict[str, Any]) -> str:
+    """Describe an actor from saved configuration, its live manifest and the catalogue."""
     actor = registry.get(actor_id)
     manifest = getattr(actor, "_published_manifest", None) or {}
     recipe = {}

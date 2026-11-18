@@ -148,8 +148,8 @@ describe("the Inbox", () => {
 
         await vi.waitFor(() => expect(cards()).toEqual([]));
         const calls = fetched.mock.calls as unknown as [string, RequestInit][];
-        expect(calls[0]?.[0]).toBe("/api/questions/a1/probe/answer");
-        expect(JSON.parse(String(calls[0]?.[1].body))).toEqual({ option: "No", note: "checked by hand" });
+        const answer = calls.find(([url]) => url === "/api/questions/a1/probe/answer");
+        expect(JSON.parse(String(answer?.[1].body))).toEqual({ option: "No", note: "checked by hand" });
 
         open(["answered"]);
         expect(document.body.textContent).toContain("Answered: No");

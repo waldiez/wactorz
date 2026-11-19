@@ -15,6 +15,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Claude Sonnet 5.5 answers.** With `LLM_MODEL=claude-sonnet-5-5`, every call failed with a 400: the model refuses `thinking: {"type": "disabled"}` and asks for `{"type": "between_tools"}` instead. The first such refusal is now retried with `between_tools`, and the model is asked that way for the rest of the process; a call site that asks for reasoning still gets it. A later model that refuses `disabled` the same way is handled too.
+
 - **Asking main to spawn a catalogue agent by name starts it.** "spawn reachy mini", "start the anomaly detector" and other spellings of a recipe's name are handed to the catalog, the way `@catalog spawn reachy-mini` is, instead of main asking what code the new agent should run. A request with more in it reaches the model, whose prompt now lists the catalogue's recipes that are not running and how to have the catalog start one.
 
 - **A Telegram or Discord bot that cannot log in no longer stops Wactorz.** A mistyped `TELEGRAM_BOT_TOKEN` or `DISCORD_BOT_TOKEN` made the bot's login fail at startup, and the failure took the dashboard, the REST API and every agent down with it. The bot now logs one error naming the setting to fix and stays off, and everything else keeps running. Any other failure of a bot running next to the dashboard (Telegram unreachable, say) stops that bot alone. A token that is only spaces counts as unset, so that channel is simply not started.

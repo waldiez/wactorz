@@ -82,6 +82,18 @@ _CANNOT_DISABLE_THINKING: tuple[str, ...] = ("claude-fable-", "claude-mythos-")
 # here.
 _learned_no_thinking_param: set[str] = set()
 
+# Models that refused `{"type": "disabled"}` and named `{"type": "between_tools"}`
+# as their way to switch up-front thinking off (Claude Sonnet 5.5 does). Learned
+# from the error rather than listed, so a later model that answers the same way
+# costs one 400 per process and is then asked the way it wants. Dropping
+# `thinking` instead would be wrong on these models: silence means adaptive.
+_learned_between_tools: set[str] = set()
+
+# The shapes of a request that asks for no up-front reasoning. Neither carries
+# `output_config.effort`: the API default applies, which keeps a request clear
+# of the levels a thinking-off request may not combine with.
+_THINKING_OFF: tuple[dict[str, str], ...] = ({"type": "disabled"}, {"type": "between_tools"})
+
 # Reasoning depth, cheapest first. Anthropic takes it as `output_config.effort`,
 # not as part of the `thinking` block.
 _EFFORT_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
@@ -174,6 +186,14 @@ def _is_thinking_rejection(exc: Exception) -> bool:
         phrase in message
         for phrase in ("deprecated", "not supported", "unsupported", "unexpected", "removed")
     )
+
+
+def _asks_for_between_tools(exc: Exception) -> bool:
+    """Whether `exc` is the API refusing `disabled` and naming `between_tools` instead."""
+    if getattr(exc, "status_code", None) != 400:
+        return False
+    message = str(exc).lower()
+    return "thinking" in message and "between_tools" in message
 
 
 def _is_effort_rejection(exc: Exception) -> bool:
@@ -299,7 +319,7 @@ class AnthropicProvider(LLMProvider):
         # combination: it accepts `disabled` at effort `high` or below and 400s
         # at `xhigh`/`max`, and a request that disables thinking sends no effort
         # at all, so the default (`high`) applies.
-        if thinking != {"type": "disabled"}:
+        if thinking not in _THINKING_OFF:
             effort = _effort_for(self.model, reasoning_effort)
             if effort is not None:
                 params["output_config"] = {"effort": effort}
@@ -326,6 +346,8 @@ class AnthropicProvider(LLMProvider):
                 self.model,
             )
             return None
+        if self.model in _learned_between_tools:
+            return {"type": "between_tools"}
         return {"type": "disabled"}
 
     # ── Degrading a request the model refused ───────────────────────────────
@@ -339,9 +361,28 @@ class AnthropicProvider(LLMProvider):
         """
         return (
             self._retry_without_temperature(exc, params)
+            or self._retry_with_between_tools(exc, params)
             or self._retry_without_thinking(exc, params)
             or self._retry_without_effort(exc, params)
         )
+
+    def _retry_with_between_tools(self, exc: Exception, params: dict[str, Any]) -> bool:
+        """Whether asking for no up-front thinking the way the model named earns a second try.
+
+        Only a request that sent `disabled` is retried: the refusal says what
+        to send instead, and it still asks for what the caller wanted. The
+        request stays without `output_config`, as a `disabled` one is.
+        """
+        if params.get("thinking") != {"type": "disabled"} or not _asks_for_between_tools(exc):
+            return False
+        params["thinking"] = {"type": "between_tools"}
+        _learned_between_tools.add(self.model)
+        logger.info(
+            "[anthropic] %s turns up-front thinking off with `between_tools`, not `disabled`; "
+            "retrying so, and asking so for the rest of this process",
+            self.model,
+        )
+        return True
 
     def _retry_without_thinking(self, exc: Exception, params: dict[str, Any]) -> bool:
         """Whether dropping `thinking` gives this request a second chance.

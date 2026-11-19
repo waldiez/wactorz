@@ -21,6 +21,7 @@ _NO_SAMPLING_PARAMS: tuple[str, ...] = (
     "claude-opus-4-8",
     "claude-opus-5",
     "claude-sonnet-5",
+    "claude-haiku-5",
     "claude-fable-",
     "claude-mythos-",
 )
@@ -67,15 +68,18 @@ def _carries_temperature(method: Any) -> bool:
 _THINKING_ON_BY_DEFAULT: tuple[str, ...] = (
     "claude-opus-5",
     "claude-sonnet-5",
+    "claude-haiku-5",
     "claude-fable-",
     "claude-mythos-",
 )
 
-# Claude Fable 5 and Claude Mythos 5 reject an explicit `thinking: {"type":
-# "disabled"}` outright, at any effort — there is no way to turn their reasoning
-# off, so the only correct request omits the parameter and the only correct call
-# site budgets for it.
-_CANNOT_DISABLE_THINKING: tuple[str, ...] = ("claude-fable-", "claude-mythos-")
+# Models that reject an explicit `thinking: {"type": "disabled"}` outright, at any
+# effort: Claude Fable, Claude Mythos and Claude Opus 5.5 (Opus 5 before it still
+# accepts it). There is no way to turn their reasoning off, so a request for none
+# omits the parameter and asks for the lowest effort instead, which keeps the
+# reasoning as short as the model allows; a call site with a tight budget still
+# has to allow for some.
+_CANNOT_DISABLE_THINKING: tuple[str, ...] = ("claude-fable-", "claude-mythos-", "claude-opus-5-5")
 
 # Same learned-fallback shape as `_learned_no_sampling`: a model released after
 # this file may refuse `thinking: {"type": "disabled"}` in a way we cannot name
@@ -114,6 +118,7 @@ _EFFORT_SUPPORT: tuple[tuple[str, frozenset[str]], ...] = (
     ("claude-opus-4-8", _EVERY_LEVEL),
     ("claude-opus-5", _EVERY_LEVEL),
     ("claude-sonnet-5", _EVERY_LEVEL),
+    ("claude-haiku-5", _EVERY_LEVEL),
     ("claude-fable-", _EVERY_LEVEL),
     ("claude-mythos-", _EVERY_LEVEL),
 )
@@ -135,6 +140,17 @@ def _thinks_by_default(model: str) -> bool:
     """Whether omitting `thinking` leaves reasoning switched on for this model."""
     name = model.lower()
     return any(family in name for family in _THINKING_ON_BY_DEFAULT)
+
+
+def _always_thinks(model: str) -> bool:
+    """Whether this model is known to reason on every request, whatever it is sent.
+
+    Read from the list alone. A model in `_learned_no_thinking_param` refused
+    the parameter, which an older model that thinks only when asked does too,
+    so nothing more is sent to it.
+    """
+    name = model.lower()
+    return any(family in name for family in _CANNOT_DISABLE_THINKING)
 
 
 def _can_disable_thinking(model: str) -> bool:
@@ -314,16 +330,28 @@ class AnthropicProvider(LLMProvider):
         thinking = self._thinking_param(reasoning_effort)
         if thinking is not None:
             params["thinking"] = thinking
-        # Effort rides with thinking and only with thinking. Beyond keeping the
-        # two consistent, this is what keeps us off Claude Opus 5's one illegal
-        # combination: it accepts `disabled` at effort `high` or below and 400s
-        # at `xhigh`/`max`, and a request that disables thinking sends no effort
-        # at all, so the default (`high`) applies.
-        if thinking not in _THINKING_OFF:
-            effort = _effort_for(self.model, reasoning_effort)
-            if effort is not None:
-                params["output_config"] = {"effort": effort}
+        effort = self._effort_param(thinking, reasoning_effort)
+        if effort is not None:
+            params["output_config"] = {"effort": effort}
         return params
+
+    def _effort_param(
+        self, thinking: dict[str, str] | None, reasoning_effort: str | None
+    ) -> str | None:
+        """The `output_config.effort` level for this request, or None to omit it.
+
+        A request that switches thinking off sends no effort, so the API default
+        applies. That keeps it off the one illegal combination several models
+        share: they accept `disabled` or `between_tools` at effort `high` or
+        below and refuse it at `xhigh`/`max`. A request for no reasoning on a
+        model that cannot stop reasoning sends the lowest level instead, the
+        closest the model offers to what was asked.
+        """
+        if thinking in _THINKING_OFF:
+            return None
+        if reasoning_effort in (None, "none"):
+            return _effort_for(self.model, "low") if _always_thinks(self.model) else None
+        return _effort_for(self.model, reasoning_effort)
 
     def _thinking_param(self, reasoning_effort: str | None) -> dict[str, str] | None:
         """The `thinking` block for this request, or None to omit the parameter.
@@ -341,9 +369,10 @@ class AnthropicProvider(LLMProvider):
             return {"type": "adaptive"}
         if not _can_disable_thinking(self.model):
             logger.warning(
-                "[anthropic] %s cannot disable reasoning; its thinking tokens are "
+                "[anthropic] %s cannot disable reasoning%s; its thinking tokens are "
                 "billed against max_tokens, so a small budget may return no text at all",
                 self.model,
+                ", so it is asked for the lowest effort" if _always_thinks(self.model) else "",
             )
             return None
         if self.model in _learned_between_tools:

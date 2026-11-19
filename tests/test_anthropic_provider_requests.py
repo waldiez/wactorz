@@ -4,8 +4,9 @@
 Reasoning is the part that changed under this provider. Older Claude models
 think only when asked; Claude Opus 5 and later think unless told not to, so a
 caller that wants no reasoning has to say so — and Fable and Mythos cannot be
-told at all. Depth travels separately as `output_config.effort`, clamped to the
-levels each model family accepts, and only alongside thinking.
+told at all, so a request for none asks them for the lowest effort instead.
+Depth travels separately as `output_config.effort`, clamped to the levels each
+model family accepts, and never with a request that switches thinking off.
 
 A parameter a model refuses costs one 400: it is dropped, the model is
 remembered for the rest of the process, and the request is sent again. Only one
@@ -119,7 +120,14 @@ class TestThinkingAndEffort:
             ("claude-opus-5", "none", {"type": "disabled"}, None),
             ("claude-opus-5", "minimal", {"type": "adaptive"}, {"effort": "low"}),
             ("claude-opus-5", "extreme", {"type": "adaptive"}, None),
-            ("claude-fable-5", None, None, None),
+            ("claude-fable-5", None, None, {"effort": "low"}),
+            ("claude-mythos-5", "none", None, {"effort": "low"}),
+            ("claude-opus-5-5", "none", None, {"effort": "low"}),
+            ("anthropic.claude-opus-5-5", None, None, {"effort": "low"}),
+            ("claude-opus-5-5", "high", {"type": "adaptive"}, {"effort": "high"}),
+            ("claude-haiku-5-5", "none", {"type": "disabled"}, None),
+            ("anthropic.claude-haiku-5-5", None, {"type": "disabled"}, None),
+            ("claude-haiku-5-5", "xhigh", {"type": "adaptive"}, {"effort": "xhigh"}),
             ("claude-fable-5", "max", {"type": "adaptive"}, {"effort": "max"}),
         ],
     )
@@ -137,12 +145,31 @@ class TestThinkingAndEffort:
         assert params.get("thinking") == thinking
         assert params.get("output_config") == output_config
 
+    def test_a_model_learned_to_refuse_thinking_is_sent_no_effort(self) -> None:
+        mod._learned_no_thinking_param.add("claude-opus-5")
+
+        params = _provider("claude-opus-5", _Messages())._request_params(
+            [], "", {"reasoning_effort": "none"}
+        )
+
+        assert "thinking" not in params and "output_config" not in params
+
     def test_a_model_that_cannot_stop_thinking_is_warned_about(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         _provider("claude-mythos-5", _Messages())._request_params([], "", {})
 
-        assert "cannot disable reasoning" in caplog.text
+        assert "cannot disable reasoning, so it is asked for the lowest effort" in caplog.text
+
+    def test_a_learned_model_is_not_said_to_get_the_lowest_effort(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        mod._learned_no_thinking_param.add("claude-opus-5")
+
+        _provider("claude-opus-5", _Messages())._request_params([], "", {})
+
+        assert "cannot disable reasoning;" in caplog.text
+        assert "lowest effort" not in caplog.text
 
     def test_an_uninspectable_client_is_assumed_to_carry_temperature(self) -> None:
         assert mod._carries_temperature(object()) is True

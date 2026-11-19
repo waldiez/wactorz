@@ -98,7 +98,12 @@ def _provider(model: str, messages: _Messages) -> AnthropicProvider:
 
 @pytest.fixture(autouse=True)
 def _forget_learned_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("_learned_no_sampling", "_learned_no_thinking_param", "_learned_no_effort"):
+    for name in (
+        "_learned_no_sampling",
+        "_learned_no_thinking_param",
+        "_learned_no_effort",
+        "_learned_between_tools",
+    ):
         monkeypatch.setattr(mod, name, set())
 
 
@@ -193,6 +198,79 @@ class TestRejections:
 
         with pytest.raises(_BadRequest):
             await provider._complete([{"role": "user", "content": "x"}])
+
+
+# The refusal Claude Sonnet 5.5 answers `{"type": "disabled"}` with.
+_BETWEEN_TOOLS = (
+    "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', "
+    '\'message\': \'To turn thinking off on this model, send "thinking": {"type": '
+    '"between_tools"} instead of {"type": "disabled"}.\'}}'
+)
+
+
+class TestBetweenTools:
+    def test_the_refusal_is_told_apart_from_the_others(self) -> None:
+        exc = _BadRequest(_BETWEEN_TOOLS)
+
+        assert mod._asks_for_between_tools(exc) is True
+        assert mod._is_thinking_rejection(exc) is False
+        assert mod._asks_for_between_tools(RuntimeError(_BETWEEN_TOOLS)) is False
+        assert mod._asks_for_between_tools(_BadRequest("between_tools is great")) is False
+
+    async def test_disabled_is_retried_as_between_tools_and_remembered(self) -> None:
+        messages = _Messages(_BadRequest(_BETWEEN_TOOLS), _response(_block("text", text="ok")))
+        provider = _provider("claude-sonnet-5-5", messages)
+
+        text, _ = await provider._complete(
+            [{"role": "user", "content": "x"}], reasoning_effort="none"
+        )
+
+        assert text == "ok"
+        assert messages.calls[0]["thinking"] == {"type": "disabled"}
+        assert messages.calls[1]["thinking"] == {"type": "between_tools"}
+        assert "output_config" not in messages.calls[1]
+        assert "claude-sonnet-5-5" in mod._learned_between_tools
+        assert "claude-sonnet-5-5" not in mod._learned_no_thinking_param
+        later = provider._request_params([], "", {"reasoning_effort": "none"})
+        assert later["thinking"] == {"type": "between_tools"}
+        assert "output_config" not in later
+
+    def test_a_request_for_reasoning_still_asks_for_it(self) -> None:
+        mod._learned_between_tools.add("claude-sonnet-5-5")
+
+        params = _provider("claude-sonnet-5-5", _Messages())._request_params(
+            [], "", {"reasoning_effort": "high"}
+        )
+
+        assert params["thinking"] == {"type": "adaptive"}
+        assert params["output_config"] == {"effort": "high"}
+
+    async def test_a_stream_is_retried_before_its_first_chunk(self) -> None:
+        messages = _Messages(_BadRequest(_BETWEEN_TOOLS), _Stream(["ok"]))
+        provider = _provider("claude-sonnet-5-5", messages)
+
+        items = [item async for item in provider._stream([])]
+
+        assert items[0] == "ok"
+        assert messages.calls[1]["thinking"] == {"type": "between_tools"}
+
+    async def test_the_refusal_is_raised_when_disabled_was_not_sent(self) -> None:
+        messages = _Messages(_BadRequest(_BETWEEN_TOOLS))
+        provider = _provider("claude-sonnet-5-5", messages)
+
+        with pytest.raises(_BadRequest):
+            await provider._complete([{"role": "user", "content": "x"}], reasoning_effort="high")
+
+        assert mod._learned_between_tools == set()
+
+    async def test_a_second_refusal_is_raised(self) -> None:
+        messages = _Messages(_BadRequest(_BETWEEN_TOOLS), _BadRequest(_BETWEEN_TOOLS))
+        provider = _provider("claude-sonnet-5-5", messages)
+
+        with pytest.raises(_BadRequest):
+            await provider._complete([{"role": "user", "content": "x"}])
+
+        assert len(messages.calls) == 2
 
 
 class TestText:

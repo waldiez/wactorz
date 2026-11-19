@@ -15,6 +15,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A regressor's trial compares both versions on the same inputs.** Each side's `mae`, `rmse`, `bias` and `worst` were taken over the inputs that side answered, so a shadow that left the hard inputs unanswered was measured on the easy ones alone, could look the better of the two, and pass a promotion policy's margin. Both sides are now measured on the inputs both answered (`judged`), and what each left unanswered is still its `no_answer`.
+
 - **Claude Haiku 5.5 and Claude Opus 5.5 are asked for no reasoning in a way they honour.** Haiku 5.5 was sent no `thinking`, which on it means thinking on, so a call with a small budget such as message routing could come back empty and send a message to the wrong place; it is now sent `thinking: {"type": "disabled"}`, and is given the effort a call asks for and no `temperature`. Opus 5.5 was sent `disabled`, which it refuses: like Claude Fable and Claude Mythos it cannot stop reasoning. A call that wants none of these three now asks for the lowest effort, `low`, rather than leaving the model at its default.
 
 - **Claude Sonnet 5.5 answers.** With `LLM_MODEL=claude-sonnet-5-5`, every call failed with a 400: the model refuses `thinking: {"type": "disabled"}` and asks for `{"type": "between_tools"}` instead. The first such refusal is now retried with `between_tools`, and the model is asked that way for the rest of the process; a call site that asks for reasoning still gets it. A later model that refuses `disabled` the same way is handled too.

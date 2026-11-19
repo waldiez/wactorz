@@ -16,6 +16,7 @@ where it is used, not at the top of something that must load without it.
 
 import json
 import logging
+import os
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
@@ -93,18 +94,23 @@ class Writer:
     def append(self, row: Mapping[str, Any]) -> list[Path]:
         """Keep ``row`` for its hour; write what is due, and say which files that made.
 
-        Due is every hour but the newest once a row of a newer hour arrives,
-        since nothing more of an older hour is expected, and the newest once it
-        holds ``batch_rows`` rows.
+        When a row opens an hour newer than any pending, every older pending
+        hour is due: nothing more of it is expected. A row for an older hour
+        (late, backfilled or replayed) waits with the others instead of being
+        written alone, so a run of late readings is not a file each. An hour is
+        also due once it holds ``batch_rows`` rows, and everything pending once
+        that many are waiting in all; `flush` writes the rest.
         """
         kept = normalise(row)
         hour = hour_start(kept[TS])
+        newest = max(self._pending, default=None)
         self._pending[hour].append(kept)
         self._count += 1
-        newest = max(self._pending)
-        due = [h for h in self._pending if h < newest]
-        if len(self._pending[newest]) >= self.batch_rows:
-            due.append(newest)
+        if self._count >= self.batch_rows and len(self._pending) > 1:
+            return self._write(list(self._pending))
+        due = [h for h in self._pending if h < hour] if newest is None or hour > newest else []
+        if len(self._pending[hour]) >= self.batch_rows:
+            due.append(hour)
         return self._write(due) if due else []
 
     def flush(self) -> list[Path]:
@@ -223,4 +229,55 @@ def _read(
         tables.append(table)
     if not tables:
         return EMPTY_SCHEMA.empty_table()
-    return pa.concat_tables(tables, promote_options="permissive").sort_by(TS)
+    try:
+        merged = pa.concat_tables(tables, promote_options="permissive")
+    except pa.ArrowException:
+        merged = pa.concat_tables(
+            _as_text_where_types_differ(tables, paths), promote_options="permissive"
+        )
+    return merged.sort_by(TS)
+
+
+def _as_text_where_types_differ(tables: list[pa.Table], paths: Sequence[Path]) -> list[pa.Table]:
+    """``tables`` with every column their files hold as different types turned to text in each.
+
+    A payload field can be a number in one hour and text in another. Arrow has
+    no column that is both, and without this the whole window would fail to
+    read. As text, every row is kept, and a reader that wants numbers takes
+    the values that read as one. Said once per read, naming the column.
+    """
+    kinds: dict[str, set[pa.DataType]] = defaultdict(set)
+    for table in tables:
+        for field in table.schema:
+            if field.type != pa.null():
+                kinds[field.name].add(field.type)
+    clashing = sorted(name for name, types in kinds.items() if len(types) > 1)
+    logger.warning(
+        "[data] %s hold different types in %s; read as text", ", ".join(clashing), _named(paths)
+    )
+    return [_to_text(table, clashing) for table in tables]
+
+
+def _named(paths: Sequence[Path]) -> str:
+    """The folder every one of ``paths`` is under, for a log line."""
+    return os.path.commonpath([str(path) for path in paths]) if paths else "no file"
+
+
+def _to_text(table: pa.Table, names: Iterable[str]) -> pa.Table:
+    """``table`` with each column of ``names`` it has turned to text, nulls kept."""
+    for name in names:
+        index = table.schema.get_field_index(name)
+        if index < 0:
+            continue
+        values = [
+            None if value is None else _text(value) for value in table.column(index).to_pylist()
+        ]
+        table = table.set_column(index, name, pa.array(values, type=pa.string()))
+    return table
+
+
+def _text(value: Any) -> str:
+    """One value as text: a float as Python writes it, bytes as UTF-8 where they are."""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)

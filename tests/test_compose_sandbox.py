@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 import yaml
 
-from wactorz import broker_certificates
+from wactorz import broker_files
 from wactorz.config import CONFIG, DeployTarget
 from wactorz.core import broker_accounts, node_env, node_signing
 from wactorz.node import compose_env
@@ -129,40 +129,36 @@ class TestItsBrokerAccount:
     def test_the_model_code_node_gets_one_without_being_a_deploy_target(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(broker_certificates, "MODEL_CODE_NODE", "sandbox")
+        monkeypatch.setattr(broker_files, "MODEL_CODE_NODE", "sandbox")
         monkeypatch.setattr(
-            broker_certificates,
+            broker_files,
             "CONFIG",
             dataclasses.replace(CONFIG, deploy_targets=(DeployTarget(name="raspberrypi"),)),
         )
 
-        assert broker_certificates.account_nodes() == ["raspberrypi", "sandbox"]
+        assert broker_files.account_nodes() == ["raspberrypi", "sandbox"]
 
     def test_none_when_the_code_is_kept_on_main(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(broker_certificates, "MODEL_CODE_NODE", "main")
-        monkeypatch.setattr(
-            broker_certificates, "CONFIG", dataclasses.replace(CONFIG, deploy_targets=())
-        )
+        monkeypatch.setattr(broker_files, "MODEL_CODE_NODE", "main")
+        monkeypatch.setattr(broker_files, "CONFIG", dataclasses.replace(CONFIG, deploy_targets=()))
 
-        assert broker_certificates.account_nodes() == []
+        assert broker_files.account_nodes() == []
 
     def test_once_when_it_is_also_a_deploy_target(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(broker_certificates, "MODEL_CODE_NODE", "sandbox")
+        monkeypatch.setattr(broker_files, "MODEL_CODE_NODE", "sandbox")
         monkeypatch.setattr(
-            broker_certificates,
+            broker_files,
             "CONFIG",
             dataclasses.replace(CONFIG, deploy_targets=(DeployTarget(name="sandbox"),)),
         )
 
-        assert broker_certificates.account_nodes() == ["sandbox"]
+        assert broker_files.account_nodes() == ["sandbox"]
 
     def test_none_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(broker_certificates, "MODEL_CODE_NODE", "")
-        monkeypatch.setattr(
-            broker_certificates, "CONFIG", dataclasses.replace(CONFIG, deploy_targets=())
-        )
+        monkeypatch.setattr(broker_files, "MODEL_CODE_NODE", "")
+        monkeypatch.setattr(broker_files, "CONFIG", dataclasses.replace(CONFIG, deploy_targets=()))
 
-        assert broker_certificates.account_nodes() == []
+        assert broker_files.account_nodes() == []
 
 
 def _services(stack: str) -> dict[str, dict[str, Any]]:

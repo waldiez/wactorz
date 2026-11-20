@@ -8,7 +8,7 @@ and nothing it sends arrives. Its manifest still reaches main, on a topic every
 node may use, and names what the agent publishes and subscribes to: that is
 where main reads it, and says so in chat, once per agent and topic.
 
-Only where this server wrote the list (`broker_certificates`): on a broker it
+Only where this server wrote the list (`wactorz.broker_files`): on a broker it
 does not write the files for, what a node may use is not main's to know, and
 nothing is said.
 """
@@ -18,7 +18,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-from ...broker_certificates import node_data_topics, node_is_under_access_list
+from ...broker_files import node_data_topics, node_is_under_access_list
 from ...core.broker_accounts import node_may, node_topic_addable
 from ...core.topics import display_topic
 

@@ -2,7 +2,7 @@
 """Application assembly and run loop.
 
 Builds the actor system (LLM provider, MQTT, persistence, supervision tree) and
-runs the selected interface. Parsed arguments are supplied by :mod:`wactorz.cli`.
+runs the selected interface. Parsed arguments are supplied by :mod:`wactorz.arguments`.
 """
 
 import argparse
@@ -39,8 +39,8 @@ from wactorz.agents.prompts.fragments import DEFAULT_FRAGMENTS
 from wactorz.agents.prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
 from wactorz.agents.rule_agent import RuleAgent, RuleConfig
 from wactorz.agents.scheduled_agent import ScheduledAgent
-from wactorz.broker_certificates import prepare_broker_files
-from wactorz.cli import get_args
+from wactorz.arguments import get_args
+from wactorz.broker_files import prepare_broker_files
 from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS, AppConfig
 from wactorz.core import cancellation, own_tasks
 from wactorz.core.actor import Actor, SupervisorStrategy

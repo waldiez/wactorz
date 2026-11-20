@@ -14,11 +14,12 @@ environment when called, so nothing has to be re-imported to vary it.
 """
 
 import warnings
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from wactorz import cli, config
+from wactorz import arguments, config
 from wactorz.config import _dashboard_port, _env_int, _env_token, _env_truthy
 
 
@@ -174,12 +175,14 @@ class TestTheDashboardPort:
 
         assert _dashboard_port() == 8888
 
-    def test_the_command_line_takes_its_default_from_the_same_place(self) -> None:
+    def test_the_command_line_takes_its_default_from_the_same_place(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # Read separately, the two could name different ports for one server.
-        source = (Path(cli.__file__)).read_text(encoding="utf-8")
+        monkeypatch.setenv("MONITOR_PORT", "1111")
+        monkeypatch.setattr(arguments, "CONFIG", replace(config.CONFIG, ws_port=9234))
 
-        assert "default=CONFIG.ws_port," in source
-        assert "MONITOR_PORT" not in source
+        assert arguments.get_args([]).monitor_port == 9234
 
 
 class TestABotToken:

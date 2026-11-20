@@ -411,7 +411,7 @@ ignore = [
 # `log_setup` is the strongest case — it reports to stderr that file logging
 # could not be opened, which is the one message a logger cannot carry.
 "wactorz/app.py" = ["T201"]                          # the startup banner
-"wactorz/cli.py" = ["T201"]                          # warns a secret is in argv, before logging exists
+"wactorz/arguments.py" = ["T201"]                    # warns a secret is in argv, before logging exists
 "wactorz/evalharness.py" = ["T201"]                  # prints the results table
 "wactorz/interfaces/chat/cli.py" = ["T201"]          # a terminal chat UI
 "wactorz/interfaces/google_login.py" = ["T201"]      # interactive consent flow

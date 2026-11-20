@@ -33,10 +33,12 @@ from .agents import (
 )
 from .agents.function_agent import spec_of
 from .agents.rule_agent import RuleAction, RuleCondition, RuleConfig
+from .app import run, serve, system
 from .core.actor import DEFAULT_ASK_TIMEOUT_S, Actor, ActorState, Message, MessageType
 from .core.registry import ActorRegistry, ActorSystem
 from .errors import NoSystemError, StartupError
 from .orchestration import DirectOrchestrator, MainOrchestrator, Orchestrator
+from .pipelines import pipeline
 
 __all__ = [
     "Actor",
@@ -82,36 +84,6 @@ __all__ = [
 ]
 
 
-def pipeline(*args: Any, **kwargs: Any) -> Any:
-    """Declare a pipeline of agents; see :func:`wactorz.pipelines.pipeline`.
-
-    Imported on call for the same reason as :func:`run`: the pipelines module
-    reads the configuration, which a script that only declares agents may
-    not want at import.
-    """
-    from .pipelines import pipeline as _pipeline
-
-    return _pipeline(*args, **kwargs)
-
-
-async def serve(*args: Any, **kwargs: Any) -> None:
-    """Run Wactorz on the caller's event loop; see :func:`wactorz.app.serve`."""
-    from .app import serve as _serve
-
-    await _serve(*args, **kwargs)
-
-
-def system() -> ActorSystem | None:
-    """The running :class:`ActorSystem`, or ``None`` outside a run; see :func:`wactorz.app.system`.
-
-    For a host that embeds the system and wants at its actors:
-    ``wactorz.system().registry.find_by_name("imu-anomaly")``.
-    """
-    from .app import system as _system
-
-    return _system()
-
-
 async def ask(target: str, payload: Any, *, timeout: float = DEFAULT_ASK_TIMEOUT_S) -> Any:
     """Send the running agent called ``target`` a task and wait for its reply.
 
@@ -131,15 +103,3 @@ async def ask(target: str, payload: Any, *, timeout: float = DEFAULT_ASK_TIMEOUT
     if running is None:
         raise NoSystemError()
     return await running.registry.ask(target, payload, timeout=timeout)
-
-
-def run(*args: Any, **kwargs: Any) -> None:
-    """Start Wactorz from a script; see :func:`wactorz.app.run`.
-
-    Imported on call rather than at package import: the application module
-    pulls in the web server and every interface, which a script that only
-    declares agents never needs.
-    """
-    from .app import run as _run
-
-    _run(*args, **kwargs)

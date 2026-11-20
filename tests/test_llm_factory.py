@@ -220,7 +220,7 @@ class TestTheModelFlagsDoNotInventAModel:
 
     @pytest.mark.parametrize("flag", ["ollama_model", "nim_model", "gemini_model"])
     def test_an_unpassed_flag_stays_unset(self, monkeypatch: pytest.MonkeyPatch, flag: str) -> None:
-        from wactorz.cli import get_args
+        from wactorz.arguments import get_args
 
         monkeypatch.setattr(sys, "argv", ["wactorz"])
 
@@ -259,7 +259,7 @@ class TestASecretOnTheCommandLineIsCalledOut:
     def test_it_warns_and_still_accepts_the_value(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], flag: str
     ) -> None:
-        from wactorz.cli import get_args
+        from wactorz.arguments import get_args
 
         monkeypatch.setattr(sys, "argv", ["wactorz", flag, "s3cret"])
 
@@ -274,7 +274,7 @@ class TestASecretOnTheCommandLineIsCalledOut:
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         # Printing it would put the value in a second place — the logs.
-        from wactorz.cli import get_args
+        from wactorz.arguments import get_args
 
         monkeypatch.setattr(sys, "argv", ["wactorz", "--discord-token", "s3cret"])
 
@@ -285,7 +285,7 @@ class TestASecretOnTheCommandLineIsCalledOut:
     def test_a_run_without_tokens_is_silent(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from wactorz.cli import get_args
+        from wactorz.arguments import get_args
 
         monkeypatch.setattr(sys, "argv", ["wactorz"])
 

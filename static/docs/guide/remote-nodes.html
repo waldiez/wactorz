@@ -272,7 +272,7 @@ sudo<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>
 node again: it installs a user unit. What needs root on the node is then yours to do there: system packages,
 such as <code>python3-venv</code>, and a <code>/nodes run</code> that starts with <code>sudo</code>. A node on main's
 own machine (see below) is set up differently: its user may restart its own unit
-and nothing else.</p>
+and read its log, and nothing else.</p>
 <p>Four details worth knowing if you write one by hand:</p>
 <ul>
 <li><strong><code>Restart=on-failure</code>, not <code>always</code>.</strong> <code>/nodes shutdown</code> exits cleanly on
@@ -746,8 +746,8 @@ without a second machine.</p>
 
 <p>It makes a system user, <code>wactorz-node</code>, with its home in <code>/var/lib/wactorz-node</code>.
 It makes an SSH key in main's state directory and lets that user accept it from
-this machine only. It lets that user restart its own unit and run nothing else
-as root. It installs the unit, and it prints the lines to add to main's <code>.env</code>:</p>
+this machine only. It lets that user restart its own unit and read that unit's
+last log lines, and run nothing else as root. It installs the unit, and it prints the lines to add to main's <code>.env</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">DEPLOY_TARGETS</span><span class="o">=</span>sandbox<span class="w">          </span><span class="c1"># with your other nodes, if you have any</span>
 <span class="nv">DEPLOY_SANDBOX_HOST</span><span class="o">=</span><span class="m">127</span>.0.0.1
 <span class="nv">DEPLOY_SANDBOX_USER</span><span class="o">=</span>wactorz-node

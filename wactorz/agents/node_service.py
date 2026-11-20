@@ -15,8 +15,8 @@ last session and fails the very thing this module is for.
 
 The unit set up beforehand is the local node's: a sandboxed system unit for an
 unprivileged user, written once by root (see :mod:`wactorz.node.local_setup`).
-A deploy may restart it and nothing more, so the sandbox is root's to change,
-never the deploy's -- and never the code running inside it.
+A deploy may restart it and read its log, nothing more, so the sandbox is root's
+to change, never the deploy's -- and never the code running inside it.
 
 Commands run through an injected callable rather than an SSH connection, so the
 ladder is testable without a node.
@@ -214,6 +214,98 @@ def systemctl(rung: Rung) -> str:
     if rung is SUDO or rung is MANAGED:
         return "sudo -n systemctl"
     return "systemctl"
+
+
+#: How many of the node's last log lines a failed deploy shows.
+LOG_TAIL_LINES = 12
+
+_TAIL_OPTIONS = f"-n {LOG_TAIL_LINES} --no-pager -o cat"
+
+#: The read of the system unit's journal a failed deploy makes. `wactorz-node
+#: setup-local` writes a sudoers rule for exactly this command, arguments and
+#: all, since sudo matches them word for word: change one, and the other with it.
+JOURNAL_TAIL = f"journalctl -u {UNIT_NAME} {_TAIL_OPTIONS}"
+
+#: The same read for the user unit. `--user-unit=` rather than `--user -u`: the
+#: latter reads only a journal kept per user, which many nodes do not keep, and
+#: the former reads that one and the system journal both.
+USER_JOURNAL_TAIL = f"journalctl --user-unit={UNIT_NAME} {_TAIL_OPTIONS}"
+
+#: Who may read the system journal without sudo.
+_JOURNAL_READERS = "root and the adm and systemd-journal groups"
+
+#: A journal read as root, or through sudo, that came back empty: there is
+#: nothing it was kept from.
+_JOURNAL_EMPTY = f"The node's journal holds no lines from {UNIT_NAME}."
+
+#: A journal read as root that failed: nothing was kept from it, so the journal
+#: itself is the problem, and the command is named for whoever runs it by hand.
+_JOURNAL_FAILED_AS_ROOT = f"The node's journal could not be read: `{JOURNAL_TAIL}` failed as root."
+
+
+@dataclass(frozen=True)
+class LogTail:
+    """The node's last log lines, and what to say instead when there are none."""
+
+    lines: str
+    why_empty: str
+
+
+async def log_tail(run: Runner, rung: Rung, *, node_name: str, user: str) -> LogTail:
+    """The last lines the node's runner logged, read the way ``rung`` runs it.
+
+    The system journal is readable only to root and two groups, and the deploy
+    user is often in neither: the node's own account on the managed rung never
+    is. So the system rungs below root read it through sudo, and when sudo
+    refuses, without it, which still works for a user in one of those groups.
+    ``why_empty`` says which of those happened, so an empty tail is never just
+    silence.
+    """
+    if rung is NOHUP:
+        log = f"~/wactorz/{shlex.quote(node_name + '.log')}"
+        ok, lines = await run(f"tail -n {LOG_TAIL_LINES} {log} 2>/dev/null")
+        said = "is empty" if ok else "is missing, or could not be read"
+        return LogTail(lines, f"The node's log file, {log}, {said}.")
+    if rung is USER:
+        ok, lines = await run(f"{USER_JOURNAL_TAIL} 2>/dev/null")
+        return LogTail(lines, _user_journal_empty(user, read=ok))
+    if rung is ROOT:
+        ok, lines = await run(f"{JOURNAL_TAIL} 2>/dev/null")
+        return LogTail(lines, _JOURNAL_EMPTY if ok else _JOURNAL_FAILED_AS_ROOT)
+    ok, lines = await run(f"sudo -n {JOURNAL_TAIL} 2>/dev/null")
+    if ok:
+        return LogTail(lines, _JOURNAL_EMPTY)
+    _, lines = await run(f"{JOURNAL_TAIL} 2>/dev/null")
+    return LogTail(lines, _sudo_refused_journal(rung, user))
+
+
+def _user_journal_empty(user: str, *, read: bool) -> str:
+    """Why a user unit's journal gave nothing: possibly not kept where its user can read.
+
+    A read that failed opened no journal at all; one that succeeded may still
+    have opened only the user's own, with the unit's lines in the system one.
+    The likely cause and its fix are the same either way.
+    """
+    said = f"gave {user} no lines from its user unit" if read else f"could not be read as {user}"
+    return (
+        f"The node's journal {said}. Where the journal is not kept per "
+        f"user, the unit's lines are in the system journal, readable only to "
+        f"{_JOURNAL_READERS}: add {user} to systemd-journal to see them."
+    )
+
+
+def _sudo_refused_journal(rung: Rung, user: str) -> str:
+    """Why a system journal read below root gave nothing: sudo would not run it."""
+    said = f"The node's journal gave {user} no lines: sudo does not let it run `{JOURNAL_TAIL}`"
+    if rung is MANAGED:
+        return (
+            f"{said}. Run `sudo wactorz-node setup-local` on the node again: the sudoers "
+            "rule it writes allows that read."
+        )
+    return (
+        f"{said}, and without sudo the system journal is readable only to {_JOURNAL_READERS}. "
+        f"Allow that command in {user}'s sudoers rule, or add {user} to systemd-journal."
+    )
 
 
 async def linger_enabled(run: Runner) -> bool:

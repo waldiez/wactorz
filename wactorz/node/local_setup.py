@@ -9,7 +9,8 @@ none of them: a node. This sets one up on the same machine, once, as root:
 - a key main deploys with, kept in main's state directory and accepted only
   from this machine (``from="127.0.0.1,::1"``), with no forwarding and no
   terminal;
-- a sudoers rule that lets that user restart its own unit and do nothing else;
+- a sudoers rule that lets that user restart its own unit and read the unit's
+  last log lines, and do nothing else;
 - the unit itself, sandboxed (see
   :func:`wactorz.agents.node_service.sandboxed_unit_file`), enabled but not
   started: nothing is installed in it until main deploys.
@@ -44,6 +45,7 @@ from pathlib import Path
 from dotenv import dotenv_values
 
 from ..agents.node_service import (
+    JOURNAL_TAIL,
     MANAGED_MARKER,
     SYSTEM_UNIT_PATH,
     UNIT_NAME,
@@ -209,7 +211,7 @@ def setup(main: Main, run: Run, layout: Layout, *, fix_permissions: bool) -> Pat
     key = main.state_dir / KEY_NAME
     _ensure_key(run, main, key)
     _authorize(run, layout, key)
-    _allow_restart(run, layout)
+    _allow_restart_and_log_read(run, layout)
     _install_unit(run, layout, main)
     _check_secrets(run, main, fix_permissions=fix_permissions)
     return key
@@ -303,14 +305,22 @@ def _authorize(run: Run, layout: Layout, key: Path) -> None:
     _must(run, ["chmod", "0600", str(keys)])
 
 
-def _allow_restart(run: Run, layout: Layout) -> None:
-    """A sudoers rule for one command: restarting the node's own unit.
+def _allow_restart_and_log_read(run: Run, layout: Layout) -> None:
+    """A sudoers rule for two commands: restarting the node's own unit, and reading its log.
+
+    The read is the one a failed deploy makes (`JOURNAL_TAIL`), arguments and
+    all, so the node's user can see why its unit failed and nothing else in the
+    system journal, which adding it to ``systemd-journal`` would open whole.
 
     Checked with ``visudo`` before it is put in place, since a sudoers file with
     an error in it can stop sudo working for everyone.
     """
-    systemctl = _must(run, ["sh", "-c", "command -v systemctl"]).strip() or "/usr/bin/systemctl"
-    rule = f"{NODE_USER} ALL=(root) NOPASSWD: {systemctl} restart {UNIT_NAME}\n"
+    systemctl = _command_path(run, "systemctl")
+    journalctl, journal_args = JOURNAL_TAIL.split(" ", 1)
+    rule = (
+        f"{NODE_USER} ALL=(root) NOPASSWD: {systemctl} restart {UNIT_NAME}\n"
+        f"{NODE_USER} ALL=(root) NOPASSWD: {_command_path(run, journalctl)} {journal_args}\n"
+    )
     pending = layout.sudoers.with_name(f".{layout.sudoers.name}.new")
     pending.write_text(rule, encoding="utf-8")
     try:
@@ -319,6 +329,11 @@ def _allow_restart(run: Run, layout: Layout) -> None:
         pending.replace(layout.sudoers)
     finally:
         pending.unlink(missing_ok=True)
+
+
+def _command_path(run: Run, command: str) -> str:
+    """Where ``command`` is, as root finds it; sudo matches a rule by the full path."""
+    return _must(run, ["sh", "-c", f"command -v {command}"]).strip() or f"/usr/bin/{command}"
 
 
 def _install_unit(run: Run, layout: Layout, main: Main) -> None:

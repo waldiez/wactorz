@@ -368,32 +368,35 @@ class TestWaitingForTheFirstHeartbeat:
 
 
 class TestTheLogTail:
-    async def test_a_unit_is_read_from_its_journal(self) -> None:
+    async def test_the_lines_follow_a_heading(self) -> None:
         conn = FakeConn(ok=True, output="Publisher error: Not authorized")
         agent = _agent()
 
-        tail = await agent._node_log_tail(conn, installer_agent.node_service.USER, "rpi")
+        tail = await agent._node_log_tail(conn, installer_agent.node_service.ROOT, "rpi", "pi")
 
-        assert tail == "Publisher error: Not authorized"
-        assert "journalctl --user" in conn.commands[0]
-        assert installer_agent.node_service.UNIT_NAME in conn.commands[0]
+        assert tail == "The node's log ends with:\nPublisher error: Not authorized"
 
-    async def test_a_system_unit_is_read_from_the_system_journal(self) -> None:
-        conn = FakeConn(ok=True, output="")
+    async def test_no_lines_say_why(self) -> None:
+        # The node's own account on the managed rung reads no system journal:
+        # an empty tail must not read as a node that logged nothing.
+        conn = FakeConn(ok=False, output="")
         agent = _agent()
 
-        await agent._node_log_tail(conn, installer_agent.node_service.ROOT, "rpi")
+        tail = await agent._node_log_tail(
+            conn, installer_agent.node_service.MANAGED, "sandbox", "wactorz-node"
+        )
 
-        assert conn.commands[0].startswith("journalctl -u")
+        assert "ends with" not in tail
+        assert "wactorz-node" in tail
+        assert "setup-local" in tail
 
-    async def test_an_unsupervised_node_is_read_from_its_file(self) -> None:
-        conn = FakeConn(ok=True, output="")
+    async def test_a_long_tail_is_cut(self) -> None:
+        conn = FakeConn(ok=True, output="x" * 5000)
         agent = _agent()
 
-        await agent._node_log_tail(conn, installer_agent.node_service.NOHUP, "rpi")
+        tail = await agent._node_log_tail(conn, installer_agent.node_service.ROOT, "rpi", "pi")
 
-        assert "tail" in conn.commands[0]
-        assert "rpi.log" in conn.commands[0]
+        assert len(tail) < 1600
 
 
 def test_the_checks_run_before_the_node_environment_is_written() -> None:

@@ -372,3 +372,122 @@ class TestTheUnitItself:
         write = next(c for c in node.commands if "WZUNIT" in c)
         assert "<<'WZUNIT'" in write
         assert "${WACTORZ_NODE}" in write
+
+
+class TestTheLogTail:
+    """A failed deploy reads the node's log the way its rung runs it, and says why it is empty."""
+
+    async def test_a_root_node_reads_the_system_journal(self) -> None:
+        node = FakeNode(journalctl=(True, "Publisher error\n"))
+
+        tail = await node_service.log_tail(node, ROOT, node_name="rpi", user="root")
+
+        assert tail.lines == "Publisher error\n"
+        assert node.commands == [f"{node_service.JOURNAL_TAIL} 2>/dev/null"]
+
+    async def test_a_user_unit_is_read_by_its_unit_in_every_journal(self) -> None:
+        # `--user -u` reads only a journal kept per user, which many nodes lack.
+        node = FakeNode()
+
+        tail = await node_service.log_tail(node, USER, node_name="rpi", user="pi")
+
+        assert node.commands == [
+            f"journalctl --user-unit={node_service.UNIT_NAME} -n 12 --no-pager -o cat 2>/dev/null"
+        ]
+        assert "pi" in tail.why_empty
+        assert "systemd-journal" in tail.why_empty
+
+    @pytest.mark.parametrize("rung", [SUDO, MANAGED])
+    async def test_below_root_a_system_journal_is_read_through_sudo(
+        self, rung: node_service.Rung
+    ) -> None:
+        node = FakeNode(**{"sudo -n journalctl": (True, "the node's lines\n")})
+
+        tail = await node_service.log_tail(node, rung, node_name="rpi", user="pi")
+
+        assert tail.lines == "the node's lines\n"
+        assert node.commands == [f"sudo -n {node_service.JOURNAL_TAIL} 2>/dev/null"]
+
+    async def test_an_empty_read_through_sudo_is_an_empty_journal(self) -> None:
+        node = FakeNode()
+
+        tail = await node_service.log_tail(node, SUDO, node_name="rpi", user="pi")
+
+        assert tail.lines == ""
+        assert tail.why_empty == f"The node's journal holds no lines from {node_service.UNIT_NAME}."
+
+    async def test_when_sudo_refuses_it_is_read_without(self) -> None:
+        # A user in adm reads the system journal with no sudo at all.
+        node = FakeNode(**{"sudo -n journalctl": (False, ""), "journalctl": (True, "lines\n")})
+
+        tail = await node_service.log_tail(node, SUDO, node_name="rpi", user="pi")
+
+        assert tail.lines == "lines\n"
+        assert node.commands[-1] == f"{node_service.JOURNAL_TAIL} 2>/dev/null"
+
+    async def test_a_sudo_node_refused_both_ways_says_what_to_change(self) -> None:
+        node = FakeNode(journalctl=(False, ""))
+
+        tail = await node_service.log_tail(node, SUDO, node_name="rpi", user="pi")
+
+        assert "pi" in tail.why_empty
+        assert node_service.JOURNAL_TAIL in tail.why_empty
+        assert "systemd-journal" in tail.why_empty
+
+    async def test_a_managed_node_refused_says_to_run_setup_local_again(self) -> None:
+        node = FakeNode(journalctl=(False, ""))
+
+        tail = await node_service.log_tail(node, MANAGED, node_name="sandbox", user="wactorz-node")
+
+        assert "wactorz-node" in tail.why_empty
+        assert "setup-local" in tail.why_empty
+
+    async def test_an_unsupervised_node_reads_its_file_quoted(self) -> None:
+        node = FakeNode()
+
+        tail = await node_service.log_tail(node, NOHUP, node_name="a b", user="pi")
+
+        assert node.commands == ["tail -n 12 ~/wactorz/'a b.log' 2>/dev/null"]
+        assert "'a b.log'" in tail.why_empty
+
+
+class TestALogReadThatFailed:
+    """A read that failed is not reported as a log with nothing in it."""
+
+    async def test_a_root_node_says_the_read_failed(self) -> None:
+        node = FakeNode(journalctl=(False, ""))
+
+        tail = await node_service.log_tail(node, ROOT, node_name="rpi", user="root")
+
+        assert "could not be read" in tail.why_empty
+        assert "holds no lines" not in tail.why_empty
+
+    async def test_a_root_node_with_an_empty_journal_says_so(self) -> None:
+        node = FakeNode(journalctl=(True, ""))
+
+        tail = await node_service.log_tail(node, ROOT, node_name="rpi", user="root")
+
+        assert "holds no lines" in tail.why_empty
+
+    async def test_a_user_unit_says_the_read_failed(self) -> None:
+        node = FakeNode(journalctl=(False, ""))
+
+        tail = await node_service.log_tail(node, USER, node_name="rpi", user="pi")
+
+        assert "could not be read as pi" in tail.why_empty
+        assert "systemd-journal" in tail.why_empty
+
+    async def test_a_missing_log_file_is_not_called_empty(self) -> None:
+        node = FakeNode(tail=(False, ""))
+
+        tail = await node_service.log_tail(node, NOHUP, node_name="rpi", user="pi")
+
+        assert "missing" in tail.why_empty
+        assert "is empty" not in tail.why_empty
+
+    async def test_an_empty_log_file_says_so(self) -> None:
+        node = FakeNode(tail=(True, ""))
+
+        tail = await node_service.log_tail(node, NOHUP, node_name="rpi", user="pi")
+
+        assert "is empty" in tail.why_empty

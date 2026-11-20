@@ -6,6 +6,7 @@ not the system Python.
 
 import asyncio
 import contextlib
+import functools
 import importlib
 import ipaddress
 import logging
@@ -1728,10 +1729,8 @@ class InstallerAgent(Actor):
                     # a deploy that failed must not leave it exempt for ever.
                     self._unmark_redeploying(node_name)
                 if heartbeat_error:
-                    tail = await self._node_log_tail(conn, rung, node_name)
-                    msg = f"[{node_name}] {heartbeat_error}"
-                    if tail:
-                        msg += f"\nThe node's log ends with:\n{tail}"
+                    tail = await self._node_log_tail(conn, rung, node_name, user)
+                    msg = f"[{node_name}] {heartbeat_error}\n{tail}"
                     self._log_remote(msg)
                     return {
                         "success": False,
@@ -1857,15 +1856,14 @@ class InstallerAgent(Actor):
             f"retrying; the reason is in its log."
         )
 
-    async def _node_log_tail(self, conn: Any, rung: Any, node_name: str) -> str:
-        """The last lines the node logged, for a deploy that failed."""
-        if rung is node_service.NOHUP:
-            command = f"tail -n 12 ~/wactorz/{shlex.quote(node_name + '.log')} 2>/dev/null"
-        else:
-            journal = "journalctl --user" if rung is node_service.USER else "journalctl"
-            command = f"{journal} -u {node_service.UNIT_NAME} -n 12 --no-pager -o cat 2>/dev/null"
-        _, output = await self._ssh_run(conn, command)
-        return output.strip()[:1500]
+    async def _node_log_tail(
+        self, conn: Any, rung: node_service.Rung, node_name: str, user: str
+    ) -> str:
+        """For a deploy that failed: the last lines the node logged, or why there are none."""
+        run_on_node = functools.partial(self._ssh_run, conn)
+        tail = await node_service.log_tail(run_on_node, rung, node_name=node_name, user=user)
+        lines = tail.lines.strip()[:1500]
+        return f"The node's log ends with:\n{lines}" if lines else tail.why_empty
 
     @staticmethod
     def _nohup_launch(node_name: str, broker: Any, mqtt_port: Any) -> str:

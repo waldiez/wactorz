@@ -11,9 +11,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **`wactorz.run`, `wactorz.serve`, `wactorz.pipeline` and `wactorz.system` are the real functions, with their full signatures and docstrings.** They were wrappers taking `*args, **kwargs`, so an editor offered no completions for their keyword arguments, and a type checker accepted a misspelled one (`monitor_prot=`) that then failed only when the script ran.
+
 - **The Docker Hub guide names the image's version tags as they are published**: `waldiez/wactorz:v0.8.0` and `:v0.8.0-ultra`, with the `v`. It wrote them as `:<version>`, which reads as `:0.8.0`, a tag that does not exist.
 
 ### Fixed
+
+- **`python -m wactorz.broker_certificates` no longer warns that the module is already loaded**, which made it fail under `python -W error`. The server's own use of the broker files now lives in a module of its own, so the command compose and the add-on run before the broker starts is loaded only when it runs.
 
 - **On Windows, Ctrl-Break stops Wactorz the way Ctrl-C does**, stopping the agents and saving their state, instead of ending the process on the spot. Unlike Ctrl-C, which reaches every program on the console, Ctrl-Break can be sent to Wactorz alone, so a supervisor or script on Windows can now ask it to shut down cleanly. This covers `wactorz`, not yet `wactorz-node`. The end-to-end suite (`make e2e`) uses it, and now runs on Windows.
 

@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from wactorz import broker_certificates, config
+from wactorz import broker_certificates, broker_files, config
 from wactorz.config import DeployTarget
 from wactorz.core import broker_accounts, broker_tls, node_signing, topics
 
@@ -340,7 +340,7 @@ class TestAtStartup:
     def _configure(self, monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
         patched = replace(config.CONFIG, **fields)
         monkeypatch.setattr(config, "CONFIG", patched)
-        monkeypatch.setattr(broker_certificates, "CONFIG", patched)
+        monkeypatch.setattr(broker_files, "CONFIG", patched)
 
     def test_the_deploy_targets_get_accounts(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -353,7 +353,7 @@ class TestAtStartup:
             deploy_targets=(DeployTarget(name="rpi-kitchen"), DeployTarget(name="rpi-garage")),
         )
 
-        assert broker_certificates.prepare_broker_files() == ""
+        assert broker_files.prepare_broker_files() == ""
 
         accounts = (directory / broker_accounts.PASSWORD_FILE).read_text(encoding="utf-8")
         assert sorted(line.split(":")[0] for line in accounts.splitlines()) == [
@@ -378,7 +378,7 @@ class TestAtStartup:
             deploy_targets=(DeployTarget(name="rpi"),),
         )
 
-        assert broker_certificates.prepare_broker_files() == ""
+        assert broker_files.prepare_broker_files() == ""
 
         text = (directory / broker_accounts.ACL_FILE).read_text(encoding="utf-8")
         for account in ("wactorz", "homeassistant", "zigbee2mqtt"):
@@ -397,8 +397,8 @@ class TestAtStartup:
             deploy_targets=(DeployTarget(name="rpi kitchen"), DeployTarget(name="rpi-garage")),
         )
 
-        with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
-            assert broker_certificates.prepare_broker_files() == ""
+        with caplog.at_level(logging.WARNING, logger=broker_files.__name__):
+            assert broker_files.prepare_broker_files() == ""
 
         accounts = (directory / broker_accounts.PASSWORD_FILE).read_text(encoding="utf-8")
         assert [line.split(":")[0] for line in accounts.splitlines()] == ["rpi-garage"]
@@ -419,8 +419,8 @@ class TestAtStartup:
             deploy_targets=(DeployTarget(name="rpi"),),
         )
 
-        with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
-            assert broker_certificates.prepare_broker_files() == ""
+        with caplog.at_level(logging.WARNING, logger=broker_files.__name__):
+            assert broker_files.prepare_broker_files() == ""
 
         assert "would give every node" in caplog.text
         assert not (directory / broker_accounts.ACL_FILE).exists()
@@ -436,7 +436,7 @@ class TestAtStartup:
             deploy_targets=(DeployTarget(name="rpi"),),
         )
 
-        assert broker_certificates.prepare_broker_files() == ""
+        assert broker_files.prepare_broker_files() == ""
         assert not directory.exists()
 
     def test_a_folder_that_cannot_be_written_does_not_stop_the_server(
@@ -451,8 +451,8 @@ class TestAtStartup:
             deploy_targets=(DeployTarget(name="rpi"),),
         )
 
-        with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
-            assert broker_certificates.prepare_broker_files() == ""
+        with caplog.at_level(logging.WARNING, logger=broker_files.__name__):
+            assert broker_files.prepare_broker_files() == ""
 
         assert any("Could not write" in record.getMessage() for record in caplog.records)
 
@@ -472,6 +472,7 @@ class TestExportingForABrokerOfOurs:
         patched = replace(config.CONFIG, **changes)
         monkeypatch.setattr(config, "CONFIG", patched)
         monkeypatch.setattr(broker_certificates, "CONFIG", patched)
+        monkeypatch.setattr(broker_files, "CONFIG", patched)
 
     def test_a_node_that_cannot_have_an_account_does_not_cost_the_certificate(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -47,6 +47,18 @@ LEFT_EMPTY = (
     "WACTORZ_MODEL_CODE_ON_MAIN",
 )
 
+#: How the backend is asked to stop the way Ctrl-C would, and what it has to be
+#: started with for that to reach it alone. Windows cannot send SIGINT to one
+#: process: Ctrl-C goes to the whole console, this suite included. Ctrl-Break
+#: can be sent to a process group, so the backend is started in one of its own,
+#: and the app handles Ctrl-Break as it does Ctrl-C.
+if sys.platform == "win32":
+    INTERRUPT: int = signal.CTRL_BREAK_EVENT
+    OWN_PROCESS_GROUP: int = subprocess.CREATE_NEW_PROCESS_GROUP
+else:
+    INTERRUPT = signal.SIGINT
+    OWN_PROCESS_GROUP = 0
+
 #: The line `_print_ready_banner` puts on stdout once everything is actually up.
 READY_BANNER = "Dashboard   http://localhost:"
 
@@ -110,7 +122,7 @@ class Backend:
         return self.process.poll() is None
 
     def interrupt(self) -> float:
-        """Send one SIGINT and return how long the process took to exit.
+        """Send one interrupt (see `INTERRUPT`) and return how long the process took to exit.
 
         One signal, and the number returned rather than asserted on here: `a09`
         owns the claim about how fast that has to be, and a harness that baked in
@@ -118,7 +130,7 @@ class Backend:
         requirement lives.
         """
         started = time.monotonic()
-        self.process.send_signal(signal.SIGINT)
+        self.process.send_signal(INTERRUPT)
         try:
             self.process.wait(timeout=30)
         except subprocess.TimeoutExpired:
@@ -146,7 +158,7 @@ class Backend:
     def kill(self) -> None:
         """Stop the process, whatever state it is in: an interrupt, and a kill if that is not enough."""
         if self.process.poll() is None:
-            self.process.send_signal(signal.SIGINT)
+            self.process.send_signal(INTERRUPT)
             try:
                 self.process.wait(timeout=15)
             except subprocess.TimeoutExpired:
@@ -236,6 +248,7 @@ def start(
         stdin=subprocess.DEVNULL,
         stdout=handle,
         preexec_fn=die_with_parent(),
+        creationflags=OWN_PROCESS_GROUP,
         # Merged into stdout so the capture is one ordered stream.
         stderr=subprocess.STDOUT,
         text=True,

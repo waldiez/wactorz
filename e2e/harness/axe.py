@@ -33,18 +33,28 @@ BLOCKING = frozenset({"serious", "critical"})
 #: transparent, and its colours would be judged as they never stay. Only what
 #: changes opacity and ends: a toast's countdown bar moves for seconds, and a
 #: blink or the waiting dots never stop.
+#: A fade can also be about to start: a toast is added transparent and begins
+#: fading in two frames later. So a few frames are let pass, and the fades looked
+#: for again, until none is left (or a few rounds have gone by).
 _RUN = """
 async () => {
     const fadesIn = a => a instanceof CSSTransition
         ? a.transitionProperty === "opacity"
         : a.effect.getKeyframes().some(frame => "opacity" in frame);
-    const fading = document.getAnimations().filter(
-        a => a.playState === "running"
-            && a.effect
-            && a.effect.getComputedTiming().iterations !== Infinity
-            && fadesIn(a),
-    );
-    await Promise.allSettled(fading.map(a => a.finished));
+    const nextFrame = () => new Promise(resolve => requestAnimationFrame(resolve));
+    for (let round = 0; round < 5; round++) {
+        await nextFrame();
+        await nextFrame();
+        await nextFrame();
+        const fading = document.getAnimations().filter(
+            a => a.playState === "running"
+                && a.effect
+                && a.effect.getComputedTiming().iterations !== Infinity
+                && fadesIn(a),
+        );
+        if (!fading.length) break;
+        await Promise.allSettled(fading.map(a => a.finished));
+    }
     const result = await axe.run(document, { resultTypes: ["violations"] });
     return result.violations.flatMap(v => v.nodes.map(n => ({
         rule: v.id,

@@ -12,8 +12,8 @@ import sys
 from wactorz.config import CONFIG
 
 
-def get_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse the cli args: the process's own, or ``argv`` when given."""
+def build_parser() -> argparse.ArgumentParser:
+    """The ``wactorz`` command's parser: every flag it takes, hidden ones included."""
     parser = argparse.ArgumentParser(description="Wactorz - Multi-Agent Framework")
     parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp", "telegram"])
     parser.add_argument("--port", type=int)
@@ -88,7 +88,12 @@ def get_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--name", help=argparse.SUPPRESS)
     parser.add_argument("--broker", help=argparse.SUPPRESS)
     parser.add_argument("--loglevel", default="INFO", help=argparse.SUPPRESS)
-    args, _ = parser.parse_known_args(argv)
+    return parser
+
+
+def get_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse the cli args: the process's own, or ``argv`` when given."""
+    args, _ = build_parser().parse_known_args(argv)
     _warn_about_tokens_on_the_command_line(args)
 
     return args

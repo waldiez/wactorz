@@ -348,13 +348,13 @@ wactorz --llm nim --nim-model meta/llama-3.3-70b-instruct
 wactorz --reload
 
 # Discord bot
-wactorz --interface discord --discord-token $DISCORD_BOT_TOKEN
+wactorz --interface discord   # the token is DISCORD_BOT_TOKEN, in .env or the environment
 
 # WhatsApp (via Twilio)
 wactorz --interface whatsapp
 
 # Telegram
-wactorz --interface telegram --telegram-token $TELEGRAM_BOT_TOKEN
+wactorz --interface telegram  # the token is TELEGRAM_BOT_TOKEN, in .env or the environment
 
 # REST API
 wactorz --interface rest --port 8000

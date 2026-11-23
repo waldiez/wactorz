@@ -19,7 +19,9 @@
 - [ ] `bun run test` — all unit tests pass
 - [ ] New/changed exported functions and public methods have a JSDoc (see [Style guide](#style-guide))
 - [ ] `bun run coverage` — meets the gated thresholds (raise them as you add tests, never lower)
-- [ ] `bun run build` — bundle succeeds, no new chunk-size warnings
+- [ ] `make build-frontend`, from the repository root — bundle succeeds, no new chunk-size warnings. Without
+      `make`, `bun run build` here does the same when Wactorz is installed editable, as `make install-dev`
+      installs it
 - [ ] `bun run docs` — TypeDoc builds with no warnings
 - [ ] Tested in browser against a live backend (or at minimum the MQTT mock stack)
 

@@ -746,7 +746,7 @@ python -m wactorz --llm ollama --ollama-model llama3
 python -m wactorz --llm nim --nim-model meta/llama-3.3-70b-instruct
 python -m wactorz --llm gemini                                         # gemini-3.5-flash-lite default
 python -m wactorz --llm gemini --gemini-model gemini-3.8-flash
-python -m wactorz --interface discord --discord-token YOUR_TOKEN
+python -m wactorz --interface discord                                # token: DISCORD_BOT_TOKEN in .env
 ```
 
 **Chat commands.** What main answers, as its `/help` lists them; the terminal chat passes

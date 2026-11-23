@@ -90,7 +90,7 @@ The broker in step 2 accepts anyone who can reach it, so it is published on `127
 wactorz --llm gemini --gemini-model gemini-3.5-flash-lite
 
 # Discord bot
-wactorz --interface discord --discord-token $DISCORD_BOT_TOKEN
+wactorz --interface discord   # the token is DISCORD_BOT_TOKEN, in .env or the environment
 
 # Hot-reload during development (restarts on source file changes)
 wactorz --reload

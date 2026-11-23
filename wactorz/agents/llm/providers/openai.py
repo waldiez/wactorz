@@ -23,6 +23,10 @@ from ..retry import attempt_timeout
 
 logger: logging.Logger = logging.getLogger(__name__)
 
+# The model a provider built with none named uses. It calls tools on Chat
+# Completions with reasoning off by default, which is how Wactorz asks for them.
+DEFAULT_MODEL = "gpt-5.4-mini"
+
 
 class OpenAIProvider(LLMProvider):
     """OpenAI's Chat Completions API, through the ``openai`` package, or any server that speaks
@@ -30,7 +34,7 @@ class OpenAIProvider(LLMProvider):
     """
 
     def __init__(
-        self, model: str = "gpt-4o", api_key: str | None = None, base_url: str | None = None
+        self, model: str = DEFAULT_MODEL, api_key: str | None = None, base_url: str | None = None
     ) -> None:
         import openai  # optional dependency: the `openai` extra
 

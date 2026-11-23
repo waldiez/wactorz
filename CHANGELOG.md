@@ -11,6 +11,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **OpenAI's default model is `gpt-5.4-mini`, and Wactorz's own OpenAI prices are OpenAI's current ones.** It was `gpt-4o`, for `OpenAIProvider()` with no model named, and the OpenAI example in `.env.template`, the README and the docs. OpenAI shuts down the `gpt-4o` snapshots on 2027-01-14. `gpt-5.4-mini` has no shutdown announced and calls tools the way Wactorz asks for them. `gpt-6-luna`, which OpenAI suggests in place of `gpt-4o`, calls tools on Chat Completions only with reasoning turned off, which Wactorz does not ask for. The prices Wactorz uses when the LiteLLM price catalogue cannot be fetched are corrected:
+  - The GPT-6 models had no price, so their calls never counted toward `LLM_COST_LIMIT_USD`.
+  - `gpt-5.5`, `gpt-5.5-pro` and the `gpt-5.6` models were counted at `gpt-5`'s price, a fraction of theirs.
+  - `gpt-4.1` and `gpt-4.1-mini` had no price.
+  - `gpt-5-mini` and `gpt-5-nano` were counted about a tenth high.
+  - A prompt over 272,000 tokens to a model that charges more for one (GPT-6, `gpt-5.6`, `gpt-5.5`, `gpt-5.4`) is now priced at that higher rate.
+  - Rows for models OpenAI has shut down are gone.
+  - The AG2 example prices `gpt-5.4-mini` too.
+
 - **Gemini's default model is `gemini-3.5-flash-lite`**, for `GeminiProvider()` with no model named and for `LLM_PROVIDER=gemini` with `LLM_MODEL` explicitly empty. It was `gemini-2.5-flash`, which Google retires on 2026-12-01: from that day it answers requests for `gemini-2.5-flash` with `gemini-3.5-flash-lite`, at the same price, and requests for `gemini-2.5-pro` with `gemini-3.8-flash`, at that model's price. A setup that names `gemini-2.5-pro` keeps working but is counted at 2.5 Pro's price; name the model Google now serves to keep the cost Wactorz counts right. The models the provider and the reference list are Google's current ones, with their prices, and Wactorz's own prices for them, used when the LiteLLM catalogue cannot be fetched, now include them. `gemini-2.0-flash`, shut down by Google, is no longer listed, and the Pro and 3 Flash models are named by their real ids, `gemini-3.1-pro-preview` and `gemini-3-flash-preview`.
 
 - **`wactorz.run`, `wactorz.serve`, `wactorz.pipeline` and `wactorz.system` are the real functions, with their full signatures and docstrings.** They were wrappers taking `*args, **kwargs`, so an editor offered no completions for their keyword arguments, and a type checker accepted a misspelled one (`monitor_prot=`) that then failed only when the script ran.

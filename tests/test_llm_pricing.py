@@ -253,3 +253,77 @@ def test_each_gemini_model_has_its_price(model: str, rates: tuple[float, float])
 
 def test_a_gemini_model_the_table_does_not_name_takes_the_family_price() -> None:
     assert pricing_info("gemini-9-flash")["matched_prefix"] == "gemini-"
+
+
+# ── the OpenAI rows ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("model", "short", "long"),
+    [
+        ("gpt-6-luna", (0.10, 0.50), (0.20, 0.75)),
+        ("gpt-6.1-terra", (1.00, 5.00), (2.00, 7.50)),
+        ("gpt-6-sol", (2.00, 10.00), (4.00, 15.00)),
+        ("gpt-6.1-sol", (2.00, 10.00), (4.00, 15.00)),
+        ("gpt-6.2-sol", (2.00, 10.00), (4.00, 15.00)),
+        ("gpt-6.2-astra", (8.00, 40.00), (16.00, 60.00)),
+        ("gpt-6-astra", (10.00, 50.00), (20.00, 75.00)),
+        ("gpt-5.6-luna", (0.20, 1.20), (0.40, 1.80)),
+        ("gpt-5.6-terra", (2.00, 12.00), (4.00, 18.00)),
+        ("gpt-5.6-sol", (4.00, 20.00), (8.00, 30.00)),
+        ("gpt-5.5", (5.00, 30.00), (10.00, 45.00)),
+        ("gpt-5.5-pro", (30.00, 180.00), (60.00, 270.00)),
+        ("gpt-5.4", (2.50, 15.00), (5.00, 22.50)),
+        ("gpt-5.4-pro", (30.00, 180.00), (60.00, 270.00)),
+    ],
+)
+def test_an_openai_prompt_over_272k_tokens_pays_the_long_context_price(
+    model: str, short: tuple[float, float], long: tuple[float, float]
+) -> None:
+    assert pricing_info(model)["matched_prefix"] == model
+    assert calc_cost(model, 272_000, _1M) == pytest.approx(272_000 * short[0] / _1M + short[1])
+    assert calc_cost(model, 272_001, _1M) == pytest.approx(272_001 * long[0] / _1M + long[1])
+
+
+@pytest.mark.parametrize(
+    ("model", "rates"),
+    [
+        ("gpt-5.4-mini", (0.75, 4.50)),
+        ("gpt-5.4-nano", (0.20, 1.25)),
+        ("gpt-5.3-codex", (1.75, 14.00)),
+        ("gpt-5.2", (1.75, 14.00)),
+        ("gpt-5.2-pro", (21.00, 168.00)),
+        ("gpt-5.1", (1.25, 10.00)),
+        ("gpt-5-search-api", (1.25, 10.00)),
+        ("chat-latest", (5.00, 30.00)),
+        ("gpt-5-pro", (15.00, 120.00)),
+        ("gpt-5-mini", (0.25, 2.00)),
+        ("gpt-5-nano", (0.05, 0.40)),
+        ("gpt-5", (1.25, 10.00)),
+        ("gpt-4.1-mini", (0.40, 1.60)),
+        ("gpt-4.1", (2.00, 8.00)),
+        ("gpt-4o", (2.50, 10.00)),
+        ("gpt-4o-mini", (0.15, 0.60)),
+    ],
+)
+def test_each_openai_model_with_one_price_has_it(model: str, rates: tuple[float, float]) -> None:
+    info = pricing_info(model)
+    assert info["matched_prefix"] == model
+    assert (info["input_per_1m"], info["output_per_1m"]) == pytest.approx(rates)
+    assert info["tiers"] == []
+
+
+def test_a_gpt_6_snapshot_is_priced_as_its_model() -> None:
+    # With no row for the family a dated id would cost 0, so none of its calls
+    # would count toward the cost limit.
+    assert calc_cost("gpt-6-luna-2026-10-01", _1M, _1M) == calc_cost("gpt-6-luna", _1M, _1M)
+    assert calc_cost("gpt-6-luna-2026-10-01", 1000, 0) > 0
+
+
+@pytest.mark.parametrize(
+    ("model", "family"), [("gpt-5.1-codex-mini", "gpt-5.1"), ("gpt-5.2-chat-latest", "gpt-5.2")]
+)
+def test_a_shut_down_variant_takes_its_familys_price(model: str, family: str) -> None:
+    # Their rows are gone with the models; a stray id still costs what its
+    # family does rather than 0.
+    assert pricing_info(model)["matched_prefix"] == family

@@ -168,7 +168,7 @@ LLM_MODEL=claude-sonnet-4-6
 # ── OpenAI ────────────────────────────────────────────────────────────────────
 # LLM_API_KEY=sk-...
 # LLM_PROVIDER=openai
-# LLM_MODEL=gpt-4o
+# LLM_MODEL=gpt-5.4-mini
 # OPENAI_URL=  # optional: set to redirect to a compatible endpoint (Groq, Together, vLLM…)
 
 # ── Ollama (local) ───────────────────────────────────────────────────────────

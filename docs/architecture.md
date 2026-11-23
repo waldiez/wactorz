@@ -211,7 +211,7 @@ Discord channel
 | Provider | Flag | Env var | Example model |
 |----------|------|---------|---------------|
 | `AnthropicProvider` | `--llm anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` (also the global `LLM_MODEL` default) |
-| `OpenAIProvider` | `--llm openai` | `OPENAI_API_KEY` | `gpt-4o` |
+| `OpenAIProvider` | `--llm openai` | `OPENAI_API_KEY` | `gpt-5.4-mini` |
 | `OllamaProvider` | `--llm ollama --ollama-model llama3` | — (local; uses `OLLAMA_URL`) | `llama3`, `mistral`, etc. |
 | `NIMProvider` | `--llm nim --nim-model meta/llama-3.3-70b-instruct` | `NIM_API_KEY` | `meta/llama-3.3-70b-instruct` |
 | `GeminiProvider` | `--llm gemini --gemini-model gemini-3.5-flash-lite` | `GEMINI_API_KEY` | `gemini-3.5-flash-lite` (Gemini's own default, used when `LLM_MODEL` is explicitly empty) |

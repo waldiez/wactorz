@@ -469,9 +469,9 @@ Discord channel
 </tr>
 <tr>
 <td><code>GeminiProvider</code></td>
-<td><code>--llm gemini --gemini-model gemini-2.5-flash</code></td>
+<td><code>--llm gemini --gemini-model gemini-3.5-flash-lite</code></td>
 <td><code>GEMINI_API_KEY</code></td>
-<td><code>gemini-2.5-flash</code> (gemini-only fallback when <code>LLM_MODEL</code> is unset)</td>
+<td><code>gemini-3.5-flash-lite</code> (Gemini's own default, used when <code>LLM_MODEL</code> is explicitly empty)</td>
 </tr>
 </tbody>
 </table>
@@ -594,7 +594,7 @@ vanish silently.</p>
 wactorz
 
 <span class="c1"># Choose a different LLM provider</span>
-wactorz<span class="w"> </span>--llm<span class="w"> </span>gemini<span class="w"> </span>--gemini-model<span class="w"> </span>gemini-2.5-flash
+wactorz<span class="w"> </span>--llm<span class="w"> </span>gemini<span class="w"> </span>--gemini-model<span class="w"> </span>gemini-3.5-flash-lite
 wactorz<span class="w"> </span>--llm<span class="w"> </span>openai
 wactorz<span class="w"> </span>--llm<span class="w"> </span>ollama<span class="w"> </span>--ollama-model<span class="w"> </span>llama3
 wactorz<span class="w"> </span>--llm<span class="w"> </span>nim<span class="w"> </span>--nim-model<span class="w"> </span>meta/llama-3.3-70b-instruct

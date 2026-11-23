@@ -274,7 +274,7 @@ wactorz
 <p>The broker in step 2 accepts anyone who can reach it, so it is published on <code>127.0.0.1</code> only. Before nodes or other machines connect to it, give it accounts: the Docker Compose stack below does, with <code>MQTT_USERNAME</code> and <code>MQTT_PASSWORD</code>, and <a href="../guide/security.html">Security</a> covers the rest.</p>
 <h4 id="switch-interface-or-provider">Switch interface or provider</h4>
 <div class="highlight"><pre><span></span><code><span class="c1"># Use Gemini instead of Claude</span>
-wactorz<span class="w"> </span>--llm<span class="w"> </span>gemini<span class="w"> </span>--gemini-model<span class="w"> </span>gemini-2.5-flash
+wactorz<span class="w"> </span>--llm<span class="w"> </span>gemini<span class="w"> </span>--gemini-model<span class="w"> </span>gemini-3.5-flash-lite
 
 <span class="c1"># Discord bot</span>
 wactorz<span class="w"> </span>--interface<span class="w"> </span>discord<span class="w"> </span>--discord-token<span class="w"> </span><span class="nv">$DISCORD_BOT_TOKEN</span>

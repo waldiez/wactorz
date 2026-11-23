@@ -11,6 +11,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **The `google` extra asks for `google-genai` 1.7.0 or later.** It asked for 1.0.0, but releases before 1.7.0 require a websockets older than Wactorz's own, so they could never be installed beside it. 1.7.0 is the earliest that can, and the Gemini provider's tests pass on it.
+
 - **OpenAI's default model is `gpt-5.4-mini`, and Wactorz's own OpenAI prices are OpenAI's current ones.** It was `gpt-4o`, for `OpenAIProvider()` with no model named, and the OpenAI example in `.env.template`, the README and the docs. OpenAI shuts down the `gpt-4o` snapshots on 2027-01-14. `gpt-5.4-mini` has no shutdown announced and calls tools the way Wactorz asks for them. `gpt-6-luna`, which OpenAI suggests in place of `gpt-4o`, calls tools on Chat Completions only with reasoning turned off, which Wactorz does not ask for. The prices Wactorz uses when the LiteLLM price catalogue cannot be fetched are corrected:
   - The GPT-6 models had no price, so their calls never counted toward `LLM_COST_LIMIT_USD`.
   - `gpt-5.5`, `gpt-5.5-pro` and the `gpt-5.6` models were counted at `gpt-5`'s price, a fraction of theirs.

@@ -52,7 +52,7 @@ dependencies = [
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.86.0"]
 openai    = ["openai>=2.29.0"]
-google    = ["google-genai>=1.0.0"]
+google    = ["google-genai>=1.7.0"]
 discord   = ["discord.py>=2.7.1"]
 telegram  = ["python-telegram-bot>=21.0"]
 whatsapp  = ["twilio>=9.10.4"]

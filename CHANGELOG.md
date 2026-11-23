@@ -17,6 +17,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Language-model calls cost what the provider charges for them, long prompts included.** This cost is what the dashboard shows and what `LLM_COST_LIMIT_USD` counts. Claude Haiku 5.5 counted as free whenever the LiteLLM price catalogue could not be fetched, and in the same case Claude Fable 5.2, Mythos 5.2, Opus 5.5, Sonnet 5 and Sonnet 5.5 were counted at older, higher prices. Models that charge more for a long prompt are now priced that way, from the catalogue and the built-in prices alike: Claude Haiku 5.5 above 100,000 prompt tokens, Gemini 2.5 Pro and 3.1 Pro above 200,000, and any other model the catalogue lists with such a price. These prompts were counted at the short-prompt price, Haiku 5.5's at a fifth of what it charges. `pricing_info` lists the long-prompt prices under `tiers`.
+
 - **`GET /api/actors/{id}` answers for an agent that has just started.** In the seconds between an agent being registered and its first heartbeat, the route answered `404` for it, though `GET /api/actors` already listed it as starting. A chat opened on such an agent, right after a start or a restart, logged the error in the browser and showed no introduction until the thread was opened again. The route now answers with the agent as starting, and its introduction.
 
 - **`python -m wactorz.broker_certificates` no longer warns that the module is already loaded**, which made it fail under `python -W error`. The server's own use of the broker files now lives in a module of its own, so the command compose and the add-on run before the broker starts is loaded only when it runs.

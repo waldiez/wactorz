@@ -98,12 +98,19 @@ _FALLBACK_PRICING: dict[str, Price] = {
     # NVIDIA NIM — free tier covers most usage; paid tier pricing varies by model
     "nim/": Price(0.00, 0.00),
     # Google Gemini
+    # Google's price for 3.6 and 3.8 Flash through 2026-12-31; it doubles to
+    # $1.50 / $7.50 from 2027-01-01.
+    "gemini-3.8-flash": Price(0.75, 3.75),
+    "gemini-3.6-flash": Price(0.75, 3.75),
+    "gemini-3.5-flash-lite": Price(0.30, 2.50),
+    "gemini-3.1-flash-lite": Price(0.25, 1.50),
+    "gemini-3-flash-preview": Price(0.50, 3.00),
+    "gemini-3.1-pro-preview": Price(2.00, 12.00, (Tier(200_000, 4.00, 18.00),)),
     "gemini-2.5-flash-lite": Price(0.10, 0.40),
-    "gemini-2.0-flash": Price(0.075, 0.30),
+    # Google serves requests for 2.5 Flash and 2.5 Pro with 3.5 Flash-Lite and
+    # 3.8 Flash from 2026-12-01, and bills them at those models' prices.
     "gemini-2.5-flash": Price(0.30, 2.50),
-    "gemini-3-flash": Price(0.50, 3.00),
     "gemini-2.5-pro": Price(1.25, 10.00, (Tier(200_000, 2.50, 15.00),)),
-    "gemini-3.1-pro": Price(2.00, 12.00, (Tier(200_000, 4.00, 18.00),)),
     "gemini-": Price(0.30, 2.50),
 }
 

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for per-call-site LLM provider overrides (wactorz/llm_factory.py)."""
 
+import dataclasses
 import importlib.util
 import re
 import sys
@@ -10,8 +11,10 @@ from typing import cast
 
 import pytest
 
+from wactorz import llm_factory
+from wactorz.agents.llm.providers.gemini import GeminiProvider
 from wactorz.agents.llm_agent import LLMProvider, OllamaProvider
-from wactorz.config import _env_name
+from wactorz.config import CONFIG, _env_name
 from wactorz.llm_factory import (
     create_provider,
     parse_overrides,
@@ -244,6 +247,22 @@ class TestTheModelFlagsDoNotInventAModel:
         # `model_name` here, `model` on every other provider — see the startup
         # log in app.py, which reads both.
         assert provider.model_name == CONFIG.llm_model  # pyright: ignore[reportAttributeAccessIssue]
+
+    @pytest.mark.skipif(not _installed("google.genai"), reason="the google extra is not installed")
+    def test_gemini_with_an_empty_model_takes_its_own_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-used")
+        monkeypatch.setattr(llm_factory, "CONFIG", dataclasses.replace(CONFIG, llm_model=""))
+
+        provider = create_provider("gemini", None)
+
+        assert isinstance(provider, GeminiProvider)
+        assert provider.model_name == "gemini-3.5-flash-lite"
+
+    @pytest.mark.skipif(not _installed("google.genai"), reason="the google extra is not installed")
+    def test_a_gemini_provider_built_directly_takes_the_same_default(self) -> None:
+        assert GeminiProvider(api_key="test-key-not-used").model_name == "gemini-3.5-flash-lite"
 
 
 class TestASecretOnTheCommandLineIsCalledOut:

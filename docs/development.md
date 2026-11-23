@@ -87,7 +87,7 @@ The broker in step 2 accepts anyone who can reach it, so it is published on `127
 
 ```bash
 # Use Gemini instead of Claude
-wactorz --llm gemini --gemini-model gemini-2.5-flash
+wactorz --llm gemini --gemini-model gemini-3.5-flash-lite
 
 # Discord bot
 wactorz --interface discord --discord-token $DISCORD_BOT_TOKEN

@@ -27,7 +27,7 @@ import pytest
 from wactorz import config as config_mod
 from wactorz._version import __version__
 from wactorz.agents import installer_agent, node_service
-from wactorz.agents.installer_agent import InstallerAgent, NodeTls
+from wactorz.agents.installer_agent import InstallerAgent, NodeTls, WheelNotBuiltError
 from wactorz.agents.main.actor import MainActor
 from wactorz.config import CONFIG, DeployTarget
 from wactorz.core.actor import Message, MessageType
@@ -1075,6 +1075,28 @@ class TestInstallingWactorzOnTheNode:
         assert conn.sftp.uploads == [(str(self.WHEEL), f"/home/pi/wactorz/{self.WHEEL.name}")]
         assert not any(f"wactorz=={__version__}" in c for c in conn.commands)
 
+    async def test_a_checkout_whose_build_fails_installs_nothing(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PyPI is not tried instead: at this version number it has other code, or none."""
+        logged: list[str] = []
+
+        async def _fails() -> None:
+            raise WheelNotBuiltError.ran_out(900.0)
+
+        async def _unexpected() -> None:
+            raise AssertionError("the installed package was sent in place of the checkout")
+
+        monkeypatch.setattr(installer, "_build_wheel", _fails)
+        monkeypatch.setattr(installer, "_installed_wheel", _unexpected)
+        monkeypatch.setattr(installer, "_log_remote", logged.append)
+
+        assert await installer._install_wactorz(conn, "rpi", "/home/pi") is False
+
+        assert conn.commands == []
+        assert conn.sftp.uploads == []
+        assert logged == [f"[rpi] {WheelNotBuiltError.ran_out(900.0)}"]
+
     async def test_the_uploaded_wheel_replaces_a_same_numbered_install(
         self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1232,13 +1254,38 @@ class TestTheWheelOfThisCheckout:
             [sys.executable, "-m", "pip", "wheel", str(root), "--no-deps", "-w", str(root / "dist")]
         ]
 
-    async def test_a_build_that_fails_sends_none(
+    async def test_a_build_that_fails_says_what_pip_said(
         self, installer: InstallerAgent, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._checkout(tmp_path, monkeypatch)
-        monkeypatch.setattr(subprocess, "run", lambda *_a, **_kw: SimpleNamespace(returncode=1))
+        said = "\n".join(f"line {n}" for n in range(1, 9)) + "\nERROR: no backend\n\n"
+        monkeypatch.setattr(
+            subprocess, "run", lambda *_a, **_kw: SimpleNamespace(returncode=1, stderr=said)
+        )
 
-        assert await installer._build_wheel() is None
+        with pytest.raises(WheelNotBuiltError) as raised:
+            await installer._build_wheel()
+
+        message = str(raised.value)
+        assert "pip exited with 1" in message
+        assert "line 5 / line 6 / line 7 / line 8 / ERROR: no backend" in message
+        assert "line 4" not in message
+
+    async def test_a_build_that_hangs_is_stopped_at_its_limit(
+        self, installer: InstallerAgent, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._checkout(tmp_path, monkeypatch)
+        limits: list[float] = []
+
+        def _hangs(argv: list[str], **kw: Any) -> None:
+            limits.append(kw["timeout"])
+            raise subprocess.TimeoutExpired(argv, kw["timeout"])
+
+        monkeypatch.setattr(subprocess, "run", _hangs)
+
+        with pytest.raises(WheelNotBuiltError, match="ran for more than 15 minutes"):
+            await installer._build_wheel()
+        assert limits == [installer_agent.WHEEL_BUILD_TIMEOUT_S]
 
     async def test_a_wheel_of_another_version_is_not_taken_for_this_one(
         self, installer: InstallerAgent, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1248,7 +1295,8 @@ class TestTheWheelOfThisCheckout:
         (root / "dist" / "wactorz-0.0.1-py3-none-any.whl").write_bytes(b"")
         monkeypatch.setattr(subprocess, "run", lambda *_a, **_kw: SimpleNamespace(returncode=0))
 
-        assert await installer._build_wheel() is None
+        with pytest.raises(WheelNotBuiltError, match=f"no wheel of wactorz {__version__}"):
+            await installer._build_wheel()
 
     async def test_away_from_a_source_tree_nothing_is_built(
         self, installer: InstallerAgent, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

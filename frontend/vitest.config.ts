@@ -5,9 +5,9 @@ import { defineConfig } from "vitest/config";
 
 // Coverage floors — ratchet up as coverage grows, never down. Lines, statements
 // and functions share TARGET; branches trail (defensive guards + flag-gated
-// paths cover slower), so they keep a small offset.
-const TARGET = 97;
-const BRANCHES_FLOOR = TARGET - 4;
+// paths cover slower), so they keep a floor of their own.
+const TARGET = 98;
+const BRANCHES_FLOOR = 93;
 
 export default defineConfig({
     // The test-id contract (testids.test.ts) reads the end-to-end harness, which

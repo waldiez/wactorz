@@ -121,7 +121,7 @@ All LLM-backed agents inherit from `LLMAgent`, which inherits from `Actor`. It m
 | OpenAI | `OPENAI_API_KEY` | `--llm openai` |
 | Ollama | _(none)_ | Local models, `--llm ollama --ollama-model llama3` |
 | NVIDIA NIM | `NIM_API_KEY` | Free tier 1000 req/month, `--llm nim --nim-model meta/llama-3.3-70b-instruct` |
-| Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | Free tier available, `--llm gemini --gemini-model gemini-2.5-flash` |
+| Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | Free tier available, `--llm gemini --gemini-model gemini-3.5-flash-lite` |
 
 Ollama uses the native `/api/chat` endpoint. Wactorz sends `system_prompt` as the first `{"role": "system"}` chat message for both blocking and streaming requests, matching the chat message format used by modern Ollama models.
 
@@ -723,13 +723,14 @@ Cost is tracked for all five providers (Anthropic, OpenAI, Ollama free, NIM free
 
 | Model | Input | Output | Notes |
 |-------|-------|--------|-------|
-| `gemini-2.5-flash-lite` | $0.10 | $0.40 | Cheapest, fast, free tier |
-| `gemini-2.0-flash` | $0.10 | $0.40 | Fast & capable, free tier |
-| `gemini-2.5-flash` | $0.30 | $2.50 | Default, hybrid reasoning, free tier |
-| `gemini-2.5-pro` | $1.25 | $10.00 | Best for coding & complex tasks |
-| `gemini-3.1-pro` | $2.00 | $12.00 | Flagship, no free tier |
+| `gemini-3.1-flash-lite` | $0.25 | $1.50 | Cheaper than the default |
+| `gemini-3.5-flash-lite` | $0.30 | $2.50 | The default |
+| `gemini-3.6-flash` | $0.75 | $3.75 | Stronger; $1.50 / $7.50 from 2027-01-01 |
+| `gemini-3.8-flash` | $0.75 | $3.75 | Stronger again; $1.50 / $7.50 from 2027-01-01 |
+| `gemini-3.1-pro-preview` | $2.00 | $12.00 | Pro, in preview |
+| `gemini-2.5-flash-lite` | $0.10 | $0.40 | Still served, with no shutdown date announced |
 
-Pro models charge 2x for prompts above 200K tokens. Get a free API key at [aistudio.google.com](https://aistudio.google.com).
+A Pro prompt over 200K tokens costs more: twice the input price and one and a half times the output price, for the whole request. From 2026-12-01 Google answers requests for `gemini-2.5-flash` with `gemini-3.5-flash-lite` and requests for `gemini-2.5-pro` with `gemini-3.8-flash`, and bills them at those models' prices; name the new model to keep the cost Wactorz counts right. Get an API key at [aistudio.google.com](https://aistudio.google.com).
 
 ---
  
@@ -743,8 +744,8 @@ python -m wactorz                                              # Anthropic Claud
 python -m wactorz --llm openai
 python -m wactorz --llm ollama --ollama-model llama3
 python -m wactorz --llm nim --nim-model meta/llama-3.3-70b-instruct
-python -m wactorz --llm gemini                                         # gemini-2.5-flash default
-python -m wactorz --llm gemini --gemini-model gemini-2.5-pro
+python -m wactorz --llm gemini                                         # gemini-3.5-flash-lite default
+python -m wactorz --llm gemini --gemini-model gemini-3.8-flash
 python -m wactorz --interface discord --discord-token YOUR_TOKEN
 ```
 

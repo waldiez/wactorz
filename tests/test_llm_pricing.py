@@ -226,3 +226,30 @@ def test_pricing_info_lists_a_live_prices_tiers(monkeypatch: pytest.MonkeyPatch)
 def test_pricing_info_lists_no_tiers_for_a_single_price() -> None:
     assert pricing_info("gpt-4o-mini")["tiers"] == []
     assert pricing_info("no-such-model-xyz")["tiers"] == []
+
+
+# ── the Gemini rows ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("model", "rates"),
+    [
+        ("gemini-3.8-flash", (0.75, 3.75)),
+        ("gemini-3.6-flash", (0.75, 3.75)),
+        ("gemini-3.5-flash-lite", (0.30, 2.50)),
+        ("gemini-3.1-flash-lite", (0.25, 1.50)),
+        ("gemini-3-flash-preview", (0.50, 3.00)),
+        ("gemini-3.1-pro-preview", (2.00, 12.00)),
+        ("gemini-2.5-flash-lite", (0.10, 0.40)),
+        ("gemini-2.5-flash", (0.30, 2.50)),
+        ("gemini-2.5-pro", (1.25, 10.00)),
+    ],
+)
+def test_each_gemini_model_has_its_price(model: str, rates: tuple[float, float]) -> None:
+    info = pricing_info(model)
+    assert info["matched_prefix"] == model
+    assert (info["input_per_1m"], info["output_per_1m"]) == pytest.approx(rates)
+
+
+def test_a_gemini_model_the_table_does_not_name_takes_the_family_price() -> None:
+    assert pricing_info("gemini-9-flash")["matched_prefix"] == "gemini-"

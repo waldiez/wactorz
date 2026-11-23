@@ -11,6 +11,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Gemini's default model is `gemini-3.5-flash-lite`**, for `GeminiProvider()` with no model named and for `LLM_PROVIDER=gemini` with `LLM_MODEL` explicitly empty. It was `gemini-2.5-flash`, which Google retires on 2026-12-01: from that day it answers requests for `gemini-2.5-flash` with `gemini-3.5-flash-lite`, at the same price, and requests for `gemini-2.5-pro` with `gemini-3.8-flash`, at that model's price. A setup that names `gemini-2.5-pro` keeps working but is counted at 2.5 Pro's price; name the model Google now serves to keep the cost Wactorz counts right. The models the provider and the reference list are Google's current ones, with their prices, and Wactorz's own prices for them, used when the LiteLLM catalogue cannot be fetched, now include them. `gemini-2.0-flash`, shut down by Google, is no longer listed, and the Pro and 3 Flash models are named by their real ids, `gemini-3.1-pro-preview` and `gemini-3-flash-preview`.
+
 - **`wactorz.run`, `wactorz.serve`, `wactorz.pipeline` and `wactorz.system` are the real functions, with their full signatures and docstrings.** They were wrappers taking `*args, **kwargs`, so an editor offered no completions for their keyword arguments, and a type checker accepted a misspelled one (`monitor_prot=`) that then failed only when the script ran.
 
 - **The Docker Hub guide names the image's version tags as they are published**: `waldiez/wactorz:v0.8.0` and `:v0.8.0-ultra`, with the `v`. It wrote them as `:<version>`, which reads as `:0.8.0`, a tag that does not exist.

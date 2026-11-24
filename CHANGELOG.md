@@ -34,6 +34,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A spawn's `options` can no longer choose an agent's name, id, state folder or model.** A library agent spawned by its target, on main or on a node, was built with whatever its options said for `name`, `actor_id`, `persistence_dir` and `llm_provider`, in place of the values main had checked: a model-written spawn could build an agent named `main`, under main's id, keeping its state anywhere. A spawn whose options name one of them is now refused, saying which; decorated functions and classes are refused alike.
+
 - **Promoting or clearing a model trial while another page reads it no longer logs browser 404s.** Trial reads identify the trial shown on the page and return an empty result if it has ended or changed.
 
 - **Chat loads agent introductions together.** Switching threads after a server restart no longer makes requests for introductions from agents that have disappeared. Open threads update when their introduction becomes available. Failed or malformed responses preserve loaded text and retry with a bounded delay.

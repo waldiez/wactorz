@@ -17,7 +17,7 @@ from wactorz.agents.function_agent import FunctionAgent, agent
 from wactorz.agents.llm_agent import LLMProvider
 from wactorz.agents.mixins.spawning import SpawnMixin
 from wactorz.agents.rule_agent import RuleAgent
-from wactorz.core.actor import ActorState
+from wactorz.core.actor import Actor, ActorState, Message
 from wactorz.core.paths import resolve_state_dir
 
 if TYPE_CHECKING:
@@ -119,6 +119,61 @@ class TestModuleSpawns:
         host = _Host()
 
         assert await host._spawn_local_from_config({"name": "x", "type": "module"}) is None
+
+
+class _Notes(Actor):
+    """A library agent naming the arguments the system decides."""
+
+    def __init__(
+        self,
+        folder: str = "notes",
+        *,
+        name: str | None = None,
+        persistence_dir: str | None = None,
+        llm_provider: Any = None,
+    ) -> None:
+        super().__init__(name=name, persistence_dir=persistence_dir)
+        self.folder = folder
+
+    async def handle_message(self, msg: Message) -> None:
+        return None
+
+
+class TestOptionsNamingWhatTheSystemSets:
+    @pytest.mark.parametrize("key", sorted(plugins.SYSTEM_ARGUMENTS))
+    async def test_the_spawn_is_refused_by_name(
+        self, key: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        plugins.register(_Notes, target="tests.test_module_spawn:_Notes")
+        host = _Host()
+
+        actor = await host._spawn_local_from_config(
+            {
+                "name": "notes-1",
+                "type": "module",
+                "target": "tests.test_module_spawn:_Notes",
+                "options": {"folder": "inbox", key: "main"},
+            }
+        )
+
+        assert actor is None
+        assert host.spawn_calls == [] and host.registered == []
+        assert key in caplog.text and "notes-1" in caplog.text
+
+    async def test_other_options_still_reach_it(self) -> None:
+        plugins.register(_Notes, target="tests.test_module_spawn:_Notes")
+        host = _Host()
+
+        actor = await host._spawn_local_from_config(
+            {
+                "name": "notes-1",
+                "type": "module",
+                "target": "tests.test_module_spawn:_Notes",
+                "options": {"folder": "inbox"},
+            }
+        )
+
+        assert isinstance(actor, _Notes) and actor.name == "notes-1" and actor.folder == "inbox"
 
 
 class TestRuleSpawns:

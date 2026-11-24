@@ -14,7 +14,8 @@
 import type { InboxState, QuestionInbox } from "../../questions/QuestionInbox";
 import { formatRoute } from "../../router";
 import { timeLabel, toMs } from "../../time";
-import type { LedgerQuestion } from "../../types/agent";
+import type { AgentInfo, LedgerQuestion } from "../../types/agent";
+import { avatar } from "../avatars";
 import { el, labelled, list } from "../dom";
 import { answeredCard, QuestionCard } from "./questionCard";
 
@@ -57,6 +58,14 @@ function moment(prefix: string, at: number | undefined, none: string): string {
     return at ? `${prefix} ${timeLabel(toMs(at))}` : none;
 }
 
+/** What the Inbox needs of the agents the page knows. */
+export interface InboxAgents {
+    /** The agent with this id, if the page knows it. */
+    get(id: string): AgentInfo | undefined;
+    /** How the page names it: `name@node` where the name is shared. */
+    label(agent: AgentInfo): string;
+}
+
 export class InboxView {
     private readonly _root = el("div", "af-inbox");
     private readonly _waitingTab = new ListRow("Waiting", "");
@@ -72,8 +81,8 @@ export class InboxView {
 
     constructor(
         private readonly inbox: QuestionInbox,
-        /** How the page names the agent that asked. */
-        private readonly label: (question: LedgerQuestion) => string,
+        /** The agents the page knows, for naming and drawing the one that asked. */
+        private readonly agents: InboxAgents,
     ) {
         const tabs = labelled(el("nav", "af-inbox-tabs"), "Inbox lists");
         tabs.append(this._waitingTab.element, this._answeredTab.element);
@@ -127,11 +136,25 @@ export class InboxView {
         this._answered.hidden = answering;
         this._drawWaiting(state.open);
         this._answered.replaceChildren(
-            ...state.answered.map(question => answeredCard(question, this.label(question))),
+            ...state.answered.map(question =>
+                answeredCard(question, this.label(question), this.face(question)),
+            ),
         );
         const shown = answering ? state.open : state.answered;
         this._none.hidden = shown.length > 0;
         this._none.textContent = this._emptyLine(state, answering);
+    }
+
+    /** How the page names the agent that asked: as the page labels it, or as the question does once it is gone. */
+    private label(question: LedgerQuestion): string {
+        const agent = this.agents.get(question.agent_id);
+        return agent ? this.agents.label(agent) : question.agent;
+    }
+
+    /** The avatar of the agent that asked, awake: it is waiting to be answered. */
+    private face(question: LedgerQuestion): HTMLElement {
+        const agent = this.agents.get(question.agent_id);
+        return avatar(agent ?? { name: question.agent }, "running", "small");
     }
 
     /** Stop following the inbox (the dashboard goes). */
@@ -173,6 +196,7 @@ export class InboxView {
     private _newCard(question: LedgerQuestion): QuestionCard {
         const card = new QuestionCard(question, {
             label: asked => this.label(asked),
+            face: asked => this.face(asked),
             answer: (asked, option, note) => this.inbox.answer(asked, option, note),
         });
         this._cards.set(question.id, card);

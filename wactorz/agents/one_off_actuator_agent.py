@@ -377,6 +377,8 @@ def filter_unrequested_actions(
 class OneOffActuatorAgent(Actor):
     """Ephemeral actor that resolves and executes one-shot HA service calls."""
 
+    AVATAR_KIND: ClassVar[str] = "ha-actuator"
+
     DESCRIPTION = "Ephemeral Home Assistant actuator for one-shot natural-language device control"
     CAPABILITIES: ClassVar[list[str]] = [
         "home_automation",

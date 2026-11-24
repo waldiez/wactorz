@@ -517,7 +517,7 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import
 </table>
 <p>Runs Wactorz as a Discord bot. The bot replies when mentioned in a channel it has access to, and supports DMs.</p>
 <p>Discord is a <strong>restricted</strong> channel: conversation, Home Assistant queries and everyday device control work, but spawning agents, deleting agents, running code, pipelines and admin slash commands do not. Use the dashboard for those.</p>
-<div class="highlight"><pre><span></span><code>wactorz<span class="w"> </span>--interface<span class="w"> </span>discord<span class="w"> </span>--discord-token<span class="w"> </span><span class="nv">$DISCORD_BOT_TOKEN</span>
+<div class="highlight"><pre><span></span><code>wactorz<span class="w"> </span>--interface<span class="w"> </span>discord<span class="w">   </span><span class="c1"># the token is DISCORD_BOT_TOKEN, in .env or the environment</span>
 </code></pre></div>
 
 <h4 id="setup">Setup</h4>
@@ -608,7 +608,7 @@ to the message when the model has, so a slow answer is never delivered twice.</p
 </table>
 <p>Runs Wactorz as a Telegram bot using the Bot API in long-polling mode — no public webhook endpoint required. Works behind NAT and firewalls out of the box.</p>
 <p>Telegram is a <strong>restricted</strong> channel: conversation, Home Assistant queries and everyday device control only — no spawning, deleting, code, pipelines or admin commands.</p>
-<div class="highlight"><pre><span></span><code>wactorz<span class="w"> </span>--interface<span class="w"> </span>telegram<span class="w"> </span>--telegram-token<span class="w"> </span><span class="nv">$TELEGRAM_BOT_TOKEN</span>
+<div class="highlight"><pre><span></span><code>wactorz<span class="w"> </span>--interface<span class="w"> </span>telegram<span class="w">  </span><span class="c1"># the token is TELEGRAM_BOT_TOKEN, in .env or the environment</span>
 </code></pre></div>
 
 <h4 id="setup_2">Setup</h4>
@@ -651,6 +651,7 @@ to the message when the model has, so a slow answer is never delivered twice.</p
 <h4 id="features">Features</h4>
 <ul>
 <li><strong>Agent status</strong> — live heartbeat grid showing every registered actor, its state, and last-seen time</li>
+<li><strong>Avatars</strong> — a small character for each agent, on its card, in chat, on its Wiring box and on its notifications, whose eyes show how the agent is doing. They are off until Settings → Avatars turns them on, for this browser; it also chooses where they show, the disc behind them (purple, light, violet, lilac, any colour, or none), and whether the state shows as a dot on the avatar's corner, as the ring round the disc, or both. A place switched off looks as it does without avatars</li>
 <li><strong>Log stream</strong> — real-time log output from all agents via WebSocket</li>
 <li><strong>Chat</strong> — full conversation interface, equivalent to the CLI</li>
 <li><strong>Docs</strong> — this documentation, served at <code>/docs/</code></li>

@@ -37,6 +37,7 @@ from collections.abc import Callable
 
 from .agents.llm.providers.anthropic import AnthropicProvider
 from .agents.llm.providers.fake import INTENTS, FakeProvider, parse_script
+from .agents.llm.providers.gemini import DEFAULT_MODEL as GEMINI_DEFAULT_MODEL
 from .agents.llm.providers.gemini import GeminiProvider
 from .agents.llm.providers.nim import NIMProvider
 from .agents.llm.providers.ollama import OllamaProvider
@@ -115,7 +116,7 @@ def _build_gemini(model: str | None) -> LLMProvider:
         # `CONFIG.llm_model` always has a value, so the trailing default only
         # answers an explicitly empty LLM_MODEL. It is not a way to catch one
         # holding another provider's model name — nothing here can tell.
-        model=model or CONFIG.llm_model or "gemini-2.5-flash",
+        model=model or CONFIG.llm_model or GEMINI_DEFAULT_MODEL,
         api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or CONFIG.llm_api_key,
     )
 

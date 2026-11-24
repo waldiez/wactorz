@@ -22,8 +22,11 @@ cd wactorz
 # use .venv. USE_UV=0 forces pip.
 make install-dev
 
-# Frontend
-cd frontend && bun install && bun run build && cd ..
+# Frontend: make build-frontend also copies the build into a non-editable install
+make install-frontend
+make build-frontend
+# Without make (PowerShell): with the editable install above, this is the same
+#   cd frontend; bun install; bun run build; cd ..
 
 # Docs (optional — only needed if you change docs/ source files)
 # make docs-build    → regenerates static/docs/ (guide + reference pages)

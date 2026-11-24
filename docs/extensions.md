@@ -401,7 +401,7 @@ its volume, with no import between the two.)
 | Barrel (`register()` logic) | `src/__tests__/ext/<name>/index.test.ts`    |
 | Manager / behaviour         | `src/__tests__/ext/<name>/<name>.test.ts`   |
 
-New extensions ship with tests; coverage is gated (`bun run coverage`).
+New extensions ship with tests; coverage is gated (`make coverage-frontend`, or `bun run coverage` in `frontend/` without `make`).
 
 ---
 

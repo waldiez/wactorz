@@ -131,6 +131,10 @@ def record_heartbeat(agent_id: str, data: Any) -> None:
     # refuses it.
     if "essential" in data:
         ag["essential"] = bool(data["essential"])
+    # The character the dashboard draws for it. Taken whole each time, the
+    # empty one too, so an agent started again without one loses the old.
+    if isinstance(data.get("avatar"), dict):
+        ag["avatar"] = data["avatar"]
     # Where it runs, so the dashboard places it and routes a stop to the right
     # runner. Every heartbeat says: a node's name, or "" for this server. Both are
     # taken, the empty one too -- an agent moved home would otherwise keep the

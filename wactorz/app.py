@@ -2,7 +2,7 @@
 """Application assembly and run loop.
 
 Builds the actor system (LLM provider, MQTT, persistence, supervision tree) and
-runs the selected interface. Parsed arguments are supplied by :mod:`wactorz.cli`.
+runs the selected interface. Parsed arguments are supplied by :mod:`wactorz.arguments`.
 """
 
 import argparse
@@ -39,8 +39,8 @@ from wactorz.agents.prompts.fragments import DEFAULT_FRAGMENTS
 from wactorz.agents.prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
 from wactorz.agents.rule_agent import RuleAgent, RuleConfig
 from wactorz.agents.scheduled_agent import ScheduledAgent
-from wactorz.broker_certificates import prepare_broker_files
-from wactorz.cli import get_args
+from wactorz.arguments import get_args
+from wactorz.broker_files import prepare_broker_files
 from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS, AppConfig
 from wactorz.core import cancellation, own_tasks
 from wactorz.core.actor import Actor, SupervisorStrategy
@@ -801,6 +801,17 @@ def install_orchestrator(
     return chosen
 
 
+#: The signals that ask the app to stop. On Windows that includes Ctrl-Break:
+#: Ctrl-C reaches every process on the console, while Ctrl-Break can be sent to
+#: one process group, so it is how another program (a supervisor, a test
+#: harness) asks for the same unwinding Ctrl-C gives. Unhandled, Windows ends
+#: the process on the spot.
+if sys.platform == "win32":
+    SHUTDOWN_SIGNALS: tuple[int, ...] = (signal.SIGTERM, signal.SIGINT, signal.SIGBREAK)
+else:
+    SHUTDOWN_SIGNALS = (signal.SIGTERM, signal.SIGINT)
+
+
 def _install_signal_handlers() -> None:
     """Make SIGTERM shut down the way Ctrl-C already does.
 
@@ -809,6 +820,8 @@ def _install_signal_handlers() -> None:
     does nothing at all when the process is PID 1 — the kernel applies no default
     action there — so ``docker stop`` and ``systemctl stop`` waited out their
     timeout and killed the process mid-write instead.
+
+    Every signal in ``SHUTDOWN_SIGNALS`` is handled the same way.
 
     ``add_signal_handler`` is POSIX-only; Windows gets ``signal.signal``, which
     runs the callback in the main thread between bytecodes rather than on the
@@ -844,7 +857,7 @@ def _install_signal_handlers() -> None:
         logger.info("Shutdown signal received — stopping actors.")
         loop.call_soon_threadsafe(_keep_asking)
 
-    for sig in (signal.SIGTERM, signal.SIGINT):
+    for sig in SHUTDOWN_SIGNALS:
         try:
             loop.add_signal_handler(sig, _request_stop)
         except (NotImplementedError, AttributeError):
@@ -910,8 +923,8 @@ async def app(
 ) -> None:
     """Run the system described by ``args`` until it is stopped.
 
-    ``handle_signals`` installs the SIGINT/SIGTERM handlers; a host with a loop
-    of its own leaves it off and cancels the task instead. ``configure_logging``
+    ``handle_signals`` installs handlers for the ``SHUTDOWN_SIGNALS``; a host
+    with a loop of its own leaves it off and cancels the task instead. ``configure_logging``
     sets up the process's logging the way the ``wactorz`` command wants it:
     console and file handlers on the root logger, with redaction. A library
     caller leaves that off and keeps its own; the dashboard's log view still

@@ -392,6 +392,75 @@ reach a constructor that names them or takes <code>**kwargs</code>.</p>
 JSON, <code>{"raw": text}</code> for text, <code>{"raw": bytes}</code> for anything else, such as a
 camera frame. Messages on one topic are handled one at a time, in order,
 unless the subscription says otherwise (below).</p>
+<h3 id="the-agents-avatar">The agent's avatar</h3>
+<p>The dashboard draws a small character for every agent, once Settings →
+Avatars turns them on: on its card, in chat, on its Wiring box and on its
+notifications. With nothing said, the character
+is made up from the agent's name, so it is the same one after every restart.
+A function agent holds an <em>f(x)</em> card; each differs a little by its name.</p>
+<p>A class picks one of the ready-made characters with <code>AVATAR_KIND</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">PumpWatch</span><span class="p">(</span><span class="n">Actor</span><span class="p">):</span>
+    <span class="n">AVATAR_KIND</span> <span class="o">=</span> <span class="s2">"monitor"</span>
+</code></pre></div>
+
+<p>The kinds are <code>main</code>, <code>planner</code>, <code>llm</code>, <code>monitor</code>, <code>home-assistant</code>,
+<code>ha-actuator</code>, <code>ha-map</code>, <code>ha-state-bridge</code>, <code>installer</code>, <code>train</code>, <code>recorder</code>,
+<code>rule</code>, <code>scheduled</code>, <code>function</code>, <code>dynamic</code> (an agent generated from code, holding a
+screen of <code>&lt;/&gt;</code>), <code>catalog</code>, and the catalogue's recipes by
+name (<code>weather-agent</code>, <code>flic</code>, <code>gmail-agent</code>, <code>google-calendar-agent</code>,
+<code>doc-to-pptx-agent</code>, <code>anomaly-detector</code>, <code>smart-energy</code>, <code>manual-agent</code>,
+<code>reachy-mini</code>, <code>timeseries-collector</code>).</p>
+<p>A spawn config may carry an <code>avatar</code> of its own, a kind or parts over one:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pump-watch"</span><span class="p">,</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"dynamic"</span><span class="p">,</span><span class="w"> </span><span class="nt">"code"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<span class="w"> </span><span class="nt">"avatar"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"monitor"</span><span class="p">,</span><span class="w"> </span><span class="nt">"accent"</span><span class="p">:</span><span class="w"> </span><span class="s2">"#2bb3a3"</span><span class="p">,</span><span class="w"> </span><span class="nt">"top"</span><span class="p">:</span><span class="w"> </span><span class="s2">"hardhat"</span><span class="p">,</span><span class="w"> </span><span class="nt">"prop"</span><span class="p">:</span><span class="w"> </span><span class="s2">"gear"</span><span class="p">}}</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Values</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>accent</code></td>
+<td>a colour, <code>#rrggbb</code></td>
+</tr>
+<tr>
+<td><code>outfit</code></td>
+<td><code>vest</code>, <code>suit</code>, <code>stripes</code></td>
+</tr>
+<tr>
+<td><code>neck</code></td>
+<td><code>gem</code>, <code>tie</code>, <code>bowtie</code>, <code>none</code></td>
+</tr>
+<tr>
+<td><code>specs</code></td>
+<td><code>round</code>, <code>square</code>, <code>shades</code>, <code>monocle</code>, <code>none</code></td>
+</tr>
+<tr>
+<td><code>face</code></td>
+<td><code>smile</code>, <code>blush</code>, <code>beard</code>, <code>mustache</code>, <code>open</code></td>
+</tr>
+<tr>
+<td><code>top</code></td>
+<td><code>""</code>, <code>gradcap</code>, <code>hardhat</code>, <code>tophat</code>, <code>captain</code>, <code>beanie</code>, <code>headset</code>, <code>refcap</code></td>
+</tr>
+<tr>
+<td><code>ant</code></td>
+<td><code>0</code>, <code>1</code>, <code>2</code>, <code>"left"</code>, <code>"right"</code> (antennae; a hat hides them)</td>
+</tr>
+<tr>
+<td><code>prop</code></td>
+<td><code>""</code>, <code>whistle</code>, <code>envelope</code>, <code>calendar</code>, <code>clock</code>, <code>magnifier</code>, <code>gear</code>, <code>books</code>, <code>book</code>, <code>slides</code>, <code>button</code>, <code>mic</code>, <code>spike</code>, <code>pin</code>, <code>switch</code>, <code>sync</code>, <code>function</code>, <code>code</code>, <code>wave</code>, <code>sun</code>, <code>clipboard</code>, <code>thought</code>, <code>database</code>, <code>bolt</code>, <code>house</code>, <code>chart</code></td>
+</tr>
+</tbody>
+</table>
+<p>An avatar is decoration: a kind or a part the dashboard does not know is
+passed over, and one that is not a small dictionary of words is left out with
+a warning in the log; neither stops the agent. The eyes show how the agent is
+doing, which is the dashboard's to decide, not the agent's.</p>
 <h2 id="more-than-one-at-a-time">More than one at a time</h2>
 <p>By default an agent handles one message of a topic at a time, in order, and
 one task at a time, so a function that keeps state between calls is never run
@@ -745,11 +814,11 @@ send it, and the reply is what the agent answered: a function's return value,
 with a plain value wrapped as <code>{"result": ...}</code>. Three things go wrong loudly
 rather than quietly. No agent of that name is running: <code>LookupError</code>. The
 agent answered with an error, which is what a function that raised reports:
-<code>RuntimeError</code> carrying the message, a <code>wactorz.core.actor.ReplyError</code> whose
+<code>RuntimeError</code> carrying the message, a <code>wactorz.errors.ReplyError</code> whose
 <code>reply</code> holds the agent's whole answer. No reply within <code>timeout</code> seconds, 60
 by default: <code>asyncio.TimeoutError</code>. In every case nothing is left waiting.</p>
 <p><code>wactorz.ask</code> needs a running system, from <code>run()</code> or <code>serve()</code>; it raises
-<code>RuntimeError</code> otherwise. Its reply address is a slot of the registry rather
+<code>NoSystemError</code>, a <code>RuntimeError</code>, otherwise. Its reply address is a slot of the registry rather
 than an actor, so nothing is registered, listed or supervised on the caller's
 behalf.</p>
 <h2 id="your-own-orchestrator">Your own orchestrator</h2>
@@ -869,6 +938,174 @@ without a broker and exercised directly:</p>
 function; <code>actor.handle_message(...)</code> answers a task. Nothing connects until
 <code>on_start</code>. <code>spec_of</code> is the <code>AgentSpec</code> the decorator recorded: <code>name</code>,
 <code>subscribes</code>, <code>publishes</code>, <code>options</code>, and <code>build()</code> for the actor.</p>
+<h2 id="what-to-catch">What to catch</h2>
+<p>Every exception below can be imported from <code>wactorz.errors</code>, whichever module
+raises it. Each one is also a kind of the built-in exception beside it, so
+<code>except LookupError</code> catches a missing agent as surely as <code>except
+NotFoundError</code> does. The message always says what went wrong.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">wactorz.errors</span><span class="w"> </span><span class="kn">import</span> <span class="n">NoAnswerError</span><span class="p">,</span> <span class="n">NotFoundError</span><span class="p">,</span> <span class="n">ReplyError</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">score</span> <span class="o">=</span> <span class="k">await</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">ask</span><span class="p">(</span><span class="s2">"imu-anomaly"</span><span class="p">,</span> <span class="n">reading</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">NotFoundError</span><span class="p">:</span>
+    <span class="n">score</span> <span class="o">=</span> <span class="kc">None</span>                       <span class="c1"># not running here</span>
+<span class="k">except</span> <span class="n">ReplyError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+    <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">"imu-anomaly: </span><span class="si">%s</span><span class="s2">"</span><span class="p">,</span> <span class="n">exc</span><span class="o">.</span><span class="n">reply</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"error"</span><span class="p">))</span>
+<span class="k">except</span> <span class="n">NoAnswerError</span><span class="p">:</span>
+    <span class="o">...</span>                                <span class="c1"># it may still be working</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Raised by</th>
+<th>Exception</th>
+<th>A kind of</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>wactorz.run</code>, <code>wactorz.serve</code></td>
+<td><code>StartupError</code></td>
+<td><code>RuntimeError</code></td>
+<td>the configuration cannot start; what had started is undone</td>
+</tr>
+<tr>
+<td><code>wactorz.run</code>, <code>wactorz.serve</code>, <code>wactorz.pipeline</code></td>
+<td><code>NotAnAgentError</code></td>
+<td><code>TypeError</code></td>
+<td><code>agents=</code>, or a pipeline's <code>steps</code>, holds something that is neither a decorated function nor an <code>Actor</code> subclass</td>
+</tr>
+<tr>
+<td><code>wactorz.run</code>, <code>wactorz.serve</code></td>
+<td><code>NotAPipelineError</code></td>
+<td><code>TypeError</code></td>
+<td><code>pipelines_=</code> holds something that is not a <code>Pipeline</code></td>
+</tr>
+<tr>
+<td><code>wactorz.ask</code></td>
+<td><code>NoSystemError</code></td>
+<td><code>RuntimeError</code></td>
+<td>no system is running</td>
+</tr>
+<tr>
+<td><code>wactorz.ask</code>, <code>Actor.ask</code></td>
+<td><code>NotFoundError</code></td>
+<td><code>LookupError</code></td>
+<td>no agent of that name is running</td>
+</tr>
+<tr>
+<td><code>wactorz.ask</code>, <code>Actor.ask</code></td>
+<td><code>NoAnswerError</code></td>
+<td><code>asyncio.TimeoutError</code></td>
+<td>no reply within <code>timeout</code> seconds</td>
+</tr>
+<tr>
+<td><code>wactorz.ask</code>, <code>Actor.ask</code></td>
+<td><code>ReplyError</code></td>
+<td><code>RuntimeError</code></td>
+<td>the agent answered with an error; <code>reply</code> is its whole answer</td>
+</tr>
+<tr>
+<td><code>wactorz.ask</code>, <code>Actor.ask</code></td>
+<td><code>AskError</code></td>
+<td><code>RuntimeError</code></td>
+<td>the request could not be sent: the agent's mailbox is full, or the asking actor is in no system</td>
+</tr>
+<tr>
+<td><code>wactorz.agent</code>, <code>Actor.subscribe</code></td>
+<td><code>ConcurrencyError</code></td>
+<td><code>ValueError</code></td>
+<td><code>concurrency</code> below one</td>
+</tr>
+<tr>
+<td><code>Actor.subscribe</code></td>
+<td><code>NotCallableError</code></td>
+<td><code>TypeError</code></td>
+<td>a callback that cannot be called with a payload</td>
+</tr>
+<tr>
+<td><code>wactorz.pipeline</code></td>
+<td><code>PipelineError</code></td>
+<td><code>ValueError</code></td>
+<td>no name, neither steps nor rules, or steps that do not connect, each problem named</td>
+</tr>
+<tr>
+<td><code>wactorz.pipeline</code> with rules as dicts, <code>RuleConfig.from_dict</code> and its parts'</td>
+<td><code>RuleError</code></td>
+<td><code>ValueError</code></td>
+<td>a rule that cannot run as written</td>
+</tr>
+<tr>
+<td><code>notify_user</code>, <code>ask_operator</code></td>
+<td><code>OptionsError</code></td>
+<td><code>ValueError</code></td>
+<td>options a chat channel cannot show, or a question with none</td>
+</tr>
+<tr>
+<td><code>notify_user</code>, <code>ask_operator</code></td>
+<td><code>UnknownChannelError</code></td>
+<td><code>ValueError</code></td>
+<td>a channel no interface is called</td>
+</tr>
+<tr>
+<td><code>wait_for_answer</code></td>
+<td><code>NotFoundError</code></td>
+<td><code>LookupError</code></td>
+<td>a question this agent did not ask</td>
+</tr>
+<tr>
+<td><code>ask_operator</code>, <code>wait_for_answer</code></td>
+<td><code>NoAnswerError</code></td>
+<td><code>asyncio.TimeoutError</code></td>
+<td>no answer within <code>timeout</code>; <code>ask_operator</code> waits once more on the dashboard first, for a question asked on a chat channel, and the question stays open</td>
+</tr>
+<tr>
+<td><code>ask_operator</code></td>
+<td><code>LabelError</code></td>
+<td><code>ValueError</code></td>
+<td>a <code>label=</code> that cannot be used, before anything is sent</td>
+</tr>
+<tr>
+<td><code>label</code></td>
+<td><code>LabelError</code></td>
+<td><code>ValueError</code></td>
+<td>a label that cannot be taken as written, or from an agent that cannot reach main's database</td>
+</tr>
+<tr>
+<td><code>artifact_path</code>, <code>load_model</code></td>
+<td><code>UnnamedModelError</code></td>
+<td><code>KeyError</code></td>
+<td>a key the agent's <code>models</code> does not declare</td>
+</tr>
+<tr>
+<td><code>load_model</code></td>
+<td><code>ModelError</code></td>
+<td><code>ArtifactError</code></td>
+<td>a format that runs code, without <code>allow_code=True</code>; one with no loader; a library the format needs that is not installed</td>
+</tr>
+<tr>
+<td><code>recall_bytes</code></td>
+<td><code>NotBytesError</code></td>
+<td><code>TypeError</code></td>
+<td>a key holding something <code>persist_bytes</code> did not write</td>
+</tr>
+<tr>
+<td><code>wactorz.core.integrations.ag2.model_config</code></td>
+<td><code>AG2Error</code></td>
+<td><code>RuntimeError</code></td>
+<td>AG2 is not installed, or its client cannot be built for the system's model</td>
+</tr>
+</tbody>
+</table>
+<p>What goes wrong inside an agent stays with that agent. A function that raises
+answers an ask with an error, which reaches the asker as a <code>ReplyError</code>. One
+that raises on a message is logged and goes on to the next, until it has failed
+several times in a row; then it is marked failed, and its supervisor restarts
+it. A
+catalogue agent spawned from chat, such as the trainer or drift, reports what
+it refuses in its reply in the same way.</p>
 <h2 id="where-things-go">Where things go</h2>
 <ul>
 <li><strong>Streams stay where they are produced.</strong> An agent that watches a camera or
@@ -931,6 +1168,10 @@ function; <code>actor.handle_message(...)</code> answers a task. Nothing connect
 <tr>
 <td><code>wactorz.StartupError</code></td>
 <td>what <code>serve</code> and <code>run</code> raise for a configuration that cannot start</td>
+</tr>
+<tr>
+<td><code>wactorz.errors</code></td>
+<td>every exception a call above raises, in one module (see <em>What to catch</em>)</td>
 </tr>
 <tr>
 <td><code>wactorz.Actor</code> with <code>subscribe</code>, <code>window</code>, <code>publish</code>, <code>persist</code>, <code>recall</code>, <code>send</code>, <code>notify_user</code>, <code>on_start</code>, <code>on_stop</code>, <code>handle_message</code>, <code>state_dir</code>, <code>record_llm_cost</code></td>

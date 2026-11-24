@@ -453,7 +453,7 @@ Discord channel
 <td><code>OpenAIProvider</code></td>
 <td><code>--llm openai</code></td>
 <td><code>OPENAI_API_KEY</code></td>
-<td><code>gpt-4o</code></td>
+<td><code>gpt-5.4-mini</code></td>
 </tr>
 <tr>
 <td><code>OllamaProvider</code></td>
@@ -469,9 +469,9 @@ Discord channel
 </tr>
 <tr>
 <td><code>GeminiProvider</code></td>
-<td><code>--llm gemini --gemini-model gemini-2.5-flash</code></td>
+<td><code>--llm gemini --gemini-model gemini-3.5-flash-lite</code></td>
 <td><code>GEMINI_API_KEY</code></td>
-<td><code>gemini-2.5-flash</code> (gemini-only fallback when <code>LLM_MODEL</code> is unset)</td>
+<td><code>gemini-3.5-flash-lite</code> (Gemini's own default, used when <code>LLM_MODEL</code> is explicitly empty)</td>
 </tr>
 </tbody>
 </table>
@@ -594,7 +594,7 @@ vanish silently.</p>
 wactorz
 
 <span class="c1"># Choose a different LLM provider</span>
-wactorz<span class="w"> </span>--llm<span class="w"> </span>gemini<span class="w"> </span>--gemini-model<span class="w"> </span>gemini-2.5-flash
+wactorz<span class="w"> </span>--llm<span class="w"> </span>gemini<span class="w"> </span>--gemini-model<span class="w"> </span>gemini-3.5-flash-lite
 wactorz<span class="w"> </span>--llm<span class="w"> </span>openai
 wactorz<span class="w"> </span>--llm<span class="w"> </span>ollama<span class="w"> </span>--ollama-model<span class="w"> </span>llama3
 wactorz<span class="w"> </span>--llm<span class="w"> </span>nim<span class="w"> </span>--nim-model<span class="w"> </span>meta/llama-3.3-70b-instruct
@@ -603,13 +603,13 @@ wactorz<span class="w"> </span>--llm<span class="w"> </span>nim<span class="w"> 
 wactorz<span class="w"> </span>--reload
 
 <span class="c1"># Discord bot</span>
-wactorz<span class="w"> </span>--interface<span class="w"> </span>discord<span class="w"> </span>--discord-token<span class="w"> </span><span class="nv">$DISCORD_BOT_TOKEN</span>
+wactorz<span class="w"> </span>--interface<span class="w"> </span>discord<span class="w">   </span><span class="c1"># the token is DISCORD_BOT_TOKEN, in .env or the environment</span>
 
 <span class="c1"># WhatsApp (via Twilio)</span>
 wactorz<span class="w"> </span>--interface<span class="w"> </span>whatsapp
 
 <span class="c1"># Telegram</span>
-wactorz<span class="w"> </span>--interface<span class="w"> </span>telegram<span class="w"> </span>--telegram-token<span class="w"> </span><span class="nv">$TELEGRAM_BOT_TOKEN</span>
+wactorz<span class="w"> </span>--interface<span class="w"> </span>telegram<span class="w">  </span><span class="c1"># the token is TELEGRAM_BOT_TOKEN, in .env or the environment</span>
 
 <span class="c1"># REST API</span>
 wactorz<span class="w"> </span>--interface<span class="w"> </span>rest<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>

@@ -193,8 +193,8 @@ with every hosted provider, or you can use its provider-specific variable.
 | Provider | `LLM_PROVIDER` | Example model | Provider-specific key |
 |---|---|---|---|
 | Anthropic | `anthropic` | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` |
-| OpenAI | `openai` | `gpt-4o` | `OPENAI_API_KEY` |
-| Google Gemini | `gemini` | `gemini-2.5-flash` | `GEMINI_API_KEY` |
+| OpenAI | `openai` | `gpt-5.4-mini` | `OPENAI_API_KEY` |
+| Google Gemini | `gemini` | `gemini-3.5-flash-lite` | `GEMINI_API_KEY` |
 | NVIDIA NIM | `nim` | `meta/llama-3.3-70b-instruct` | `NIM_API_KEY` |
 | Ollama | `ollama` | `llama3` | No key; configure `OLLAMA_URL` |
 
@@ -358,3 +358,28 @@ Read [CONTRIBUTING.md](https://github.com/waldiez/wactorz/blob/main/CONTRIBUTING
 ## License
 
 [Apache 2.0](https://github.com/waldiez/wactorz/blob/main/LICENSE). Free to use, modify, and distribute.
+
+---
+
+## Paper
+
+**[Wactorz: Self-Writing LLM Agents That Discover, Repair, and Migrate at the Edge](https://arxiv.org/abs/2611.29619)**
+Panagiotis Kasnesis, Lazaros Toumanidis, Amalia Contiero Syropoulou, Christos Chatzigeorgiou
+*Extended version of a paper accepted to the AAAI-27 Demonstrations Program.*
+
+The paper covers the architecture, a recorded demo and the system's limitations. In the demo, one chat request builds a camera-to-lamp automation. A second agent with a deliberate bug repairs its own code, then live-migrates to a fresh Raspberry Pi, in under four minutes and for $0.13 of model usage. The paper also describes the Wiring view, using Wactorz as a library, model handling on nodes, and the security model.
+
+If you use Wactorz in your research, please cite:
+
+```bibtex
+@misc{kasnesis2026wactorz,
+  title         = {Wactorz: Self-Writing {LLM} Agents That Discover, Repair, and Migrate at the Edge},
+  author        = {Kasnesis, Panagiotis and Toumanidis, Lazaros and Syropoulou, Amalia Contiero and Chatzigeorgiou, Christos},
+  year          = {2026},
+  eprint        = {2611.29619},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.AI},
+  doi           = {10.48550/arXiv.2611.29619},
+  url           = {https://arxiv.org/abs/2611.29619}
+}
+```

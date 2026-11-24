@@ -6,6 +6,12 @@
 /** Lifecycle state of an agent. */
 export type AgentState = "initializing" | "running" | "stopped" | { failed: string };
 
+/**
+ * What an agent says of the character drawn for it: a `kind` naming a
+ * ready-made one, and parts by name. `ui/avatars` decides what each means.
+ */
+export type AvatarSpec = Record<string, string | number>;
+
 /** Static info about a registered agent. */
 export interface AgentInfo {
     id: string;
@@ -29,6 +35,8 @@ export interface AgentInfo {
     uptime?: number;
     /** Set for remote-runner agents — the node name (e.g. "rpi"). */
     node?: string;
+    /** The character drawn for it, as the agent says; absent for one drawn from its name. */
+    avatar?: AvatarSpec;
 }
 
 /** Heartbeat payload published by each actor. */
@@ -44,6 +52,8 @@ export interface HeartbeatPayload {
     task?: string;
     /** Set for agents on a node — matches the node’s own name. */
     node?: string;
+    /** The character drawn for it, when the heartbeat says. */
+    avatar?: AvatarSpec;
 }
 
 /** Metrics payload — LLM cost, token counts, message counts. */

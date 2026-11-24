@@ -6,6 +6,7 @@ import { DEVICES_TAB } from "../../config/hiddenTabs";
 import type { SettingsSection } from "../../types/settings";
 import type { IconName } from "../shell/icons";
 import { BUILTIN_VIEWS, SETTINGS_VIEW, type View } from "../shell/types";
+import { avatarsSection } from "./avatars";
 import { SettingsView } from "./SettingsView";
 import { soundSection } from "./sound";
 import { tabsSection, type TabEntry } from "./tabs";
@@ -41,6 +42,7 @@ export function dashboardSettings(host: DashboardSettingsHost): SettingsView {
             haConfigured: () => host.haConfigured(),
             changed: () => host.tabsChanged(),
         }),
+        avatarsSection(),
         soundSection(),
     ]);
 }

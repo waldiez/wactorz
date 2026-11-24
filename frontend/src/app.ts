@@ -32,6 +32,7 @@ import { register as registerTTS } from "./ext/tts";
 import { loadServerConfig } from "./config/serverConfig";
 import { installSessionExpiry } from "./io/sessionExpiry";
 import { toast } from "./ui/ToastManager";
+import { showAvatars } from "./ui/avatars";
 import { showDeadSession } from "./ui/deadSession";
 import { chatIngress } from "./ui/chatIngress";
 import { QuestionToasts } from "./ui/questionToast";
@@ -455,6 +456,7 @@ function buildServices(parts: AppParts, ws: WSClient, router: ServerEventRouter)
     const store = parts.store();
     const dashboard = parts.dashboard(store);
     dashboard.show();
+    showAvatars(() => store.list());
     const ioManager = parts.ioManager();
     // Live-grid deletion guard (mirrors the backend's _deleted_agent_ids): blocks
     // stale stop-window events from blinking a deleted card back, and re-admits a

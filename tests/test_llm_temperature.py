@@ -221,7 +221,13 @@ async def test_anthropic_sends_temperature_to_a_model_that_takes_it() -> None:
 
 @pytest.mark.parametrize(
     "model",
-    ["claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "anthropic.claude-opus-5"],
+    [
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-sonnet-5",
+        "claude-haiku-5-5",
+        "anthropic.claude-opus-5",
+    ],
 )
 @pytest.mark.asyncio
 async def test_anthropic_omits_temperature_for_models_that_dropped_it(model) -> None:

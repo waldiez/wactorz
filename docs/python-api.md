@@ -41,6 +41,8 @@ maps to the same ID across restarts.
 | `metrics` | `ActorMetrics` | `messages_processed`, `errors`, `uptime`, etc. |
 | `protected` | `bool` | If `True`, ignores `delete` — the agent is defined in code and cannot be recreated |
 | `essential` | `bool` | If `True`, ignores `stop` as well — stopping it would remove the way to start it again |
+| `AVATAR_KIND` | `str` (class) | Which of the dashboard's ready-made characters stands for agents of this class; `""` for one drawn from the agent's name |
+| `avatar` | `dict[str, str \| int]` | What the heartbeat says of the agent's avatar: `{"kind": AVATAR_KIND}`, what a spawn's `avatar` gave, or `{}` |
 
 **Enums:**
 
@@ -277,6 +279,15 @@ A `RuntimeError` for a configuration that cannot start: an exposed bind address
 without an API key, a broker certificate that cannot be loaded, a chat interface
 whose token is missing. The `wactorz` command logs it and exits with status 1;
 a host program catches it.
+
+### `wactorz.errors`
+
+Every exception the calls in this section raise, importable from one module
+whichever module raises it: `StartupError`, `NoSystemError`, `NotFoundError`,
+`NoAnswerError`, `ReplyError`, `AskError` and the rest. Each subclasses the
+built-in a caller would catch (`LookupError`, `asyncio.TimeoutError`,
+`ValueError`, `TypeError`, `RuntimeError`). The library guide's
+[What to catch](library.md#what-to-catch) says which call raises which.
 
 ### `Actor.subscribe(topic, callback, *, concurrency=1)`
 

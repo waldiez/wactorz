@@ -4,8 +4,9 @@
 Reasoning is the part that changed under this provider. Older Claude models
 think only when asked; Claude Opus 5 and later think unless told not to, so a
 caller that wants no reasoning has to say so — and Fable and Mythos cannot be
-told at all. Depth travels separately as `output_config.effort`, clamped to the
-levels each model family accepts, and only alongside thinking.
+told at all, so a request for none asks them for the lowest effort instead.
+Depth travels separately as `output_config.effort`, clamped to the levels each
+model family accepts, and never with a request that switches thinking off.
 
 A parameter a model refuses costs one 400: it is dropped, the model is
 remembered for the rest of the process, and the request is sent again. Only one
@@ -98,7 +99,12 @@ def _provider(model: str, messages: _Messages) -> AnthropicProvider:
 
 @pytest.fixture(autouse=True)
 def _forget_learned_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("_learned_no_sampling", "_learned_no_thinking_param", "_learned_no_effort"):
+    for name in (
+        "_learned_no_sampling",
+        "_learned_no_thinking_param",
+        "_learned_no_effort",
+        "_learned_between_tools",
+    ):
         monkeypatch.setattr(mod, name, set())
 
 
@@ -114,7 +120,14 @@ class TestThinkingAndEffort:
             ("claude-opus-5", "none", {"type": "disabled"}, None),
             ("claude-opus-5", "minimal", {"type": "adaptive"}, {"effort": "low"}),
             ("claude-opus-5", "extreme", {"type": "adaptive"}, None),
-            ("claude-fable-5", None, None, None),
+            ("claude-fable-5", None, None, {"effort": "low"}),
+            ("claude-mythos-5", "none", None, {"effort": "low"}),
+            ("claude-opus-5-5", "none", None, {"effort": "low"}),
+            ("anthropic.claude-opus-5-5", None, None, {"effort": "low"}),
+            ("claude-opus-5-5", "high", {"type": "adaptive"}, {"effort": "high"}),
+            ("claude-haiku-5-5", "none", {"type": "disabled"}, None),
+            ("anthropic.claude-haiku-5-5", None, {"type": "disabled"}, None),
+            ("claude-haiku-5-5", "xhigh", {"type": "adaptive"}, {"effort": "xhigh"}),
             ("claude-fable-5", "max", {"type": "adaptive"}, {"effort": "max"}),
         ],
     )
@@ -132,12 +145,31 @@ class TestThinkingAndEffort:
         assert params.get("thinking") == thinking
         assert params.get("output_config") == output_config
 
+    def test_a_model_learned_to_refuse_thinking_is_sent_no_effort(self) -> None:
+        mod._learned_no_thinking_param.add("claude-opus-5")
+
+        params = _provider("claude-opus-5", _Messages())._request_params(
+            [], "", {"reasoning_effort": "none"}
+        )
+
+        assert "thinking" not in params and "output_config" not in params
+
     def test_a_model_that_cannot_stop_thinking_is_warned_about(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         _provider("claude-mythos-5", _Messages())._request_params([], "", {})
 
-        assert "cannot disable reasoning" in caplog.text
+        assert "cannot disable reasoning, so it is asked for the lowest effort" in caplog.text
+
+    def test_a_learned_model_is_not_said_to_get_the_lowest_effort(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        mod._learned_no_thinking_param.add("claude-opus-5")
+
+        _provider("claude-opus-5", _Messages())._request_params([], "", {})
+
+        assert "cannot disable reasoning;" in caplog.text
+        assert "lowest effort" not in caplog.text
 
     def test_an_uninspectable_client_is_assumed_to_carry_temperature(self) -> None:
         assert mod._carries_temperature(object()) is True
@@ -193,6 +225,79 @@ class TestRejections:
 
         with pytest.raises(_BadRequest):
             await provider._complete([{"role": "user", "content": "x"}])
+
+
+# The refusal Claude Sonnet 5.5 answers `{"type": "disabled"}` with.
+_BETWEEN_TOOLS = (
+    "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', "
+    '\'message\': \'To turn thinking off on this model, send "thinking": {"type": '
+    '"between_tools"} instead of {"type": "disabled"}.\'}}'
+)
+
+
+class TestBetweenTools:
+    def test_the_refusal_is_told_apart_from_the_others(self) -> None:
+        exc = _BadRequest(_BETWEEN_TOOLS)
+
+        assert mod._asks_for_between_tools(exc) is True
+        assert mod._is_thinking_rejection(exc) is False
+        assert mod._asks_for_between_tools(RuntimeError(_BETWEEN_TOOLS)) is False
+        assert mod._asks_for_between_tools(_BadRequest("between_tools is great")) is False
+
+    async def test_disabled_is_retried_as_between_tools_and_remembered(self) -> None:
+        messages = _Messages(_BadRequest(_BETWEEN_TOOLS), _response(_block("text", text="ok")))
+        provider = _provider("claude-sonnet-5-5", messages)
+
+        text, _ = await provider._complete(
+            [{"role": "user", "content": "x"}], reasoning_effort="none"
+        )
+
+        assert text == "ok"
+        assert messages.calls[0]["thinking"] == {"type": "disabled"}
+        assert messages.calls[1]["thinking"] == {"type": "between_tools"}
+        assert "output_config" not in messages.calls[1]
+        assert "claude-sonnet-5-5" in mod._learned_between_tools
+        assert "claude-sonnet-5-5" not in mod._learned_no_thinking_param
+        later = provider._request_params([], "", {"reasoning_effort": "none"})
+        assert later["thinking"] == {"type": "between_tools"}
+        assert "output_config" not in later
+
+    def test_a_request_for_reasoning_still_asks_for_it(self) -> None:
+        mod._learned_between_tools.add("claude-sonnet-5-5")
+
+        params = _provider("claude-sonnet-5-5", _Messages())._request_params(
+            [], "", {"reasoning_effort": "high"}
+        )
+
+        assert params["thinking"] == {"type": "adaptive"}
+        assert params["output_config"] == {"effort": "high"}
+
+    async def test_a_stream_is_retried_before_its_first_chunk(self) -> None:
+        messages = _Messages(_BadRequest(_BETWEEN_TOOLS), _Stream(["ok"]))
+        provider = _provider("claude-sonnet-5-5", messages)
+
+        items = [item async for item in provider._stream([])]
+
+        assert items[0] == "ok"
+        assert messages.calls[1]["thinking"] == {"type": "between_tools"}
+
+    async def test_the_refusal_is_raised_when_disabled_was_not_sent(self) -> None:
+        messages = _Messages(_BadRequest(_BETWEEN_TOOLS))
+        provider = _provider("claude-sonnet-5-5", messages)
+
+        with pytest.raises(_BadRequest):
+            await provider._complete([{"role": "user", "content": "x"}], reasoning_effort="high")
+
+        assert mod._learned_between_tools == set()
+
+    async def test_a_second_refusal_is_raised(self) -> None:
+        messages = _Messages(_BadRequest(_BETWEEN_TOOLS), _BadRequest(_BETWEEN_TOOLS))
+        provider = _provider("claude-sonnet-5-5", messages)
+
+        with pytest.raises(_BadRequest):
+            await provider._complete([{"role": "user", "content": "x"}])
+
+        assert len(messages.calls) == 2
 
 
 class TestText:

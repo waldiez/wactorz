@@ -9,6 +9,7 @@
  */
 import type { AgentInfo } from "../../types/agent";
 import { stateColor, stateLabel } from "../overview/agentState";
+import { avatar, moodOf } from "../avatars";
 import { button, el, live, named, testId } from "../dom";
 
 /** The sidebar shell: a filter box above the (separately rendered) agent list. */
@@ -69,7 +70,10 @@ export function renderPaneHeader(
     if (agent) {
         const dot = el("span", "af-chat-agent-dot");
         dot.style.background = stateColor(agent.state);
-        hdr.appendChild(dot);
+        // As in the agent list: one wrapper, which the layout sees only where avatars show.
+        const face = el("span", "af-chat-agent-face");
+        face.append(avatar(agent, moodOf(agent.state), "small"), dot);
+        hdr.appendChild(face);
     }
     hdr.appendChild(testId(el("span", "af-chat-pane-title", `@${target}`), "chat-title"));
     if (agent) {

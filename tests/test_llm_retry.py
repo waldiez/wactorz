@@ -416,6 +416,7 @@ def forget_learned_models_fixture() -> None:
     anthropic_provider._learned_no_sampling.clear()
     anthropic_provider._learned_no_thinking_param.clear()
     anthropic_provider._learned_no_effort.clear()
+    anthropic_provider._learned_between_tools.clear()
 
 
 async def test_parameter_negotiation_still_works_under_the_retry_wrapper(

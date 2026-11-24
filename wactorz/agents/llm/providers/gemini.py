@@ -13,6 +13,10 @@ from ..pricing import calc_cost
 
 logger: logging.Logger = logging.getLogger(__name__)
 
+# The model a provider built with none named uses: a stable model, and the one
+# Google serves requests for `gemini-2.5-flash` with, at the same price.
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
+
 
 _GEMINI_STREAM_STALL_TIMEOUT = 60
 
@@ -92,20 +96,20 @@ class GeminiProvider(LLMProvider):
     """Google Gemini via the official google-genai SDK.
     Install: pip install google-genai
 
-    Recommended models (March 2026):
-      gemini-2.5-flash-lite   — cheapest ($0.10/$0.40 per 1M tokens), fast, free tier
-      gemini-2.0-flash        — fast & capable ($0.10/$0.40), free tier available
-      gemini-2.5-flash        — hybrid reasoning ($0.30/$2.50), free tier available
-      gemini-2.5-pro          — best for coding & complex tasks ($1.25/$10.00)
-      gemini-3.1-pro          — flagship ($2.00/$12.00), no free tier
+    Models to choose from (prices in docs/reference.md, *Google Gemini Pricing*):
+      gemini-3.5-flash-lite   — the default (``DEFAULT_MODEL``)
+      gemini-3.1-flash-lite   — cheaper still
+      gemini-3.6-flash        — stronger, and dearer
+      gemini-3.8-flash        — stronger again, at 3.6 Flash's price
+      gemini-3.1-pro-preview  — Pro, in preview; dearer for prompts over 200K tokens
+      gemini-2.5-flash-lite   — older and cheaper; Google has announced no shutdown date
 
-    Get a free API key at: https://aistudio.google.com
-    Note: Pro models charge 2x for prompts >200K tokens.
+    Get an API key at: https://aistudio.google.com
     """
 
     def __init__(
         self,
-        model: str = "gemini-2.5-flash",
+        model: str = DEFAULT_MODEL,
         api_key: str | None = None,
     ) -> None:
         from google import genai  # optional dependency: the `google` extra

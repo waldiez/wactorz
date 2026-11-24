@@ -15,7 +15,7 @@ from typing import Any, cast
 
 import pytest
 
-from wactorz import broker_certificates, config
+from wactorz import broker_files, config
 from wactorz.agents.main import node_access
 from wactorz.agents.main.hosts import ManifestHost
 from wactorz.agents.main.manifests import ManifestRegistry
@@ -110,7 +110,7 @@ def _configured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **changes: Any)
     }
     changed = dataclasses.replace(config.CONFIG, **settings)
     monkeypatch.setattr(config, "CONFIG", changed)
-    monkeypatch.setattr(broker_certificates, "CONFIG", changed)
+    monkeypatch.setattr(broker_files, "CONFIG", changed)
 
 
 class TestWhereTheListIsInForce:
@@ -119,9 +119,9 @@ class TestWhereTheListIsInForce:
     ) -> None:
         _configured(monkeypatch, tmp_path)
 
-        assert broker_certificates.node_is_under_access_list(NODE)
-        assert not broker_certificates.node_is_under_access_list("elsewhere")
-        assert not broker_certificates.node_is_under_access_list("")
+        assert broker_files.node_is_under_access_list(NODE)
+        assert not broker_files.node_is_under_access_list("elsewhere")
+        assert not broker_files.node_is_under_access_list("")
 
     @pytest.mark.parametrize("off", [{"node_accounts": False}, {"mqtt_broker_dir": ""}])
     def test_not_where_this_server_writes_none(
@@ -129,7 +129,7 @@ class TestWhereTheListIsInForce:
     ) -> None:
         _configured(monkeypatch, tmp_path, **off)
 
-        assert not broker_certificates.node_is_under_access_list(NODE)
+        assert not broker_files.node_is_under_access_list(NODE)
 
     def test_not_for_a_node_whose_name_no_account_can_have(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -138,7 +138,7 @@ class TestWhereTheListIsInForce:
             monkeypatch, tmp_path, deploy_targets=[DeployTarget(name="my pi", host="rpi.local")]
         )
 
-        assert not broker_certificates.node_is_under_access_list("my pi")
+        assert not broker_files.node_is_under_access_list("my pi")
 
 
 class _Host:

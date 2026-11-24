@@ -24,7 +24,7 @@ from unittest import mock
 
 import pytest
 
-from wactorz import cli
+from wactorz import arguments
 from wactorz.agents.dynamic.agent import DynamicAgent
 from wactorz.agents.dynamic.api import AgentAPI
 from wactorz.core import mqtt as core_mqtt
@@ -707,7 +707,7 @@ class TestWhichRoleTheProcessTakes:
     @staticmethod
     def _args(argv: list[str]) -> argparse.Namespace:
         with mock.patch.object(sys, "argv", ["wactorz", *argv]):
-            return cli.get_args()
+            return arguments.get_args()
 
     def test_a_named_flag_is_node_mode(self) -> None:
         assert self._args(["--node", "rpi"]).node == "rpi"

@@ -31,11 +31,12 @@ import pathlib
 import sys
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from .. import plugins
 from ..core.actor import Actor, Message, MessageType, ReplyError
 from ..core.addresses import Address
+from ..core.avatars import spawn_avatar
 from ..core.manifests import AgentManifest
 from ..core.paths import resolve_state_dir
 from ..core.pip import missing_requirements, pending_restart
@@ -762,6 +763,12 @@ def _build_catalog() -> dict[str, Any]:
         }
         logger.info("[catalog] Loaded timeseries-collector recipe")
 
+    # A dynamic recipe's character on the dashboard is named after the recipe, in
+    # its config so that a node and a restore from the registry draw the same one.
+    # A native recipe's class names its own (`Actor.AVATAR_KIND`).
+    for key, recipe in catalog.items():
+        if recipe.get("type") == "dynamic":
+            recipe.setdefault("avatar", {"kind": key})
     return catalog
 
 
@@ -774,6 +781,8 @@ class CatalogAgent(Actor):
     """Pre-built agent recipe library.
     Spawns any catalog agent on request by delegating to main's spawn pipeline.
     """
+
+    AVATAR_KIND: ClassVar[str] = "catalog"
 
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "catalog")
@@ -1317,6 +1326,7 @@ class CatalogAgent(Actor):
             persistence_dir=str(main._persistence_dir.parent) if main else resolve_state_dir(),
             trusted=True,  # catalog agents are pre-built — skip safety validator
             task_timeout_s=recipe.get("task_timeout_s"),
+            avatar=spawn_avatar(recipe, name),
         )
         if not actor:
             return {"ok": False, "message": f"Spawn returned no actor for '{name}'"}

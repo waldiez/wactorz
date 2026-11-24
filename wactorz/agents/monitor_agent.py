@@ -25,7 +25,7 @@ Single restart authority:
 import asyncio
 import logging
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 import psutil
 
@@ -52,6 +52,8 @@ class MonitorActor(Actor):
     on the errors agents report, and publishes the system's health and the host's load. Main is
     told of what needs a person.
     """
+
+    AVATAR_KIND: ClassVar[str] = "monitor"
 
     def __init__(
         self,

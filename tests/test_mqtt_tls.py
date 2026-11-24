@@ -24,7 +24,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID
 
 from tests.programs import program_namespace
-from wactorz import broker_certificates, config
+from wactorz import broker_certificates, broker_files, config
 from wactorz.config import DeployTarget
 from wactorz.core import broker_tls, mqtt_tls
 from wactorz.core import mqtt as core_mqtt
@@ -384,6 +384,7 @@ class TestTheExport:
             ),
         )
         monkeypatch.setattr(broker_certificates, "CONFIG", config.CONFIG)
+        monkeypatch.setattr(broker_files, "CONFIG", config.CONFIG)
         out = tmp_path / "export"
 
         assert (
@@ -419,14 +420,14 @@ class TestTheServerStartup:
     def _configure(self, monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
         patched = replace(config.CONFIG, deploy_targets=(), **fields)
         monkeypatch.setattr(config, "CONFIG", patched)
-        monkeypatch.setattr(broker_certificates, "CONFIG", patched)
+        monkeypatch.setattr(broker_files, "CONFIG", patched)
 
     def test_nothing_happens_with_tls_off(
         self, state: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._configure(monkeypatch, mqtt_tls="")
 
-        assert broker_certificates.prepare_broker_files() == ""
+        assert broker_files.prepare_broker_files() == ""
         assert not (state / "mqtt_tls").exists()
 
     def test_the_generated_ca_is_created_and_the_brokers_copy_written(
@@ -435,7 +436,7 @@ class TestTheServerStartup:
         folder = tmp_path / "infra" / "tls"
         self._configure(monkeypatch, mqtt_tls="1", mqtt_tls_ca="", mqtt_broker_dir=str(folder))
 
-        assert broker_certificates.prepare_broker_files() == ""
+        assert broker_files.prepare_broker_files() == ""
 
         assert (state / "mqtt_tls" / "ca.crt").is_file()
         assert (folder / "broker.crt").read_bytes().count(b"BEGIN CERTIFICATE") == 2
@@ -451,12 +452,12 @@ class TestTheServerStartup:
         # A server restart must not tell anyone to restart the broker for nothing.
         folder = tmp_path / "tls"
         self._configure(monkeypatch, mqtt_tls="1", mqtt_tls_ca="", mqtt_broker_dir=str(folder))
-        broker_certificates.prepare_broker_files()
+        broker_files.prepare_broker_files()
         written = (folder / "broker.key").stat().st_mtime_ns
         caplog.clear()
 
-        with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
-            assert broker_certificates.prepare_broker_files() == ""
+        with caplog.at_level(logging.WARNING, logger=broker_files.__name__):
+            assert broker_files.prepare_broker_files() == ""
 
         assert (folder / "broker.key").stat().st_mtime_ns == written
         assert not [r for r in caplog.records if "restart" in r.getMessage()]
@@ -474,8 +475,8 @@ class TestTheServerStartup:
             monkeypatch, mqtt_tls="1", mqtt_tls_ca="", mqtt_broker_dir=str(blocker / "tls")
         )
 
-        with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
-            assert broker_certificates.prepare_broker_files() == ""
+        with caplog.at_level(logging.WARNING, logger=broker_files.__name__):
+            assert broker_files.prepare_broker_files() == ""
 
         assert any("Could not write" in r.getMessage() for r in caplog.records)
 
@@ -485,7 +486,7 @@ class TestTheServerStartup:
         missing = tmp_path / "mine.crt"
         self._configure(monkeypatch, mqtt_tls="1", mqtt_tls_ca=str(missing), mqtt_broker_dir="")
 
-        problem = broker_certificates.prepare_broker_files()
+        problem = broker_files.prepare_broker_files()
 
         assert str(missing) in problem
         assert "MQTT_TLS_CA" in problem

@@ -2,10 +2,11 @@
 """Setting up a node on main's own machine, for the code main should not run.
 
 `sudo wactorz-node setup-local` runs once, as root, and leaves a user, a key, a
-sudoers rule and a sandboxed unit; `/deploy local` does the rest as it does for
+sudoers rule and a sandboxed unit; `/deploy sandbox` does the rest as it does for
 any node. What matters here is what root leaves behind: the node's user can
-restart its own unit and nothing more, main's key works only from this machine,
-and main's secrets are out of the node's reach -- or setup says so and stops.
+restart its own unit and read its log and nothing more, main's key works only
+from this machine, and main's secrets are out of the node's reach -- or setup
+says so and stops.
 
 Every command goes through a fake that records it and acts out the few whose
 effects later steps read (a directory made, a key generated), and every path
@@ -19,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from wactorz.agents.node_service import MANAGED_MARKER, UNIT_NAME
+from wactorz.agents.node_service import JOURNAL_TAIL, MANAGED_MARKER, UNIT_NAME
 from wactorz.config import RESERVED_NODE_NAMES
 from wactorz.node import cli as node_cli
 from wactorz.node import local_setup
@@ -61,7 +62,7 @@ class FakeMachine:
             key.write_text("PRIVATE\n", encoding="utf-8")
             Path(f"{key}.pub").write_text(f"ssh-ed25519 AAAAkey {KEY_COMMENT}\n", encoding="utf-8")
         if command[:2] == ["sh", "-c"]:
-            return 0, "/usr/bin/systemctl\n"
+            return 0, f"/usr/bin/{command[2].split()[-1]}\n"
         if command[-3:-1] == ["test", "-r"]:
             return (0, "") if command[-1] in self.readable else (1, "")
         return 0, ""
@@ -121,14 +122,23 @@ class TestOnAFreshMachine:
         for option in ("no-port-forwarding", "no-agent-forwarding", "no-pty"):
             assert option in line
 
-    def test_the_node_may_restart_its_own_unit_and_nothing_else(
+    def test_the_node_may_restart_its_own_unit_and_read_its_log_and_nothing_else(
         self, main: Main, layout: Layout
     ) -> None:
         setup(main, FakeMachine(), layout, fix_permissions=False)
 
         assert layout.sudoers.read_text() == (
             f"{NODE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl restart {UNIT_NAME}\n"
+            f"{NODE_USER} ALL=(root) NOPASSWD: /usr/bin/journalctl -u {UNIT_NAME} "
+            "-n 12 --no-pager -o cat\n"
         )
+
+    def test_the_log_rule_allows_the_read_a_deploy_makes(self, main: Main, layout: Layout) -> None:
+        # sudo matches a rule's arguments word for word: the two must agree.
+        setup(main, FakeMachine(), layout, fix_permissions=False)
+
+        journal_rule = layout.sudoers.read_text().splitlines()[1]
+        assert journal_rule.endswith(JOURNAL_TAIL.replace("journalctl", "/usr/bin/journalctl", 1))
 
     def test_the_rule_is_checked_before_it_is_put_in_place(
         self, main: Main, layout: Layout

@@ -66,7 +66,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
 from ..core.actor import Actor, Message, MessageType
@@ -347,6 +347,8 @@ class ScheduledAgent(Actor):
         publish_topic: optional str — defaults to "schedule/<name>/fired"
         description: optional str — for /rules display
     """
+
+    AVATAR_KIND: ClassVar[str] = "scheduled"
 
     def __init__(
         self,

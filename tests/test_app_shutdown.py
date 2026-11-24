@@ -8,15 +8,22 @@ without a handler SIGTERM does nothing at all when the process is PID 1.
 
 import asyncio
 import signal
+import sys
 from typing import Any
 
 import pytest
 
-from wactorz.app import _install_signal_handlers, _print_ready_banner
+from wactorz.app import SHUTDOWN_SIGNALS, _install_signal_handlers, _print_ready_banner
 
 
 class TestSignalHandlers:
-    async def test_it_registers_for_both_stop_signals(self) -> None:
+    def test_the_stop_signals_are_sigterm_and_sigint_and_on_windows_ctrl_break(self) -> None:
+        expected = {signal.SIGTERM, signal.SIGINT}
+        if sys.platform == "win32":
+            expected.add(signal.SIGBREAK)
+        assert set(SHUTDOWN_SIGNALS) == expected
+
+    async def test_it_registers_for_every_stop_signal(self) -> None:
         installed: list[int] = []
         loop = asyncio.get_running_loop()
         original = loop.add_signal_handler
@@ -24,7 +31,7 @@ class TestSignalHandlers:
         # matching one: a loop handler where the loop offers them, and a plain
         # `signal.signal` where it does not. Restoring the wrong one leaves a
         # handler installed process-wide for whatever runs next.
-        before = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+        before = {sig: signal.getsignal(sig) for sig in SHUTDOWN_SIGNALS}
 
         def record(sig: int, cb: Any, *args: Any) -> None:
             installed.append(sig)
@@ -41,7 +48,7 @@ class TestSignalHandlers:
                 except NotImplementedError:
                     signal.signal(sig, handler)
 
-        assert set(installed) == {signal.SIGTERM, signal.SIGINT}
+        assert set(installed) == set(SHUTDOWN_SIGNALS)
 
     async def test_a_signal_cancels_the_running_task(self) -> None:
         """Cancellation is the mechanism — it unwinds into the shutdown
@@ -118,7 +125,7 @@ class TestSignalHandlers:
             loop.add_signal_handler = original_add  # type: ignore[method-assign]
             signal.signal = original_signal  # type: ignore[assignment]
 
-        assert set(fallback) == {signal.SIGTERM, signal.SIGINT}
+        assert set(fallback) == set(SHUTDOWN_SIGNALS)
 
 
 class TestReadyBanner:

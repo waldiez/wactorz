@@ -64,6 +64,7 @@ List all registered actors with live metrics.
     "state":              "running",
     "protected":          true,
     "essential":          false,
+    "avatar":             {"kind": "main"},
     "mem":                69.9,
     "task":               "idle",
     "messagesProcessed":  42,
@@ -458,7 +459,7 @@ What the shadow trial shows: the pairs the serving agents kept, compared. By def
 
 `labels` is there when the trial is judged. Per input: `tp`, `fp`, `fn` and `tn` over the inputs a label covers, and the rates from them; `mcc` is the Matthews correlation, honest when faults are rare. Per fault: a fault is a stretch positive labels hold without a break (a fault labelled again inside itself stays one), `seen` when an input fell inside it, caught when anything inside it was flagged; `delay_s` is from its start to the first flag. Per day: `alarms_without_fault` are flags where no positive label held, labelled or not, and `alarms_per_day` divides them by the days of event time the inputs span (null under an hour). `intervals` and `recall_interval` are 95% Wilson intervals. `mcnemar` compares the sides over the inputs exactly one judged rightly; `better` names a side only when `p` is below 0.05. That is a detector's; `kind` says which kind the figures are.
 
-A `classifier` (judged on the class in `judged_on.field`) has `labelled`, `unlabelled`, `sources`, `classes` (every class labelled or answered, in order), `mcnemar` as above, and per side `right`, `accuracy` with `accuracy_interval`, `no_answer` (labelled inputs it gave no class for, each counted wrong), `macro_f1`, `weighted_f1`, `per_class` (each class's `precision`, `recall`, `f1` and `support`) and `confusion`, a row per class as labelled and a column per class answered, in `classes` order, then one for no answer. A `regressor` (judged on the number in `judged_on.field`) has `labelled` (labels that are numbers), `not_numbers` (those left out), `unlabelled`, `sources`, per side `judged`, `no_answer`, `mae`, `rmse`, `bias` (the mean of the answer less the truth) and `worst`, and `closer`: on how many inputs each side was nearer the truth (an answer beats none), the `ties`, and an exact sign test's `p` and `better`.
+A `classifier` (judged on the class in `judged_on.field`) has `labelled`, `unlabelled`, `sources`, `classes` (every class labelled or answered, in order), `mcnemar` as above, and per side `right`, `accuracy` with `accuracy_interval`, `no_answer` (labelled inputs it gave no class for, each counted wrong), `macro_f1`, `weighted_f1`, `per_class` (each class's `precision`, `recall`, `f1` and `support`) and `confusion`, a row per class as labelled and a column per class answered, in `classes` order, then one for no answer. A `regressor` (judged on the number in `judged_on.field`) has `labelled` (labels that are numbers), `not_numbers` (those left out), `unlabelled`, `sources`, per side `judged`, `no_answer` (labelled inputs it gave no number for), and `mae`, `rmse`, `bias` (the mean of the answer less the truth) and `worst`, all four over the `judged` inputs, the ones both sides answered, so a side is not measured on the easy inputs alone, and `closer`: on how many inputs each side was nearer the truth (an answer beats none), the `ties`, and an exact sign test's `p` and `better`.
 
 `from` is the version whose declaration was used, or `request`. When a version says how to judge the trial but persistence is not running, `labels_unavailable` says so instead.
 
@@ -569,7 +570,7 @@ Who publishes what, who reads it, and where the data stops: the agents and the t
     {"id": "…", "name": "ahu-1-scorer", "node": "ahu-edge-1", "description": "Scores AHU-1's air.",
      "publishes": ["anomalies/ahu-1"], "subscribes": ["sensors/ahu-1/#"], "reads_fields": ["temperature"],
      "models": [{"key": "model", "name": "ahu-scorer", "active": 7, "shadow": 8}],
-     "asks": {"open": 1, "answered": 4, "channels": ["telegram"]}}
+     "asks": {"open": 1, "answered": 4, "channels": ["telegram"]}, "avatar": {"kind": "function"}}
   ],
   "topics": [
     {"topic": "anomalies/ahu-1", "producers": ["…"], "consumers": ["…"], "outside": false, "shadow": false,
@@ -595,7 +596,7 @@ Agents are named by id in `producers`, `consumers` and the warnings. A topic is 
 
 What a topic carries is the fields of the last payload seen on it, from its producer or from outside (`fields_from: "seen"`, with the payload as `example` and when it came as `seen_at`), or before anything is seen what its producer declares (`"declared"`). Main keeps payloads from outside only under `sensors/`, `custom/` and `agents/+/data/`, and only for topics an agent reads; any other is `sampled: false`, with nothing known of its fields. An example longer than 2,048 characters of JSON comes as `example_text`, cut, with `example_cut: true`.
 
-`models` are the models an agent's manifest names, with where the store's `active` and `shadow` pointers stand (`null` when unset). `asks` is what the agent has asked a person, from `GET /api/questions`, or `null`.
+`models` are the models an agent's manifest names, with where the store's `active` and `shadow` pointers stand (`null` when unset). `asks` is what the agent has asked a person, from `GET /api/questions`, or `null`. `avatar` is what the agent says of the character drawn for it, as in `GET /api/actors`; `{}` for one drawn from its name.
 
 `shadow` marks what a model on trial publishes, under `shadow/` in front of the agent's own topic (see `GET /api/models/{name}/trial`).
 
@@ -902,7 +903,7 @@ See [MQTT Topics](mqtt_topics.md) for the full reference. Key topics:
 
 | Topic | Direction | Notes |
 |---|---|---|
-| `agents/{id}/heartbeat` | actor → all | Every 10 s. `{actor_id, name, state, memory_mb, task, protected, essential, timestamp, node}`. No CPU figure: agents share one process, whose CPU is on `system/host` |
+| `agents/{id}/heartbeat` | actor → all | Every 10 s. `{actor_id, name, state, memory_mb, task, protected, essential, timestamp, node, avatar}`. `avatar` is what the dashboard draws the agent from: `{}`, or a `kind` and parts (see the library guide's *The agent's avatar*). No CPU figure: agents share one process, whose CPU is on `system/host` |
 | `agents/{id}/metrics` | actor → all | Same cadence. LLM agents add `input_tokens`, `output_tokens`, `cost_usd`. |
 | `agents/{id}/status` | actor → all | On state change. |
 | `agents/{id}/logs` | actor → dashboard | Log entries. |

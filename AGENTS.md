@@ -51,8 +51,8 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 
 ## Frontend conventions
 
-- Bun for JS/TS. Tests run on Vitest + happy-dom and coverage is **gated** — `bun run coverage`
-  fails below the floor. Raise the floor as you add tests; never lower it. New components and bug
+- Bun for JS/TS. Tests run on Vitest + happy-dom and coverage is **gated** — `make coverage-frontend`
+  (`bun run coverage` in `frontend/` without `make`) fails below the floor. Raise the floor as you add tests; never lower it. New components and bug
   fixes ship with a test in `src/__tests__/`.
 - No framework: components are plain DOM classes. Across component trees, from transport to UI and to and
   from extensions, they use the typed event bus in `src/events.ts` (`emit`/`listen` + `AppEventMap`); inside

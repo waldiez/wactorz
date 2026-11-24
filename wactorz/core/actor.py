@@ -28,6 +28,7 @@ from ..monitoring.agent_metrics import RecentDurations
 from . import models, topic_bus
 from .artifacts import ArtifactError
 from .atomic_io import quarantine_unreadable, write_bytes
+from .avatars import Avatar
 from .cancellation import cancel_all_until_done
 from .heartbeats import AgentHeartbeat
 from .identity import derive_actor_id
@@ -519,13 +520,26 @@ class Actor(ABC):
     Actors are fully async and communicate only through messages.
     """
 
+    #: Which of the dashboard's ready-made characters stands for agents of this
+    #: class; empty for a character drawn from the agent's name.
+    AVATAR_KIND: ClassVar[str] = ""
+
     def __init__(
         self,
         actor_id: str | None = None,
         name: str | None = None,
         persistence_dir: str | None = None,
         mailbox_size: int = 1000,
+        avatar: Avatar | None = None,
     ) -> None:
+        #: The character the dashboard draws for this actor, carried in every
+        #: heartbeat: the one a spawn asked for, else this class's kind, else
+        #: nothing, and the dashboard draws one from the name.
+        self.avatar: Avatar = (
+            dict(avatar)
+            if avatar is not None
+            else ({"kind": self.AVATAR_KIND} if self.AVATAR_KIND else {})
+        )
         if actor_id:
             self.actor_id = actor_id
         elif name:
@@ -1078,6 +1092,7 @@ class Actor(ABC):
             "protected": self.protected,
             "essential": self.essential,
             "node": self._node,
+            "avatar": self.avatar,
         }
 
     def _build_metrics(self) -> dict[str, Any]:
@@ -1396,7 +1411,12 @@ class Actor(ABC):
     # ─── Actor Spawning ───────────────────────────────────────────────────────
 
     async def spawn(
-        self, actor_class: type[Actor], *, actor_id: str | None = None, **kwargs: Any
+        self,
+        actor_class: type[Actor],
+        *,
+        actor_id: str | None = None,
+        avatar: Avatar | None = None,
+        **kwargs: Any,
     ) -> Actor:
         """Spawn a child actor, under ``actor_id`` when one is given. The child inherits:
         - MQTT client (so it can publish heartbeats/status)
@@ -1407,11 +1427,17 @@ class Actor(ABC):
         Erlang/OTP supervision: if the owning ActorSystem has a Supervisor,
         the child is automatically registered under it with ONE_FOR_ONE so it
         will be restarted if it crashes — no child is an orphan.
+
+        ``avatar`` is what the child wears in place of its class's kind: put on
+        it here, before it starts and on every rebuild after a crash, rather
+        than handed to its constructor, which not every agent class takes.
         """
         # Default persistence to same root as parent
         kwargs.setdefault("persistence_dir", str(self._persistence_dir.parent))
 
         child = build_actor(actor_class, actor_id, kwargs)
+        if avatar is not None:
+            child.avatar = dict(avatar)
 
         # Inherit everything from parent
         child._mqtt_client = self._mqtt_client  # MQTT publish connection
@@ -1463,8 +1489,12 @@ class Actor(ABC):
                     mp = self._mqtt_port
                     papi = self._persistence_api
 
+                    worn = dict(avatar) if avatar is not None else None
+
                     async def _child_factory() -> Actor:
                         c = build_actor(cls, kept_id, kw)
+                        if worn is not None:
+                            c.avatar = dict(worn)
                         c._mqtt_client = mc
                         c._mqtt_broker = mb
                         c._mqtt_port = mp

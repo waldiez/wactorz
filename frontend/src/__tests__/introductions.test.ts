@@ -180,7 +180,7 @@ describe("introduction failures and overlapping changes", () => {
         );
         emit("af-introductions-changed");
         await vi.waitFor(() => expect(root.textContent).toContain("<img src=x"));
-        expect(root.querySelector("img")).toBeNull();
+        expect(root.querySelector('img[src="x"], [onerror]')).toBeNull();
         chat.destroy();
     });
     it("keeps loaded text and recovers from a temporary failure without another event", async () => {

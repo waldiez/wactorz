@@ -3,6 +3,7 @@
  */
 import { log } from "./logger";
 import { uid } from "../ids";
+import { readAvatarSpec } from "../agents/avatarSpec";
 import { resolveAgentName } from "../agents/naming";
 import { parseAgentState } from "../agents/states";
 import { readingsFrom } from "../agents/nodeReadings";
@@ -327,6 +328,10 @@ export function normaliseHeartbeat(p: unknown): HeartbeatPayload {
     const node = optStr(o["node"]);
     if (node !== undefined) {
         out.node = node;
+    }
+    const avatar = readAvatarSpec(o["avatar"]);
+    if (avatar !== undefined) {
+        out.avatar = avatar;
     }
     return out;
 }

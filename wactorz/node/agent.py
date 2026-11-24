@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..agents.dynamic.agent import DynamicAgent, _ProgramHalted
+from ..core.avatars import spawn_avatar
 from ..core.identity import given_actor_id
 from ..core.topic_bus import TopicContract
 from ..monitoring.agent_metrics import RecentDurations
@@ -68,6 +69,7 @@ class NodeAgent(NodeHosted, DynamicAgent):
             actor_id=given_actor_id(config.get("actor_id")),
             name=str(name),
             persistence_dir=str(directory),
+            avatar=spawn_avatar(config, str(name)),
         )
         #: What the spawn said this agent does, so the planner sees it before
         #: the agent's own code has declared or published anything.

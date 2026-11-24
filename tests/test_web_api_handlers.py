@@ -609,7 +609,9 @@ class TestReads:
         main = SimpleNamespace(_get_spawn_registry=Mock(return_value=saved))
         monkeypatch.setattr(api_actors, "find_main_actor", lambda _: main)
         live = SimpleNamespace(
-            actor_id="live", _published_manifest={"description": "I report from a live manifest."}
+            actor_id="live",
+            name="live",
+            _published_manifest={"description": "I report from a live manifest."},
         )
         silent = SimpleNamespace(actor_id="silent")
         actors = {actor.actor_id: actor for actor in (live, silent)}
@@ -625,6 +627,13 @@ class TestReads:
         assert reply.status == 200
         introductions = await reply.json()
         main._get_spawn_registry.assert_called_once_with()
+
+        live_details = await client.get("/api/actors/live")
+        assert live_details.status == 200
+        live_payload = await live_details.json()
+        assert live_payload["state"] == events.STARTING
+        assert live_payload["introduction"] == introductions["live"]
+        assert "live" not in runtime.state["agents"]
 
         for agent in (weather, helper):
             runtime.state["agents"][agent["actor_id"]] = {"name": agent["name"], "state": "running"}

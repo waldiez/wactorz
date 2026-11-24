@@ -194,7 +194,7 @@ Runs Wactorz as a Discord bot. The bot replies when mentioned in a channel it ha
 Discord is a **restricted** channel: conversation, Home Assistant queries and everyday device control work, but spawning agents, deleting agents, running code, pipelines and admin slash commands do not. Use the dashboard for those.
 
 ```bash
-wactorz --interface discord --discord-token $DISCORD_BOT_TOKEN
+wactorz --interface discord   # the token is DISCORD_BOT_TOKEN, in .env or the environment
 ```
 
 #### Setup
@@ -272,7 +272,7 @@ Runs Wactorz as a Telegram bot using the Bot API in long-polling mode — no pub
 Telegram is a **restricted** channel: conversation, Home Assistant queries and everyday device control only — no spawning, deleting, code, pipelines or admin commands.
 
 ```bash
-wactorz --interface telegram --telegram-token $TELEGRAM_BOT_TOKEN
+wactorz --interface telegram  # the token is TELEGRAM_BOT_TOKEN, in .env or the environment
 ```
 
 #### Setup
@@ -307,6 +307,7 @@ The web dashboard starts automatically alongside whichever chat interface is act
 #### Features
 
 - **Agent status** — live heartbeat grid showing every registered actor, its state, and last-seen time
+- **Avatars** — a small character for each agent, on its card, in chat, on its Wiring box and on its notifications, whose eyes show how the agent is doing. They are off until Settings → Avatars turns them on, for this browser; it also chooses where they show, the disc behind them (purple, light, violet, lilac, any colour, or none), and whether the state shows as a dot on the avatar's corner, as the ring round the disc, or both. A place switched off looks as it does without avatars
 - **Log stream** — real-time log output from all agents via WebSocket
 - **Chat** — full conversation interface, equivalent to the CLI
 - **Docs** — this documentation, served at `/docs/`

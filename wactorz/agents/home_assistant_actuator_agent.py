@@ -18,7 +18,7 @@ import logging
 import operator as _op
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from wactorz.config import CONFIG
 
@@ -212,6 +212,8 @@ class HomeAssistantActuatorAgent(Actor):
 
     Spawn via actor.spawn(HomeAssistantActuatorAgent, config=config).
     """
+
+    AVATAR_KIND: ClassVar[str] = "ha-actuator"
 
     def __init__(self, config: ActuatorConfig, **kwargs: Any) -> None:
         kwargs.setdefault("name", f"actuator-{config.automation_id[:20]}")

@@ -6,7 +6,7 @@ Supports Anthropic Claude, OpenAI, Ollama (local), and custom providers.
 import logging
 import time
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, ClassVar
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.persistence import chat_turn_recorded, get_db
@@ -54,6 +54,8 @@ class LLMAgent(Actor):
     """An Actor that uses an LLM to process tasks.
     Maintains conversation history and supports tool use.
     """
+
+    AVATAR_KIND: ClassVar[str] = "llm"
 
     def __init__(
         self,

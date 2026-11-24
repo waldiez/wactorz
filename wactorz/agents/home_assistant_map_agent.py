@@ -6,7 +6,7 @@ import logging
 import os
 import time
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
 from ..config import CONFIG
 from ..core.actor import Actor, ActorState, Message, MessageType
@@ -167,6 +167,8 @@ class MapUpdateDispatcher:
 
 class HomeAssistantMapAgent(Actor):
     """Listens for Home Assistant entity registry updates and republishes device maps."""
+
+    AVATAR_KIND: ClassVar[str] = "ha-map"
 
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "home-assistant-map-agent")

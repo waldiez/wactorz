@@ -124,7 +124,7 @@ Then take away the user's passwordless sudo, if it has one, and `/deploy` the
 node again: it installs a user unit. What needs root on the node is then yours to do there: system packages,
 such as `python3-venv`, and a `/nodes run` that starts with `sudo`. A node on main's
 own machine (see below) is set up differently: its user may restart its own unit
-and nothing else.
+and read its log, and nothing else.
 
 Four details worth knowing if you write one by hand:
 
@@ -614,8 +614,8 @@ sudo .venv/bin/wactorz-node setup-local
 
 It makes a system user, `wactorz-node`, with its home in `/var/lib/wactorz-node`.
 It makes an SSH key in main's state directory and lets that user accept it from
-this machine only. It lets that user restart its own unit and run nothing else
-as root. It installs the unit, and it prints the lines to add to main's `.env`:
+this machine only. It lets that user restart its own unit and read that unit's
+last log lines, and run nothing else as root. It installs the unit, and it prints the lines to add to main's `.env`:
 
 ```bash
 DEPLOY_TARGETS=sandbox          # with your other nodes, if you have any

@@ -21,7 +21,7 @@ from wactorz.agents.main.spawn_registry import (
     SPAWN_REGISTRY_KEY,
     SpawnRegistry,
 )
-from wactorz.cli import get_args
+from wactorz.arguments import get_args
 from wactorz.config import CONFIG, _env_choice
 from wactorz.errors import StartupError
 from wactorz.monitoring import log_buffer

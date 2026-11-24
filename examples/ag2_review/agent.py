@@ -27,6 +27,7 @@ APPROVED = "APPROVED"
 #: the model the provider resolved to (`gpt-4o-mini-2024-07-18`), which a
 #: family name matches as a prefix. Add the models you use.
 PRICES = {
+    "gpt-5.4-mini": (0.75, 4.50),
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.50, 10.00),
     "claude-haiku-4-5": (1.00, 5.00),

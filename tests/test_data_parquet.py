@@ -149,6 +149,37 @@ class TestTheWriter:
         assert writer.pending == 0
         assert writer.close() == []
 
+    def test_late_rows_for_an_older_hour_wait_together(self, root: Path) -> None:
+        writer = Writer(root, "sensors/imu", batch_rows=100)
+        writer.append(reading(T0 + HOUR, ax=1))
+
+        late = [writer.append(reading(T0 + offset, ax=offset)) for offset in (1, 2, 3)]
+
+        assert late == [[], [], []]
+        made = writer.flush()
+        assert [p.name for p in made] == ["08.parquet", "09.parquet"]
+        assert pq.read_table(made[0]).column("ax").to_pylist() == [1.0, 2.0, 3.0]
+
+    def test_late_rows_are_written_with_the_hours_before_a_newer_one(self, root: Path) -> None:
+        writer = Writer(root, "sensors/imu", batch_rows=100)
+        writer.append(reading(T0 + HOUR, ax=1))
+        writer.append(reading(T0, ax=2))
+
+        made = writer.append(reading(T0 + 2 * HOUR, ax=3))
+
+        assert [p.name for p in made] == ["08.parquet", "09.parquet"]
+        assert writer.pending == 1
+
+    def test_a_full_batch_across_hours_writes_everything_pending(self, root: Path) -> None:
+        writer = Writer(root, "sensors/imu", batch_rows=3)
+        writer.append(reading(T0 + HOUR, ax=1))
+        writer.append(reading(T0, ax=2))
+
+        made = writer.append(reading(T0 + 1, ax=3))
+
+        assert [p.name for p in made] == ["08.parquet", "09.parquet"]
+        assert writer.pending == 0
+
     def test_a_file_is_whole_or_absent(self, root: Path) -> None:
         writer = Writer(root, "sensors/imu")
         writer.append(reading(T0, ax=1))
@@ -269,6 +300,35 @@ class TestTheFrame:
         assert table.column("ay").to_pylist() == [None, 9.0]
         narrowed = frame(root, "sensors/imu", T0, T0 + 10, columns=["ay"])
         assert narrowed.column_names == ["ts", "ay"]
+
+    def test_a_column_of_different_types_in_different_hours_is_read_as_text(
+        self, root: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        writer = Writer(root, "sensors/imu")
+        writer.append(reading(T0, level=0.5, ax=1))
+        writer.flush()
+        writer.append(reading(T0 + HOUR, level="high", ax=2))
+        writer.append(reading(T0 + HOUR + 1, level=None, ax=3))
+        writer.flush()
+
+        table = frame(root, "sensors/imu", T0, T0 + 2 * HOUR)
+
+        assert table.column("level").to_pylist() == ["0.5", "high", None]
+        assert table.column("ax").to_pylist() == [1.0, 2.0, 3.0]
+        assert "level hold different types" in caplog.text
+
+    def test_a_type_clash_is_read_beside_a_field_only_one_hour_has(self, root: Path) -> None:
+        writer = Writer(root, "sensors/imu")
+        writer.append(reading(T0, level=0.5, ax=1))
+        writer.flush()
+        writer.append(reading(T0 + HOUR, level="high", ay=2))
+        writer.flush()
+
+        table = frame(root, "sensors/imu", T0, T0 + 2 * HOUR)
+
+        assert table.column("level").to_pylist() == ["0.5", "high"]
+        assert table.column("ax").to_pylist() == [1.0, None]
+        assert table.column("ay").to_pylist() == [None, 2.0]
 
     def test_a_window_with_nothing_is_an_empty_frame_with_the_fixed_columns(
         self, root: Path

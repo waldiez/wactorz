@@ -211,10 +211,10 @@ Discord channel
 | Provider | Flag | Env var | Example model |
 |----------|------|---------|---------------|
 | `AnthropicProvider` | `--llm anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` (also the global `LLM_MODEL` default) |
-| `OpenAIProvider` | `--llm openai` | `OPENAI_API_KEY` | `gpt-4o` |
+| `OpenAIProvider` | `--llm openai` | `OPENAI_API_KEY` | `gpt-5.4-mini` |
 | `OllamaProvider` | `--llm ollama --ollama-model llama3` | — (local; uses `OLLAMA_URL`) | `llama3`, `mistral`, etc. |
 | `NIMProvider` | `--llm nim --nim-model meta/llama-3.3-70b-instruct` | `NIM_API_KEY` | `meta/llama-3.3-70b-instruct` |
-| `GeminiProvider` | `--llm gemini --gemini-model gemini-2.5-flash` | `GEMINI_API_KEY` | `gemini-2.5-flash` (gemini-only fallback when `LLM_MODEL` is unset) |
+| `GeminiProvider` | `--llm gemini --gemini-model gemini-3.5-flash-lite` | `GEMINI_API_KEY` | `gemini-3.5-flash-lite` (Gemini's own default, used when `LLM_MODEL` is explicitly empty) |
 
 All providers implement `complete(messages, system) → (text, usage)` and `stream(messages, system) → AsyncGenerator`. Cost tracking (USD per 1M tokens) is built into every provider and accumulated in `LLMAgent.metrics`.
 
@@ -339,7 +339,7 @@ The `wactorz` command starts the actor system and the web dashboard. It connects
 wactorz
 
 # Choose a different LLM provider
-wactorz --llm gemini --gemini-model gemini-2.5-flash
+wactorz --llm gemini --gemini-model gemini-3.5-flash-lite
 wactorz --llm openai
 wactorz --llm ollama --ollama-model llama3
 wactorz --llm nim --nim-model meta/llama-3.3-70b-instruct
@@ -348,13 +348,13 @@ wactorz --llm nim --nim-model meta/llama-3.3-70b-instruct
 wactorz --reload
 
 # Discord bot
-wactorz --interface discord --discord-token $DISCORD_BOT_TOKEN
+wactorz --interface discord   # the token is DISCORD_BOT_TOKEN, in .env or the environment
 
 # WhatsApp (via Twilio)
 wactorz --interface whatsapp
 
 # Telegram
-wactorz --interface telegram --telegram-token $TELEGRAM_BOT_TOKEN
+wactorz --interface telegram  # the token is TELEGRAM_BOT_TOKEN, in .env or the environment
 
 # REST API
 wactorz --interface rest --port 8000

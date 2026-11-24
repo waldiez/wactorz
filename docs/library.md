@@ -257,8 +257,9 @@ unless the subscription says otherwise (below).
 
 ### The agent's avatar
 
-The dashboard draws a small character for every agent: on its card, in chat,
-on its Wiring box and on its notifications. With nothing said, the character
+The dashboard draws a small character for every agent, once Settings →
+Avatars turns them on: on its card, in chat, on its Wiring box and on its
+notifications. With nothing said, the character
 is made up from the agent's name, so it is the same one after every restart.
 A function agent holds an *f(x)* card; each differs a little by its name.
 

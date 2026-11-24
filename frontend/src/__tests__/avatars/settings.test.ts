@@ -81,7 +81,18 @@ describe("Settings → Avatars", () => {
         expect(colour(body).classList.contains("chosen")).toBe(false);
     });
 
+    it("starts with avatars off, and one switch shows them everywhere", () => {
+        const body = draw();
+        const all = byRole(body, "switch", "Show avatars") as HTMLInputElement;
+        expect(all.checked).toBe(false);
+        expect(root.dataset["avatars"] ?? "").toBe("");
+        all.click();
+        expect(loadAvatarPrefs().on).toBe(true);
+        expect(root.dataset["avatars"]).toBe("cards chat wiring notifications");
+    });
+
     it("turns a place off and on", () => {
+        saveAvatarPrefs({ ...defaultAvatarPrefs(), on: true });
         const body = draw();
         const wiring = byRole(body, "switch", "Wiring") as HTMLInputElement;
         wiring.click();
@@ -101,6 +112,7 @@ describe("Settings → Avatars", () => {
     });
 
     it("turns them all off with one switch, keeping what each place is set to", () => {
+        saveAvatarPrefs({ ...defaultAvatarPrefs(), on: true });
         const body = draw();
         const places = ["Overview cards", "Chat", "Wiring", "Notifications"].map(
             name => byRole(body, "switch", name) as HTMLInputElement,

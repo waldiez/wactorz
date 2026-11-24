@@ -46,10 +46,14 @@ export interface AvatarPrefs {
 /** Where the choices are kept, as JSON. */
 export const AVATAR_PREFS_KEY = "wactorz-avatars";
 
-/** What everyone sees before changing anything. */
+/**
+ * What everyone sees before changing anything: no avatars, until this browser
+ * turns them on in Settings. Each place is ticked, so turning them on shows
+ * them everywhere at once.
+ */
 export function defaultAvatarPrefs(): AvatarPrefs {
     return {
-        on: true,
+        on: false,
         where: { cards: true, chat: true, wiring: true, notifications: true },
         disc: "purple",
         style: "dot",

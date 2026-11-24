@@ -19,9 +19,9 @@ beforeEach(() => {
 });
 
 describe("the avatar choices kept in a browser", () => {
-    it("start as what the poll chose: everywhere, on the purple disc, with a dot", () => {
+    it("start off, every place ready for when they are turned on, on the purple disc, with a dot", () => {
         expect(loadAvatarPrefs()).toEqual({
-            on: true,
+            on: false,
             where: { cards: true, chat: true, wiring: true, notifications: true },
             disc: "purple",
             style: "dot",
@@ -100,7 +100,7 @@ describe("how a disc is drawn", () => {
 describe("the choices put on the page", () => {
     it("name the places, the style, and the disc's colours on the root", () => {
         const root = document.createElement("div");
-        const prefs = defaultAvatarPrefs();
+        const prefs = { ...defaultAvatarPrefs(), on: true };
         prefs.where.wiring = false;
         prefs.style = "state";
         applyAvatarPrefs(prefs, root);
@@ -130,10 +130,11 @@ describe("the choices put on the page", () => {
     it("go on the page's own root when no other is named", () => {
         applyAvatarPrefs({
             ...defaultAvatarPrefs(),
+            on: true,
             where: { cards: false, chat: false, wiring: false, notifications: false },
         });
         expect(document.documentElement.dataset["avatars"]).toBe("");
-        applyAvatarPrefs(defaultAvatarPrefs());
+        applyAvatarPrefs({ ...defaultAvatarPrefs(), on: true });
         expect(document.documentElement.dataset["avatars"]).toBe("cards chat wiring notifications");
     });
 });

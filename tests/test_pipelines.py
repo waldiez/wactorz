@@ -15,7 +15,7 @@ from wactorz import pipelines, plugins
 from wactorz.agents.function_agent import agent
 from wactorz.agents.rule_agent import RuleConfig
 from wactorz.core.actor import Actor, Message
-from wactorz.pipelines import Pipeline, pipeline, wiring_errors
+from wactorz.pipelines import NotAPipelineError, Pipeline, PipelineError, pipeline, wiring_errors
 
 
 @agent(subscribes="sensors/imu/#", publishes="anomalies/imu")
@@ -117,9 +117,28 @@ class TestDeclaring:
             pipeline("empty")
 
 
+class TestHandedToServe:
+    def test_something_other_than_a_pipeline_is_refused_by_name(self) -> None:
+        with pytest.raises(NotAPipelineError, match=r"42 is not a Pipeline"):
+            with pipelines.registered([42]):  # pyright: ignore[reportArgumentType]  # the wrong kind is the point
+                pass
+
+    def test_pipelines_before_the_refused_one_are_put_back(self) -> None:
+        pipe = pipeline("imu-watch", steps=[detect, notify])
+        pipelines.clear()
+
+        with pytest.raises(NotAPipelineError):
+            with pipelines.registered([pipe, "imu-watch"]):  # pyright: ignore[reportArgumentType]  # the wrong kind is the point
+                pass
+
+        assert "imu-watch" not in pipelines.discover(env="")
+
+
 class TestWiring:
     def test_a_later_step_listening_to_nothing_is_an_error(self) -> None:
-        with pytest.raises(ValueError, match=r"notify.*anomalies/imu.*nothing"):
+        with pytest.raises(
+            PipelineError, match=r"broken.*not wired.*notify.*anomalies/imu.*nothing"
+        ):
             pipeline("broken", steps=[Sink, notify])
 
     def test_the_first_step_may_listen_to_the_outside(self) -> None:

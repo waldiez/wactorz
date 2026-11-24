@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`wactorz.errors` holds every exception a library user can be handed, and the library guide's new *What to catch* says which call raises which.** `NoSystemError`, `ReplyError`, `NotFoundError`, `NoAnswerError` and the rest were raised from modules a program had no reason to know, and the guide named most of them only by the built-in they subclass. Each is still defined where it is raised, so existing imports keep working, and still subclasses that built-in, so `except LookupError` and the like keep catching what they did. A pipeline whose steps do not connect now raises `PipelineError`, a `ValueError` as before.
+
 - **Every agent chat opens with an introduction.** The introduction sits above the conversation, with a description and examples when available. It is visible before the first message and after a restart.
 
 ### Changed
@@ -29,6 +31,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **The Docker Hub guide names the image's version tags as they are published**: `waldiez/wactorz:v0.8.0` and `:v0.8.0-ultra`, with the `v`. It wrote them as `:<version>`, which reads as `:0.8.0`, a tag that does not exist.
 
 ### Fixed
+
+- **`wactorz.serve(pipelines_=...)` and `wactorz.run` refuse something that is not a pipeline by saying so.** They raised an `AttributeError` about a missing `name`; they now raise `NotAPipelineError`, a `TypeError` naming what was given, as `agents=` does with `NotAnAgentError`.
 
 - **A deploy from a checkout stops, saying why, when the checkout's wheel cannot be built.** Deploying a node from a source tree builds a wheel of it to send. A build that failed made the deploy install the same version number from PyPI instead: other code, or none, sent with no word of it. A build that hung held the deploy for ever. The build now has a limit of 15 minutes, and a build that fails, runs past it, or makes no wheel of this version stops the deploy. The node's log says which, with pip's last lines when it failed, and the node keeps what it had.
 

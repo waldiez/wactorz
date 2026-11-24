@@ -53,6 +53,8 @@ class MonitorActor(Actor):
     told of what needs a person.
     """
 
+    AVATAR_KIND = "monitor"
+
     def __init__(
         self,
         check_interval: float = 15.0,

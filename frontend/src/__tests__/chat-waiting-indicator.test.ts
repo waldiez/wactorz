@@ -22,6 +22,7 @@ function makeHost(thread: HTMLElement, inChatView = true, openThread = "weather"
         thread: () => thread,
         scrollThread: () => {},
         commit: () => {},
+        senderAvatar: () => document.createElement("span"),
     };
 }
 
@@ -153,6 +154,7 @@ describe("whose conversation it appears in", () => {
             thread: () => thread,
             scrollThread: () => {},
             commit: () => {},
+            senderAvatar: () => document.createElement("span"),
         });
         ui.awaiting("weather", "weather", "weather");
         expect(waiting(thread)).toBeNull();

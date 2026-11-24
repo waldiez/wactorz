@@ -255,6 +255,52 @@ JSON, `{"raw": text}` for text, `{"raw": bytes}` for anything else, such as a
 camera frame. Messages on one topic are handled one at a time, in order,
 unless the subscription says otherwise (below).
 
+### The agent's avatar
+
+The dashboard draws a small character for every agent, once Settings →
+Avatars turns them on: on its card, in chat, on its Wiring box and on its
+notifications. With nothing said, the character
+is made up from the agent's name, so it is the same one after every restart.
+A function agent holds an *f(x)* card; each differs a little by its name.
+
+A class picks one of the ready-made characters with `AVATAR_KIND`:
+
+```python
+class PumpWatch(Actor):
+    AVATAR_KIND = "monitor"
+```
+
+The kinds are `main`, `planner`, `llm`, `monitor`, `home-assistant`,
+`ha-actuator`, `ha-map`, `ha-state-bridge`, `installer`, `train`, `recorder`,
+`rule`, `scheduled`, `function`, `dynamic` (an agent generated from code, holding a
+screen of `</>`), `catalog`, and the catalogue's recipes by
+name (`weather-agent`, `flic`, `gmail-agent`, `google-calendar-agent`,
+`doc-to-pptx-agent`, `anomaly-detector`, `smart-energy`, `manual-agent`,
+`reachy-mini`, `timeseries-collector`).
+
+A spawn config may carry an `avatar` of its own, a kind or parts over one:
+
+```json
+{"name": "pump-watch", "type": "dynamic", "code": "...",
+ "avatar": {"kind": "monitor", "accent": "#2bb3a3", "top": "hardhat", "prop": "gear"}}
+```
+
+| Part | Values |
+|---|---|
+| `accent` | a colour, `#rrggbb` |
+| `outfit` | `vest`, `suit`, `stripes` |
+| `neck` | `gem`, `tie`, `bowtie`, `none` |
+| `specs` | `round`, `square`, `shades`, `monocle`, `none` |
+| `face` | `smile`, `blush`, `beard`, `mustache`, `open` |
+| `top` | `""`, `gradcap`, `hardhat`, `tophat`, `captain`, `beanie`, `headset`, `refcap` |
+| `ant` | `0`, `1`, `2`, `"left"`, `"right"` (antennae; a hat hides them) |
+| `prop` | `""`, `whistle`, `envelope`, `calendar`, `clock`, `magnifier`, `gear`, `books`, `book`, `slides`, `button`, `mic`, `spike`, `pin`, `switch`, `sync`, `function`, `code`, `wave`, `sun`, `clipboard`, `thought`, `database`, `bolt`, `house`, `chart` |
+
+An avatar is decoration: a kind or a part the dashboard does not know is
+passed over, and one that is not a small dictionary of words is left out with
+a warning in the log; neither stops the agent. The eyes show how the agent is
+doing, which is the dashboard's to decide, not the agent's.
+
 ## More than one at a time
 
 By default an agent handles one message of a topic at a time, in order, and

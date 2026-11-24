@@ -1,0 +1,254 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ */
+/* ── Agent avatars ───────────────────────────────────────────────────────
+   Every place builds its avatars; whether it shows them, on which disc and
+   how the agent's state shows are this browser's choices, written on the
+   root by `ui/avatars/appearance.ts`:
+     data-avatars       the places that show them (cards chat wiring notifications)
+     data-avatar-disc   "on", or "none" for the character alone
+     data-avatar-style  "dot": a state dot on the avatar's corner;
+                        "state": the ring in the state's colour, and no dot;
+                        "both": the dot, and the ring in the state's colour
+     --af-avatar-disc   the disc's fill
+     --af-avatar-ring   the ring's colour: a shade of the disc
+   A place that does not show them looks as it does without avatars. */
+
+.af-avatar {
+  display: none;
+  flex: 0 0 auto;
+  position: relative;
+  box-sizing: border-box;
+  width: var(--af-avatar-px, 28px);
+  height: var(--af-avatar-px, 28px);
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.af-avatar > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.af-avatar-card {
+  --af-avatar-px: 40px;
+}
+
+/* The disc, and a thin ring a small gap away from it. The gap shows the page. */
+:root:not([data-avatar-disc="none"]) .af-avatar {
+  background: var(--af-avatar-disc);
+  outline: 1px solid var(--af-avatar-ring);
+  outline-offset: 1px;
+}
+:root:not([data-avatar-disc="none"]) .af-avatar > img {
+  border-radius: 50%;
+}
+:root:not([data-avatar-disc="none"]) .af-avatar-card {
+  outline-width: 1.5px;
+  outline-offset: 1.5px;
+}
+
+/* The state's colour, for the ring where the ring is what shows the state. */
+.af-avatar[data-mood="running"] {
+  --af-avatar-state: #34d399;
+}
+.af-avatar[data-mood="initializing"] {
+  --af-avatar-state: #60a5fa;
+}
+.af-avatar[data-mood="late"] {
+  --af-avatar-state: #fbbf24;
+}
+.af-avatar[data-mood="stopped"] {
+  --af-avatar-state: #8a93a6;
+}
+.af-avatar[data-mood="failed"] {
+  --af-avatar-state: #f87171;
+}
+
+/* Where each place shows them. */
+:root[data-avatars~="cards"] .af-card .af-avatar,
+:root[data-avatars~="chat"] .af-chat .af-avatar,
+:root[data-avatars~="wiring"] .af-wiring .af-avatar,
+:root[data-avatars~="notifications"] .wz-toasts .af-avatar,
+:root[data-avatars~="notifications"] .af-inbox .af-avatar,
+.af-avatar-sample .af-avatar {
+  display: inline-block;
+}
+
+/* ── Overview cards ──────────────────────────────────────────────────────
+   Without avatars the wrappers take no part in the layout: the dot and the
+   three lines are the card's own rows. With them, the avatar sits on the
+   left with the dot on its corner, and the lines beside it. */
+.af-card-head,
+.af-card-face,
+.af-card-who {
+  display: contents;
+}
+:root[data-avatars~="cards"] .af-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+:root[data-avatars~="cards"] .af-card-face {
+  display: inline-flex;
+  position: relative;
+  flex: 0 0 auto;
+  margin: 3px;
+}
+:root[data-avatars~="cards"] .af-card-who {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+:root[data-avatars~="cards"] .af-card-face > .af-card-state-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  z-index: 1;
+  width: 10px;
+  height: 10px;
+  outline: 2px solid #0d1a38;
+}
+
+/* ── Chat ────────────────────────────────────────────────────────────── */
+.af-chat-agent-face {
+  display: contents;
+}
+:root[data-avatars~="chat"] .af-chat-agent-face {
+  display: inline-flex;
+  position: relative;
+  flex: 0 0 auto;
+  margin: 2px;
+}
+:root[data-avatars~="chat"] .af-chat-agent-row .af-avatar {
+  --af-avatar-px: 24px;
+}
+:root[data-avatars~="chat"] .af-chat-agent-face > .af-chat-agent-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  z-index: 1;
+  outline: 2px solid #070b1c;
+}
+:root[data-avatars~="chat"] .af-chat-msg-from {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+:root[data-avatars~="chat"] .af-chat-msg-from > .af-avatar {
+  margin: 2px;
+}
+
+/* The ring in the state's colour ("state" and "both"), where a place shows a
+   state: cards, the chat's agent list and its header. The dot goes only
+   where the ring alone shows the state; with no disc there is no ring, so
+   the dot stays. */
+:root:is([data-avatar-style="state"], [data-avatar-style="both"]):not([data-avatar-disc="none"])
+  .af-card-face
+  > .af-avatar,
+:root:is([data-avatar-style="state"], [data-avatar-style="both"]):not([data-avatar-disc="none"])
+  .af-chat-agent-face
+  > .af-avatar,
+:root:is([data-avatar-style="state"], [data-avatar-style="both"]):not([data-avatar-disc="none"])
+  .af-avatar-sample-face
+  > .af-avatar {
+  outline-color: var(--af-avatar-state);
+}
+:root[data-avatars~="cards"][data-avatar-style="state"]:not([data-avatar-disc="none"])
+  .af-card-face
+  > .af-card-state-dot,
+:root[data-avatars~="chat"][data-avatar-style="state"]:not([data-avatar-disc="none"])
+  .af-chat-agent-face
+  > .af-chat-agent-dot,
+:root[data-avatar-style="state"]:not([data-avatar-disc="none"]) .af-avatar-sample-dot {
+  display: none;
+}
+
+/* ── Wiring ──────────────────────────────────────────────────────────────
+   A box is placed by the graph and lays its lines out as a column of fixed
+   height: both are left alone, and the avatar is given a gutter on the left. */
+.af-wire-node > .af-avatar {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+:root[data-avatars~="wiring"] .af-wire-node.agent {
+  padding-left: 48px;
+}
+:root[data-avatars~="wiring"] .af-wire-detail-title.agent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+:root[data-avatars~="wiring"] .af-wire-detail-title.agent > .af-avatar {
+  margin: 2px;
+}
+
+/* ── Notifications and the Inbox ─────────────────────────────────────── */
+.wz-toast__avatar--face .af-avatar {
+  --af-avatar-px: 36px;
+}
+:root[data-avatars~="notifications"] .wz-toast__avatar--face {
+  background: transparent !important;
+  box-shadow: none;
+}
+:root[data-avatars~="notifications"] .wz-toast__avatar--face > .wz-toast__initials {
+  display: none;
+}
+.af-inbox-who > .af-avatar {
+  --af-avatar-px: 24px;
+  align-self: center;
+  margin: 2px;
+}
+
+/* ── Settings → Avatars ──────────────────────────────────────────────── */
+.af-avatar-sample {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 14px 16px 10px;
+}
+.af-avatar-sample-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.7);
+}
+.af-avatar-sample-face {
+  display: inline-flex;
+  position: relative;
+  margin: 3px;
+}
+.af-avatar-sample-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  outline: 2px solid #0d1a38;
+}
+.af-avatar-disc {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.af-avatar-colour {
+  width: 34px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+}
+.af-avatar-colour.chosen {
+  border-color: rgba(37, 99, 235, 0.55);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.55);
+}

@@ -113,6 +113,11 @@ class DynamicAgent(Actor):
     The LLM writes setup/process/handle_task functions; this class runs them.
     """
 
+    #: Generated agents look alike as a group, a screen of code in hand, and
+    #: apart by their names. A catalogue recipe names its own character in its
+    #: spawn config, which comes before this.
+    AVATAR_KIND = "dynamic"
+
     #: Whether the stored history (`agent.query_ts` and the rest) is read from
     #: main over the broker rather than from this process's database: true only
     #: where the agent is hosted away from main, which overrides the two

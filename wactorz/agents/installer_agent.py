@@ -437,6 +437,8 @@ class InstallerAgent(Actor):
     Uses sys.executable so packages are installed into the active venv.
     """
 
+    AVATAR_KIND = "installer"
+
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "installer")
         super().__init__(**kwargs)

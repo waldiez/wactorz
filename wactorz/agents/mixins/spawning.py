@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 from ...core.actor import Actor, ActorState, ReplyError, ask_through, derive_actor_id
 from ...core.addresses import MAIN_NODE, agent_name_error
 from ...core.artifacts import ArtifactError, ArtifactStore, pinned_in
+from ...core.avatars import spawn_avatar
 from ...core.packages import APPROVAL_TIMEOUT_S
 from ...core.paths import agent_state_dir, resolve_state_dir
 from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
@@ -106,6 +107,7 @@ class SpawnConfig(TypedDict, total=False):
     Common to every kind:
         name, type, node, actor_id, replace, alongside, trusted, artifacts,
         install, minimum_python, require_install_success, description, examples,
+        avatar,
         input_schema, output_schema, _initial_state, host, capabilities,
         max_restarts, restart_delay
     dynamic (and the `llm` bridge code synthesized for one spawned remotely):
@@ -141,6 +143,7 @@ class SpawnConfig(TypedDict, total=False):
     require_install_success: bool
     description: str
     examples: list[str]
+    avatar: dict[str, str | int]
     input_schema: dict[str, str]
     output_schema: dict[str, str]
     poll_interval: float
@@ -522,7 +525,9 @@ class SpawnMixin(_Host):
             # A library agent's keyword arguments, as the spawn gave them.
             kwargs["options"] = dict(options)
         logger.info("[%s] Spawning native catalog agent '%s'", self.name, name)
-        return await self.spawn(factory, actor_id=config.get("actor_id"), **kwargs)
+        return await self.spawn(
+            factory, actor_id=config.get("actor_id"), avatar=spawn_avatar(config, name), **kwargs
+        )
 
     async def _spawn_ha_actuator(self, config: dict[str, Any], name: str) -> Actor | None:
         """Spawn a HomeAssistantActuatorAgent (type: ha_actuator).
@@ -560,6 +565,7 @@ class SpawnMixin(_Host):
             config=actuator_cfg,
             name=name,
             persistence_dir=str(self._persistence_dir.parent),
+            avatar=spawn_avatar(config, name),
         )
 
     async def _spawn_scheduled_agent(self, config: dict[str, Any], name: str) -> Actor | None:
@@ -588,6 +594,7 @@ class SpawnMixin(_Host):
                 publish_topic=publish_topic,
                 description=config.get("description", ""),
                 persistence_dir=str(self._persistence_dir.parent),
+                avatar=spawn_avatar(config, name),
             )
             logger.info(
                 "[%s] Spawned ScheduledAgent '%s' (%s → %s)",
@@ -621,6 +628,7 @@ class SpawnMixin(_Host):
             config=rule,
             name=name,
             persistence_dir=str(self._persistence_dir.parent),
+            avatar=spawn_avatar(config, name),
         )
 
     async def _spawn_module_agent(self, config: dict[str, Any], name: str) -> Actor | None:
@@ -658,6 +666,7 @@ class SpawnMixin(_Host):
             persistence_dir=str(self._persistence_dir.parent),
             llm_provider=self.llm,
             options=dict(options) if isinstance(options, dict) else {},
+            avatar=spawn_avatar(config, name),
         )
 
     async def _spawn_llm_agent(self, config: dict[str, Any], name: str) -> Actor | None:
@@ -676,6 +685,7 @@ class SpawnMixin(_Host):
             llm_provider=self.llm,
             system_prompt=config.get("system_prompt", "You are a helpful assistant."),
             persistence_dir=str(self._persistence_dir.parent),
+            avatar=spawn_avatar(config, name),
         )
 
     async def _spawn_dynamic_agent(
@@ -847,6 +857,7 @@ class SpawnMixin(_Host):
             artifacts=artifacts,
             task_timeout_s=config.get("task_timeout_s"),
             spawn_contract=_declared_contract(config),
+            avatar=spawn_avatar(config, name),
         )
 
     # ── Package install ────────────────────────────────────────────────────

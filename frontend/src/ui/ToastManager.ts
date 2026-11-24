@@ -109,14 +109,20 @@ function timeLabel(): string {
 
 /** A toast's contents. The title and message come from agents, so they are set
  *  as text; the theme's colours and label are the dashboard's own. */
-function toastParts(opts: ToastOptions, theme: ThemeEntry): HTMLElement[] {
+function toastParts(opts: ToastOptions, theme: ThemeEntry, face: HTMLElement | null): HTMLElement[] {
     const strip = el("div", "wz-toast__strip");
     strip.style.background = theme.strip;
 
     // The initials repeat the title beside them, so they are not read twice.
-    const avatar = el("div", "wz-toast__avatar", initials(opts.title));
+    const avatar = el("div", "wz-toast__avatar");
+    avatar.appendChild(el("span", "wz-toast__initials", initials(opts.title)));
     avatar.style.background = theme.avatar;
     avatar.setAttribute("aria-hidden", "true");
+    if (face) {
+        // The agent's avatar in place of its initials, where notifications show avatars.
+        avatar.classList.add("wz-toast__avatar--face");
+        avatar.appendChild(face);
+    }
 
     const content = el("div", "wz-toast__content");
     content.append(
@@ -163,6 +169,18 @@ export class ToastManager {
     private container!: HTMLElement;
     private active: HTMLElement[] = [];
     private readonly MAX = 4;
+    /** The avatar of the agent a chat toast is from, by the name in its title. */
+    private _faceOf: ((name: string) => HTMLElement) | null = null;
+
+    /** The avatar for a toast of `type` titled `title`: an agent's, when the toast is from one. */
+    private _face(type: ToastType, title: string): HTMLElement | null {
+        return type === "chat" && this._faceOf ? this._faceOf(title) : null;
+    }
+
+    /** Show, on a toast from an agent, the avatar `faceOf` gives for the agent's name. */
+    facesFrom(faceOf: (name: string) => HTMLElement): void {
+        this._faceOf = faceOf;
+    }
 
     constructor() {
         if (typeof document === "undefined") {
@@ -201,7 +219,7 @@ export class ToastManager {
             toastEl.dataset["key"] = opts.key;
         }
 
-        testId(toastEl, "toast").append(...toastParts(opts, theme));
+        testId(toastEl, "toast").append(...toastParts(opts, theme, this._face(type, opts.title)));
         if (opts.actions?.length) {
             // A question with answers to press: grouped under who is asking, so
             // its buttons are not read out as stray "Yes" and "No".

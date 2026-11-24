@@ -36,6 +36,8 @@ class HomeAssistantStateBridgeAgent(Actor):
                                                events to {base_topic}.
     """
 
+    AVATAR_KIND = "ha-state-bridge"
+
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "home-assistant-state-bridge")
         super().__init__(**kwargs)

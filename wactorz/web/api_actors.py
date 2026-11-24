@@ -29,6 +29,7 @@ def _actor_payload(ag: dict[str, Any]) -> dict[str, Any]:
         "state": ag.get("state", "unknown"),
         "protected": ag.get("protected", False),
         "essential": ag.get("essential", False),
+        "avatar": ag.get("avatar") or {},
         "mem": ag.get("mem"),
         "task": ag.get("task"),
         "messagesProcessed": ag.get("messages_processed"),
@@ -237,6 +238,9 @@ async def actors_handler(request: web.Request) -> Response:
                 # registered; until it reports, it is starting.
                 "state": ag.get("state", events.STARTING),
                 "protected": bool(getattr(actor, "protected", False)),
+                # From the actor itself, so the page draws the right character
+                # before the first heartbeat has said which.
+                "avatar": getattr(actor, "avatar", None) or {},
                 "mem": ag.get("mem"),
                 "task": ag.get("task"),
                 "messagesProcessed": ag.get("messages_processed")

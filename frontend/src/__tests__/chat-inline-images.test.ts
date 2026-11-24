@@ -32,6 +32,7 @@ function makeHost(thread: HTMLElement): StreamHost {
         thread: () => thread,
         scrollThread: () => {},
         commit: () => {},
+        senderAvatar: () => document.createElement("span"),
     };
 }
 

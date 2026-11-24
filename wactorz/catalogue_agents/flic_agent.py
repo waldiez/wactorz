@@ -255,6 +255,8 @@ class FlicAgent(Actor):
     each time and asking costs nothing.
     """
 
+    AVATAR_KIND = "flic"
+
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "flic")
         # Every spawn passes one; this agent parses commands and never asks a model.

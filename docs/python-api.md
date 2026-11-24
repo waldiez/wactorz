@@ -41,6 +41,8 @@ maps to the same ID across restarts.
 | `metrics` | `ActorMetrics` | `messages_processed`, `errors`, `uptime`, etc. |
 | `protected` | `bool` | If `True`, ignores `delete` — the agent is defined in code and cannot be recreated |
 | `essential` | `bool` | If `True`, ignores `stop` as well — stopping it would remove the way to start it again |
+| `AVATAR_KIND` | `str` (class) | Which of the dashboard's ready-made characters stands for agents of this class; `""` for one drawn from the agent's name |
+| `avatar` | `dict[str, str \| int]` | What the heartbeat says of the agent's avatar: `{"kind": AVATAR_KIND}`, what a spawn's `avatar` gave, or `{}` |
 
 **Enums:**
 

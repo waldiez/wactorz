@@ -21,16 +21,23 @@ const MAX_NOTE_CHARS = 500;
 export interface CardHost {
     /** How the page names the agent that asked: `name@node` where the name is shared. */
     label(question: LedgerQuestion): string;
+    /** The avatar of the agent that asked. */
+    face(question: LedgerQuestion): HTMLElement;
     /** Send the pick. Returns the server's refusal, or "" once it is sent. */
     answer(question: LedgerQuestion, option: string, note: string): Promise<string>;
 }
 
-/** The line above a question: who asked, a link to their thread, and when. */
-function whoAsked(question: LedgerQuestion, label: string, at: number | undefined): HTMLElement {
+/** The line above a question: who asked, with their avatar, a link to their thread, and when. */
+function whoAsked(
+    question: LedgerQuestion,
+    label: string,
+    at: number | undefined,
+    face: HTMLElement,
+): HTMLElement {
     const line = el("div", "af-inbox-who");
     const link = el("a", "af-inbox-agent", label);
     link.href = formatRoute({ view: "chat", path: [label] });
-    line.append(link);
+    line.append(face, link);
     if (at) {
         line.append(el("span", "af-inbox-when", timeLabel(toMs(at))));
     }
@@ -46,11 +53,11 @@ function why(question: LedgerQuestion): HTMLElement[] {
 }
 
 /** A question that was answered: what it asked, what was picked and said, and where. */
-export function answeredCard(question: LedgerQuestion, label: string): HTMLElement {
+export function answeredCard(question: LedgerQuestion, label: string, face: HTMLElement): HTMLElement {
     const card = listItem(el("li", "af-inbox-card"), `${label}: ${question.text}`);
     const elsewhere = question.answer_channel && question.answer_channel !== "dashboard";
     card.append(
-        whoAsked(question, label, question.answered_at),
+        whoAsked(question, label, question.answered_at, face),
         el("p", "af-inbox-text", question.text),
         ...why(question),
         el(
@@ -111,7 +118,7 @@ export class QuestionCard {
         this._question = question;
         const label = this.host.label(question);
         this.element.setAttribute("aria-label", `${label}: ${question.text}`);
-        this._who.replaceChildren(whoAsked(question, label, question.asked_at));
+        this._who.replaceChildren(whoAsked(question, label, question.asked_at, this.host.face(question)));
     }
 
     /** Send `option` with the note; on a refusal, say why and offer the options again. */

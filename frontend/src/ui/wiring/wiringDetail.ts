@@ -12,6 +12,7 @@ import type { Wiring, WiringAgent, WiringAsks, WiringTopic, WiringWarning } from
 import { formatRoute } from "../../router";
 import { relTime } from "../overview/agentState";
 import { el, labelled } from "../dom";
+import { agentFace } from "./wiringGraph";
 
 /** How the details name an agent: by its name, or its id while unknown. */
 export type AgentNamer = (id: string) => string;
@@ -149,6 +150,15 @@ function agentDetail(agent: WiringAgent): HTMLElement[] {
     return [facts];
 }
 
+/** The heading of a node's details: its name, after its avatar when it is an agent. */
+function detailTitle(node: GraphNode): HTMLElement {
+    const title = el("h3", `af-wire-detail-title ${node.kind}`, node.label);
+    if (node.agent) {
+        title.prepend(agentFace(node.agent));
+    }
+    return title;
+}
+
 /**
  * The details of `node`, or what to do when nothing is selected. Who is named
  * is who `graph` shows: an agent the choices hide is not.
@@ -169,10 +179,7 @@ export function buildDetail(node: GraphNode | null, wiring: Wiring, graph: Graph
     const kind = { agent: "Agent", topic: "Topic", source: "Outside source", operator: "Operator" }[
         node.kind
     ];
-    panel.append(
-        el("p", "af-wire-detail-kind", kind),
-        el("h3", `af-wire-detail-title ${node.kind}`, node.label),
-    );
+    panel.append(el("p", "af-wire-detail-kind", kind), detailTitle(node));
     if (node.topic) {
         panel.append(...topicDetail(node.topic, topicEnds(graph, node.id)));
     } else if (node.agent) {

@@ -168,6 +168,8 @@ class MapUpdateDispatcher:
 class HomeAssistantMapAgent(Actor):
     """Listens for Home Assistant entity registry updates and republishes device maps."""
 
+    AVATAR_KIND = "ha-map"
+
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "home-assistant-map-agent")
         super().__init__(**kwargs)

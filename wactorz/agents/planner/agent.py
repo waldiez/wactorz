@@ -58,6 +58,8 @@ SKIP_AGENTS = {
 class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixin):
     """On-demand orchestrator. Spawned per complex task, self-terminates when done."""
 
+    AVATAR_KIND = "planner"
+
     #: Hard cap on a planner's life. A caller awaiting its reply must not wait
     #: longer than this plus delivery: once the cap fires the planner is gone
     #: and no reply can follow, so any remaining wait is spent on nothing.

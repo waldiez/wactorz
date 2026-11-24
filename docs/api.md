@@ -64,6 +64,7 @@ List all registered actors with live metrics.
     "state":              "running",
     "protected":          true,
     "essential":          false,
+    "avatar":             {"kind": "main"},
     "mem":                69.9,
     "task":               "idle",
     "messagesProcessed":  42,
@@ -569,7 +570,7 @@ Who publishes what, who reads it, and where the data stops: the agents and the t
     {"id": "…", "name": "ahu-1-scorer", "node": "ahu-edge-1", "description": "Scores AHU-1's air.",
      "publishes": ["anomalies/ahu-1"], "subscribes": ["sensors/ahu-1/#"], "reads_fields": ["temperature"],
      "models": [{"key": "model", "name": "ahu-scorer", "active": 7, "shadow": 8}],
-     "asks": {"open": 1, "answered": 4, "channels": ["telegram"]}}
+     "asks": {"open": 1, "answered": 4, "channels": ["telegram"]}, "avatar": {"kind": "function"}}
   ],
   "topics": [
     {"topic": "anomalies/ahu-1", "producers": ["…"], "consumers": ["…"], "outside": false, "shadow": false,
@@ -595,7 +596,7 @@ Agents are named by id in `producers`, `consumers` and the warnings. A topic is 
 
 What a topic carries is the fields of the last payload seen on it, from its producer or from outside (`fields_from: "seen"`, with the payload as `example` and when it came as `seen_at`), or before anything is seen what its producer declares (`"declared"`). Main keeps payloads from outside only under `sensors/`, `custom/` and `agents/+/data/`, and only for topics an agent reads; any other is `sampled: false`, with nothing known of its fields. An example longer than 2,048 characters of JSON comes as `example_text`, cut, with `example_cut: true`.
 
-`models` are the models an agent's manifest names, with where the store's `active` and `shadow` pointers stand (`null` when unset). `asks` is what the agent has asked a person, from `GET /api/questions`, or `null`.
+`models` are the models an agent's manifest names, with where the store's `active` and `shadow` pointers stand (`null` when unset). `asks` is what the agent has asked a person, from `GET /api/questions`, or `null`. `avatar` is what the agent says of the character drawn for it, as in `GET /api/actors`; `{}` for one drawn from its name.
 
 `shadow` marks what a model on trial publishes, under `shadow/` in front of the agent's own topic (see `GET /api/models/{name}/trial`).
 
@@ -902,7 +903,7 @@ See [MQTT Topics](mqtt_topics.md) for the full reference. Key topics:
 
 | Topic | Direction | Notes |
 |---|---|---|
-| `agents/{id}/heartbeat` | actor → all | Every 10 s. `{actor_id, name, state, memory_mb, task, protected, essential, timestamp, node}`. No CPU figure: agents share one process, whose CPU is on `system/host` |
+| `agents/{id}/heartbeat` | actor → all | Every 10 s. `{actor_id, name, state, memory_mb, task, protected, essential, timestamp, node, avatar}`. `avatar` is what the dashboard draws the agent from: `{}`, or a `kind` and parts (see the library guide's *The agent's avatar*). No CPU figure: agents share one process, whose CPU is on `system/host` |
 | `agents/{id}/metrics` | actor → all | Same cadence. LLM agents add `input_tokens`, `output_tokens`, `cost_usd`. |
 | `agents/{id}/status` | actor → all | On state change. |
 | `agents/{id}/logs` | actor → dashboard | Log entries. |

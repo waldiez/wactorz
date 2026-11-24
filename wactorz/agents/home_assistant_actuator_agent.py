@@ -213,6 +213,8 @@ class HomeAssistantActuatorAgent(Actor):
     Spawn via actor.spawn(HomeAssistantActuatorAgent, config=config).
     """
 
+    AVATAR_KIND = "ha-actuator"
+
     def __init__(self, config: ActuatorConfig, **kwargs: Any) -> None:
         kwargs.setdefault("name", f"actuator-{config.automation_id[:20]}")
         super().__init__(**kwargs)

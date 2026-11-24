@@ -496,6 +496,8 @@ class RuleConfig:
 class RuleAgent(Actor):
     """Runs one :class:`RuleConfig`; see the module docstring."""
 
+    AVATAR_KIND = "rule"
+
     def __init__(self, config: RuleConfig, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.config = config

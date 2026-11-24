@@ -132,6 +132,8 @@ class NotAnObjectError(TypeError):
 class HomeAssistantAgent(LLMAgent):
     """Unified Home Assistant agent: hardware recommendations, automation CRUD, and entity history."""
 
+    AVATAR_KIND = "home-assistant"
+
     #: What this agent's model requests have taken, kept by the base class's
     #: accounting and added to here.
     total_input_tokens: int

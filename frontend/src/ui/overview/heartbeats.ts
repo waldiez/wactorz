@@ -15,6 +15,7 @@
  */
 import { QUIET_MS, STALE_MS } from "../../agents/liveness";
 import { relTime } from "./agentState";
+import { paintCardMood } from "./cards";
 
 /** How a card's dot says how long since its agent was heard from. */
 const QUIET = "af-card-quiet";
@@ -86,12 +87,14 @@ export class Heartbeats {
         }
         if (!options.pulse) {
             paintFreshness(dot, card.dataset["state"] === "stopped" ? 0 : now - timestampMs);
+            paintCardMood(card);
             return;
         }
         // A heartbeat clears the warning outright rather than re-deriving it
         // from the timestamp: hearing from an agent is the fact, and a clock
         // skewed the wrong way should not leave a live agent marked missing.
         paintFreshness(dot, 0);
+        paintCardMood(card);
         dot.classList.remove("af-card-pulse");
         // Restarted rather than added: re-adding a class already present does
         // not replay the animation, so a steady heartbeat would pulse once and

@@ -348,6 +348,8 @@ class ScheduledAgent(Actor):
         description: optional str — for /rules display
     """
 
+    AVATAR_KIND = "scheduled"
+
     def __init__(
         self,
         schedule: dict[str, Any] | None = None,

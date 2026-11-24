@@ -46,6 +46,8 @@ handle_task() and process().
 """
 
 import asyncio
+import base64
+import contextlib
 import io
 import ipaddress
 import json
@@ -55,8 +57,9 @@ import re
 import socket
 import time
 import urllib.parse
-from collections.abc import Callable, Iterable
-from typing import Any
+import urllib.request
+from collections.abc import AsyncIterator, Callable, Iterable
+from typing import Any, cast
 
 from wactorz.agents.dynamic.api import AgentAPI
 
@@ -1112,41 +1115,276 @@ MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
 #: How many redirects a download follows before giving up.
 MAX_REDIRECTS = 5
 
+#: How long each step of a download -- connecting, a proxy's tunnel, the TLS
+#: handshake, each read -- may take, in seconds.
+DOWNLOAD_TIMEOUT_S = 60.0
 
-def _public_address(url: str) -> bool:
-    """Whether ``url`` is http(s) and every address its host resolves to is public.
+#: The most a proxy's answer to CONNECT may weigh before its blank line.
+MAX_PROXY_REPLY_BYTES = 64 * 1024
+
+#: Sent with every download: some sites refuse a client that does not look like a browser.
+DOWNLOAD_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+}
+
+
+def _public_address(url: str) -> str | None:
+    """The address to fetch ``url`` from, or None unless it is http(s) and its host is public.
 
     The URLs come from search results and from links inside fetched pages, and
     the machine running this agent sits on a private network. Without the check
     a result -- or a redirect from one -- could point it at a router's admin page
-    or a cloud metadata address. Blocking: resolves the host, so call it off the
-    event loop.
+    or a cloud metadata address. Every address the host resolves to must be
+    public, and the one returned is the one connected to (see `_pinned`), so a
+    name that resolves differently a moment later cannot move the request onto
+    the private network. Blocking: resolves the host, so call it off the event
+    loop.
     """
     parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        return False
+    host = _ascii_host(url) if parsed.scheme in ("http", "https") else None
+    if not host:
+        return None
     try:
-        infos = socket.getaddrinfo(parsed.hostname, parsed.port or None)
+        infos = socket.getaddrinfo(host, parsed.port or None)
     except (OSError, UnicodeError):
-        return False
-    addresses = {info[4][0] for info in infos}
-    return bool(addresses) and all(
-        ipaddress.ip_address(str(address).split("%", 1)[0]).is_global for address in addresses
+        return None
+    addresses = [str(info[4][0]).split("%", 1)[0] for info in infos]
+    if not addresses or not all(ipaddress.ip_address(a).is_global for a in addresses):
+        return None
+    return addresses[0]
+
+
+def _ascii_host(url: str) -> str | None:
+    """``url``'s host as it goes on the wire: a name in other scripts in its IDNA form.
+
+    The same form is looked up, named in the ``Host`` header and sent over
+    TLS, as httpx would send it for the URL itself.
+    """
+    import httpx  # optional dependency: installed with the recipe, and its IDNA is what goes on the wire
+
+    try:
+        host = httpx.URL(url).raw_host.decode("ascii")
+    except (httpx.InvalidURL, UnicodeError):
+        return None
+    return host or None
+
+
+def _proxy_for(url: str) -> str | None:
+    """The proxy configured for ``url``, or None when it goes straight out.
+
+    Read per URL, ``NO_PROXY`` included, as the configuration says; the client
+    itself is given no proxy, and `_sent` routes each request.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    proxies = urllib.request.getproxies()
+    proxy = proxies.get(parsed.scheme) or proxies.get("all")
+    if not proxy or urllib.request.proxy_bypass(parsed.hostname or ""):
+        return None
+    return proxy
+
+
+def _bracketed(host: str) -> str:
+    """``host`` as it is written in a URL: an IPv6 address in brackets."""
+    return f"[{host}]" if ":" in host else host
+
+
+def _pinned(url: str, address: str) -> tuple[str, dict[str, str], dict[str, Any]]:
+    """The request for ``url`` sent to ``address``: its URL, headers and httpx extensions.
+
+    The connection goes to the address that was checked, while the server is
+    still asked for ``url``'s host -- in the ``Host`` header, and over TLS as
+    the name sent and the name its certificate must carry (``sni_hostname``).
+    The connection is closed after the response: httpx pools connections by the
+    address in the URL, and a second host at the same address would otherwise be
+    sent over a connection whose certificate was checked for the first.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    hostname = _ascii_host(url) or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    request_url = urllib.parse.urlunsplit(parsed._replace(netloc=_bracketed(address) + port))
+    headers = {"Host": _bracketed(hostname) + port, "Connection": "close"}
+    extensions: dict[str, Any] = {"sni_hostname": hostname} if parsed.scheme == "https" else {}
+    return request_url, headers, extensions
+
+
+class ProxyTunnelError(OSError):
+    """A proxy that would not open a tunnel to the address it was asked for."""
+
+    def __init__(self, proxy: str, reply: str) -> None:
+        super().__init__(f"the proxy {proxy} would not open a tunnel: {reply or 'no answer'}")
+
+
+class _TunnelResponse:
+    """httpcore's response through a tunnel, read the way `_fetch_public` reads httpx's."""
+
+    REDIRECTS = (301, 302, 303, 307, 308)
+
+    def __init__(self, response: Any) -> None:
+        self._response = response
+        self.status_code: int = response.status
+        self.headers = {
+            key.decode("latin-1").lower(): value.decode("latin-1")
+            for key, value in response.headers
+        }
+        self.is_redirect = self.status_code in self.REDIRECTS and "location" in self.headers
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        """The body, as it arrives."""
+        async for chunk in self._response.aiter_stream():
+            yield chunk
+
+
+def _ssl_context() -> Any:
+    """How a server's certificate is verified, on every route a download takes.
+
+    httpx's own defaults, with the CAs the environment names (``SSL_CERT_FILE``,
+    ``SSL_CERT_DIR``) honoured. The clients are built with ``trust_env=False``
+    to keep httpx from choosing a proxy, which would drop those as well, so
+    each is given this context instead.
+    """
+    import httpx  # optional dependency: installed with the recipe
+
+    return httpx.create_ssl_context(trust_env=True)
+
+
+def _proxy_authorization(proxy: str) -> str:
+    """The ``Proxy-Authorization`` header line for a proxy URL that carries a user, else ``""``."""
+    parsed = urllib.parse.urlsplit(proxy)
+    if parsed.username is None:
+        return ""
+    user = urllib.parse.unquote(parsed.username)
+    password = urllib.parse.unquote(parsed.password or "")
+    token = base64.b64encode(f"{user}:{password}".encode()).decode("ascii")
+    return f"Proxy-Authorization: Basic {token}\r\n"
+
+
+async def _read_proxy_reply(stream: Any) -> bytes:
+    """The proxy's answer to CONNECT, up to its blank line."""
+    reply = b""
+    while b"\r\n\r\n" not in reply:
+        chunk = await stream.read(4096, timeout=DOWNLOAD_TIMEOUT_S)
+        if not chunk or len(reply) > MAX_PROXY_REPLY_BYTES:
+            break
+        reply += chunk
+    return reply
+
+
+@contextlib.asynccontextmanager
+async def _tunnelled(proxy: str, url: str, address: str) -> AsyncIterator[_TunnelResponse]:
+    """GET ``url`` from ``address`` through a tunnel the HTTP proxy ``proxy`` opens.
+
+    The proxy is asked to connect to the address that was checked, so it looks
+    nothing up, and TLS inside the tunnel sends and verifies ``url``'s host
+    name. httpx cannot do the second part: through an HTTP proxy it names the
+    address in the URL to TLS, which no certificate carries.
+    """
+    import httpcore  # optional dependency: comes with httpx, installed with the recipe
+    import httpx  # optional dependency: installed with the recipe
+
+    via = urllib.parse.urlsplit(proxy)
+    target = httpx.URL(url)
+    port = target.port or 443
+    hostname = _ascii_host(url) or ""
+    timeouts = {"connect": DOWNLOAD_TIMEOUT_S, "read": DOWNLOAD_TIMEOUT_S}
+    timeouts |= {"write": DOWNLOAD_TIMEOUT_S, "pool": DOWNLOAD_TIMEOUT_S}
+    # Declared only when anyio is installed, which httpx requires: typed by its base.
+    backend = cast("httpcore.AsyncNetworkBackend", httpcore.AnyIOBackend())
+    stream = await backend.connect_tcp(
+        via.hostname or "",
+        via.port or (443 if via.scheme == "https" else 80),
+        timeout=DOWNLOAD_TIMEOUT_S,
     )
+    try:
+        if via.scheme == "https":
+            stream = await stream.start_tls(
+                _ssl_context(), server_hostname=via.hostname, timeout=DOWNLOAD_TIMEOUT_S
+            )
+        where = f"{_bracketed(address)}:{port}"
+        await stream.write(
+            (
+                f"CONNECT {where} HTTP/1.1\r\nHost: {where}\r\n{_proxy_authorization(proxy)}\r\n"
+            ).encode("latin-1"),
+            timeout=DOWNLOAD_TIMEOUT_S,
+        )
+        reply = await _read_proxy_reply(stream)
+        status = reply.split(b"\r\n", 1)[0].decode("latin-1", "replace")
+        if not re.match(r"HTTP/1\.[01] 2\d\d", status):
+            raise ProxyTunnelError(via.hostname or proxy, status)
+        stream = await stream.start_tls(
+            _ssl_context(), server_hostname=hostname, timeout=DOWNLOAD_TIMEOUT_S
+        )
+        origin = httpcore.Origin(b"https", address.encode("ascii"), port)
+        connection = httpcore.AsyncHTTP11Connection(origin=origin, stream=stream)
+        request = httpcore.Request(
+            "GET",
+            httpcore.URL(
+                scheme=b"https", host=address.encode("ascii"), port=port, target=target.raw_path
+            ),
+            headers={**DOWNLOAD_HEADERS, **_pinned(url, address)[1]},
+            extensions={"timeout": timeouts},
+        )
+        response = await connection.handle_async_request(request)
+        try:
+            yield _TunnelResponse(response)
+        finally:
+            await response.aclose()
+            await connection.aclose()
+    finally:
+        await stream.aclose()
+
+
+@contextlib.asynccontextmanager
+async def _sent(client: Any, url: str, address: str) -> AsyncIterator[Any]:
+    """The response to GET ``url``, sent to ``address`` straight out or through the proxy for it.
+
+    Every route connects to the checked address and names the host: straight
+    out by ``client``, which uses no proxy; through an HTTP proxy's tunnel for
+    HTTPS (`_tunnelled`); and for plain HTTP, or through a SOCKS proxy, by a
+    client given that proxy, which forwards the pinned request as it is.
+    """
+    request_url, headers, extensions = _pinned(url, address)
+    proxy = _proxy_for(url)
+    # Schemes compared as parsed, which lowercases them: "HTTPS://" is https.
+    scheme = urllib.parse.urlsplit(url).scheme
+    proxy_scheme = urllib.parse.urlsplit(proxy).scheme if proxy else ""
+    if proxy is None:
+        async with client.stream(
+            "GET", request_url, headers=headers, extensions=extensions
+        ) as resp:
+            yield resp
+    elif scheme == "https" and proxy_scheme in ("http", "https"):
+        async with _tunnelled(proxy, url, address) as resp:
+            yield resp
+    else:
+        import httpx  # optional dependency: installed with the recipe
+
+        async with (
+            httpx.AsyncClient(
+                proxy=proxy,
+                trust_env=False,
+                verify=_ssl_context(),
+                timeout=DOWNLOAD_TIMEOUT_S,
+                headers=DOWNLOAD_HEADERS,
+            ) as proxied,
+            proxied.stream("GET", request_url, headers=headers, extensions=extensions) as resp,
+        ):
+            yield resp
 
 
 async def _fetch_public(agent: AgentAPI, client: Any, url: str) -> tuple[int, str, bytes] | None:
     """GET ``url`` as (status, content type, body), or None if it may not be fetched.
 
     Redirects are followed here rather than by the client, so every hop is
-    checked by :func:`_public_address` before it is requested. The body is read
-    as a stream and abandoned past ``MAX_DOWNLOAD_BYTES``.
+    checked by :func:`_public_address` and sent to the address it checked,
+    straight out or through the proxy configured for it (`_sent`). The body is
+    read as a stream and abandoned past ``MAX_DOWNLOAD_BYTES``.
     """
     for _hop in range(MAX_REDIRECTS + 1):
-        if not await asyncio.to_thread(_public_address, url):
+        address = await asyncio.to_thread(_public_address, url)
+        if address is None:
             await agent.log(f"Not fetching {url}: not a public web address")
             return None
-        async with client.stream("GET", url) as resp:
+        async with _sent(client, url, address) as resp:
             if resp.is_redirect:
                 url = urllib.parse.urljoin(url, resp.headers.get("location", ""))
                 continue
@@ -1168,11 +1406,16 @@ async def _download_pdf(agent: AgentAPI, url: str) -> bytes | None:
         await agent.log("httpx is not installed — cannot download PDF")
         return None
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
-    }
+    # The client itself uses no proxy, whatever the environment names: `_sent`
+    # routes each request, to the checked address, through the proxy for it.
     try:
-        async with httpx.AsyncClient(follow_redirects=False, timeout=60, headers=headers) as client:
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=DOWNLOAD_TIMEOUT_S,
+            headers=DOWNLOAD_HEADERS,
+            trust_env=False,
+            verify=_ssl_context(),
+        ) as client:
             fetched = await _fetch_public(agent, client, url)
             if fetched is None:
                 return None

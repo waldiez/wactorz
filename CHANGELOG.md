@@ -38,6 +38,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The manual agent downloads from the address it checked.** A manual's host was checked to resolve only to public addresses, then looked up again when connecting, so a name could answer with a public address for the check and a private one for the download. Each download, and each redirect, now connects to the checked address, on a connection of its own, and asks for the host by name, with TLS still verified against that name. Through a configured proxy the same holds: the proxy is asked for the checked address rather than the name, and the certificate is checked by the name inside its tunnel.
+
 - **Persistent Home Assistant actuators reconnect after an outage.** A closed connection is detected even while no automation is firing, and readiness is cleared while reconnecting or stopping. MQTT-triggered automations resume after Home Assistant returns without restarting Wactorz. Failed or partially failed actuations no longer increase the completed count or publish a success record.
 
 - **A spawn's `options` can no longer choose an agent's name, id, state folder or model.** A library agent spawned by its target, on main or on a node, was built with whatever its options said for `name`, `actor_id`, `persistence_dir` and `llm_provider`, in place of the values main had checked: a model-written spawn could build an agent named `main`, under main's id, keeping its state anywhere. A spawn whose options name one of them is now refused, saying which; decorated functions and classes are refused alike.

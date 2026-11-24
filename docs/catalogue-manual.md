@@ -32,7 +32,12 @@ Load a manual first, then ask questions against it.
 
 The agent fetches only public web addresses — a search result, a link in a page,
 or a `url` you give it — and checks every redirect the same way, so a manual on
-your own network cannot be loaded by URL. A download stops at 50 MB.
+your own network cannot be loaded by URL. It connects to the address it checked,
+so a name cannot answer one way for the check and another for the download.
+Behind a proxy (`HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY`, unless `NO_PROXY`
+names the host) it asks the proxy for that same address, and checks the site's
+certificate by its name inside the proxy's tunnel; a SOCKS proxy needs the
+`socksio` package. A download stops at 50 MB.
 
 Returns `success`, `device`, `url` (the PDF), `pages`, `chars`, a `preview`, and the LLM
 `answer`.

@@ -11,9 +11,12 @@ the network or waits.
 
 import sys
 import types
+import urllib.parse
+import urllib.request
 from collections.abc import Coroutine
 from typing import Any, ClassVar
 
+import httpx as real_httpx
 import pytest
 
 from tests.programs import program_namespace
@@ -201,8 +204,12 @@ class _AsyncClient:
     async def __aexit__(self, *_exc: object) -> None:
         return None
 
-    def stream(self, _method: str, url: str) -> _AsyncStream:
-        answer = _AsyncClient.files.get(url, (404, b"", "text/html"))
+    def stream(
+        self, _method: str, url: str, *, headers: dict[str, str], extensions: dict[str, Any]
+    ) -> _AsyncStream:
+        # Sent to the checked address, asking for the host by name: answer by the URL asked for.
+        asked = urllib.parse.urlsplit(url)._replace(netloc=headers["Host"]).geturl()
+        answer = _AsyncClient.files.get(asked, (404, b"", "text/html"))
         if isinstance(answer, Exception):
             raise answer
         return _AsyncStream(_AsyncResponse(*answer))
@@ -213,12 +220,20 @@ def web_fixture(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     httpx = types.ModuleType("httpx")
     httpx.Client = _SyncClient  # pyright: ignore[reportAttributeAccessIssue]
     httpx.AsyncClient = _AsyncClient  # pyright: ignore[reportAttributeAccessIssue]
+    # No proxy is configured here, whatever the machine running the tests has.
+    monkeypatch.setattr(urllib.request, "getproxies", dict)
+    # Host names go on the wire as the real httpx writes them.
+    httpx.URL = real_httpx.URL  # pyright: ignore[reportAttributeAccessIssue]
+    httpx.InvalidURL = real_httpx.InvalidURL  # pyright: ignore[reportAttributeAccessIssue]
+    httpx.create_ssl_context = real_httpx.create_ssl_context  # pyright: ignore[reportAttributeAccessIssue]
     monkeypatch.setitem(sys.modules, "httpx", httpx)
     _SyncClient.web = {}
     _SyncClient.requested = []
     _AsyncClient.files = {}
     # Every host in these tests is public unless its name says otherwise.
-    monkeypatch.setitem(NS, "_public_address", lambda url: "private" not in url)
+    monkeypatch.setitem(
+        NS, "_public_address", lambda url: None if "private" in url else "93.184.216.34"
+    )
     return _SyncClient.web
 
 

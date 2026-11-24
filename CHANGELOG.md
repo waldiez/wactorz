@@ -34,6 +34,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Persistent Home Assistant actuators reconnect after an outage.** A closed connection is detected even while no automation is firing, and readiness is cleared while reconnecting or stopping. MQTT-triggered automations resume after Home Assistant returns without restarting Wactorz. Failed or partially failed actuations no longer increase the completed count or publish a success record.
+
 - **Promoting or clearing a model trial while another page reads it no longer logs browser 404s.** Trial reads identify the trial shown on the page and return an empty result if it has ended or changed.
 
 - **Chat loads agent introductions together.** Switching threads after a server restart no longer makes requests for introductions from agents that have disappeared. Open threads update when their introduction becomes available. Failed or malformed responses preserve loaded text and retry with a bounded delay.

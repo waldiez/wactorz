@@ -8,6 +8,7 @@ asked for it rather than to whatever frame arrives next, and turn a refusal into
 an error that names it. `tests/test_ha_ws_timeouts.py` covers the deadlines.
 """
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from typing import Any
@@ -25,8 +26,10 @@ class _HomeAssistant:
     def __init__(self) -> None:
         self.received: list[dict[str, Any]] = []
         self.hello: dict[str, Any] = {"type": "auth_required"}
+        self.connections: list[Any] = []
 
     async def handler(self, ws: Any) -> None:
+        self.connections.append(ws)
         await ws.send(json.dumps(self.hello))
         auth = json.loads(await ws.recv())
         if auth.get("access_token") != TOKEN:
@@ -75,6 +78,34 @@ async def ha_fixture() -> AsyncIterator[tuple[_HomeAssistant, str]]:
 
 
 class TestSession:
+    async def test_waiting_for_closure_does_not_consume_command_responses(
+        self, ha: tuple[_HomeAssistant, str]
+    ) -> None:
+        server, url = ha
+        async with HAWebSocketClient(url, TOKEN) as client:
+            closed = asyncio.create_task(client.wait_closed())
+            try:
+                assert await client.get_entity_state("light.hall") == STATES[0]
+                await client.call_service("light", "turn_on", "light.hall")
+                assert not closed.done()
+                await server.connections[0].close()
+                await asyncio.wait_for(asyncio.shield(closed), timeout=5)
+            finally:
+                closed.cancel()
+                await asyncio.gather(closed, return_exceptions=True)
+
+    async def test_cancelling_a_closure_wait_keeps_the_connection_usable(
+        self, ha: tuple[_HomeAssistant, str]
+    ) -> None:
+        _, url = ha
+        async with HAWebSocketClient(url, TOKEN) as client:
+            closed = asyncio.create_task(client.wait_closed())
+            await asyncio.sleep(0)
+            closed.cancel()
+            await asyncio.gather(closed, return_exceptions=True)
+
+            assert await client.get_entity_state("light.hall") == STATES[0]
+
     async def test_states_are_fetched_and_one_entity_found(
         self, ha: tuple[_HomeAssistant, str]
     ) -> None:
@@ -154,6 +185,8 @@ class TestWithoutAConnection:
             await client._authenticate()
         with pytest.raises(RuntimeError, match="No WS client"):
             await client.receive_json()
+        with pytest.raises(RuntimeError, match="No WS client"):
+            await client.wait_closed()
 
     async def test_leaving_without_connecting_is_harmless(self) -> None:
         await HAWebSocketClient("ws://unused", TOKEN).__aexit__(None, None, None)

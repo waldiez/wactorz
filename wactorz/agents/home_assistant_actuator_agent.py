@@ -277,18 +277,28 @@ class HomeAssistantActuatorAgent(Actor):
                     self._ha = ha
                     self._ws_ready.set()
                     logger.info("[%s] HA WebSocket connected", self.name)
-                    # Hold the connection open until the actor stops or the WS drops
+                    # Closure is observed without receiving messages: service
+                    # calls and condition checks own the command responses.
                     while self.state not in (ActorState.STOPPED, ActorState.FAILED):
-                        await asyncio.sleep(30)
+                        try:
+                            await asyncio.wait_for(ha.wait_closed(), timeout=30)
+                        except TimeoutError:
+                            continue
+                        break
             except asyncio.CancelledError:
                 break
             except Exception as exc:
+                logger.warning("[%s] HA WebSocket error: %s — reconnecting in 5s", self.name, exc)
+            else:
+                if self.state not in (ActorState.STOPPED, ActorState.FAILED):
+                    logger.warning("[%s] HA WebSocket closed — reconnecting in 5s", self.name)
+            finally:
                 self._ha = None
                 self._ws_ready.clear()
-                logger.warning("[%s] HA WebSocket error: %s — reconnecting in 5s", self.name, exc)
-                if self.state not in (ActorState.STOPPED, ActorState.FAILED):
-                    await asyncio.sleep(5)
+            if self.state not in (ActorState.STOPPED, ActorState.FAILED):
+                await asyncio.sleep(5)
         self._ha = None
+        self._ws_ready.clear()
 
     # ── MQTT listener ──────────────────────────────────────────────────────────
 
@@ -349,6 +359,7 @@ class HomeAssistantActuatorAgent(Actor):
             logger.debug("[%s] Conditions not met — skipping", self.name)
             return
 
+        completed = True
         for action in self.config.actions:
             resolved = ActuatorAction(
                 domain=action.domain,
@@ -367,10 +378,16 @@ class HomeAssistantActuatorAgent(Actor):
                     sorted(payload.keys()),
                 )
                 self.metrics.tasks_failed += 1
+                completed = False
                 continue
-            await self._call_service(resolved)
+            if not await self._call_service(resolved):
+                completed = False
 
+        # Failed and partial attempts are throttled too, so a failing action
+        # cannot turn a stream of detections into a burst of service calls.
         self._last_actuation_time = now
+        if not completed:
+            return
         self._actuations_count += 1
         self.metrics.tasks_completed += 1
 
@@ -437,8 +454,8 @@ class HomeAssistantActuatorAgent(Actor):
 
         return True
 
-    async def _call_service(self, action: ActuatorAction) -> None:
-        """Call a HA service via the persistent WebSocket connection.
+    async def _call_service(self, action: ActuatorAction) -> bool:
+        """Call a HA service via the persistent WebSocket connection and report success.
         Waits up to 10 seconds for the connection to be ready before giving up.
         """
         if self._ha is None:
@@ -452,7 +469,7 @@ class HomeAssistantActuatorAgent(Actor):
                     action.domain,
                     action.service,
                 )
-                return
+                return False
         ha = self._ha
         if ha is None:
             # Re-read after the wait rather than trusting it: the event only
@@ -465,7 +482,7 @@ class HomeAssistantActuatorAgent(Actor):
                 action.domain,
                 action.service,
             )
-            return
+            return False
         try:
             await ha.call_service(
                 action.domain,
@@ -484,6 +501,8 @@ class HomeAssistantActuatorAgent(Actor):
         except Exception:
             logger.exception("[%s] Service call failed", self.name)
             self.metrics.tasks_failed += 1
+            return False
+        return True
 
     # ── Actor overrides ────────────────────────────────────────────────────────
 

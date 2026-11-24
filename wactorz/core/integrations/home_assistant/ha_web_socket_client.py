@@ -148,6 +148,12 @@ class HAWebSocketClient:
         if self._ws:
             await self._ws.close()
 
+    async def wait_closed(self) -> None:
+        """Wait for the socket to close without receiving command responses or events."""
+        if self._ws is None:
+            raise HAWebSocketError.not_connected()
+        await self._ws.wait_closed()
+
     async def _recv(self, timeout: float | None) -> Any:
         """Receive one frame, optionally bounded. `None` waits indefinitely."""
         if self._ws is None:

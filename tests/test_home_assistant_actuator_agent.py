@@ -18,6 +18,7 @@ import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, ClassVar
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -255,6 +256,9 @@ class TestDetection:
 
         assert ha.calls == [("fan", "turn_on", "fan.nursery", {})]
         assert agent.metrics.tasks_failed == 1
+        assert agent._actuations_count == 0
+        assert agent.metrics.tasks_completed == 0
+        assert _published(agent) == []
 
     async def test_a_filtered_out_detection_does_nothing(self, tmp_path: Path) -> None:
         agent = _agent(tmp_path, detection_filter={"label": "person"})
@@ -298,6 +302,21 @@ class TestDetection:
         await agent._on_detection({})
 
         assert agent.metrics.tasks_failed == 1
+        assert agent._actuations_count == 0
+        assert agent.metrics.tasks_completed == 0
+        assert _published(agent) == []
+
+    async def test_failed_attempts_still_respect_the_cooldown(self, tmp_path: Path) -> None:
+        agent = _agent(tmp_path, cooldown_seconds=60)
+        ha = _HA()
+        ha.fail_calls = True
+        agent._ha = ha  # pyright: ignore[reportAttributeAccessIssue]
+
+        await agent._on_detection({})
+        await agent._on_detection({})
+
+        assert agent.metrics.tasks_failed == 1
+        assert agent.metrics.tasks_completed == 0
 
 
 class TestConditionChecks:
@@ -345,11 +364,23 @@ class TestConditionChecks:
 
 
 class TestCallService:
+    async def test_no_connection_does_not_publish_a_completed_actuation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent = _agent(tmp_path)
+        monkeypatch.setattr(agent._ws_ready, "wait", AsyncMock(side_effect=TimeoutError))
+
+        await agent._on_detection({})
+
+        assert agent._actuations_count == 0
+        assert agent.metrics.tasks_completed == 0
+        assert _published(agent) == []
+
     async def test_a_ready_signal_without_a_client_calls_nothing(self, tmp_path: Path) -> None:
         agent = _agent(tmp_path)
         agent._ws_ready.set()
 
-        await agent._call_service(ActuatorAction("fan", "turn_on", "fan.nursery"))
+        assert not await agent._call_service(ActuatorAction("fan", "turn_on", "fan.nursery"))
 
         assert agent.metrics.tasks_failed == 0
 
@@ -367,6 +398,7 @@ class TestCallService:
         done, _ = await asyncio.wait({call}, timeout=5)
 
         assert call in done
+        assert call.result() is True
         assert ha.calls == [("fan", "turn_on", "fan.nursery", {})]
 
 
@@ -428,7 +460,95 @@ class _WS:
         return None
 
 
+class _OpenWS:
+    """An open connection whose closure and context exit can be observed."""
+
+    def __init__(self, *, timeout_once: bool = False, fail_once: bool = False) -> None:
+        self.entered = asyncio.Event()
+        self.waiting = asyncio.Event()
+        self.closed = asyncio.Event()
+        self.exited = asyncio.Event()
+        self.timeout_once = timeout_once
+        self.waits = 0
+        self.fail_once = fail_once
+        self.attempts = 0
+
+    def __call__(self, _url: str, _token: str) -> "_OpenWS":
+        return self
+
+    async def __aenter__(self) -> "_OpenWS":
+        self.attempts += 1
+        if self.fail_once and self.attempts == 1:
+            raise ConnectionError("unavailable")
+        self.entered.set()
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        self.exited.set()
+
+    async def wait_closed(self) -> None:
+        self.waits += 1
+        if self.timeout_once and self.waits == 1:
+            raise TimeoutError
+        self.waiting.set()
+        await self.closed.wait()
+
+
 class TestWebSocketKeepalive:
+    @pytest.mark.parametrize(
+        "timeout_once,fail_once", [(False, False), (True, False), (False, True)]
+    )
+    async def test_an_open_connection_is_ready_and_shutdown_releases_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timeout_once: bool, fail_once: bool
+    ) -> None:
+        agent = _agent(tmp_path)
+        agent.state = ActorState.RUNNING
+        agent.ha_ws_url, agent.ha_token = "ws://ha/api/websocket", "token"
+        connection = _OpenWS(timeout_once=timeout_once, fail_once=fail_once)
+        monkeypatch.setattr(module, "HAWebSocketClient", connection)
+        running = asyncio.create_task(agent._ws_keepalive())
+        agent._tasks.append(running)
+        try:
+            await asyncio.wait_for(connection.waiting.wait(), timeout=15)
+            assert agent._ws_ready.is_set()
+            assert agent._ha is connection
+            assert not running.done()
+            assert connection.waits == (2 if timeout_once else 1)
+            assert connection.attempts == (2 if fail_once else 1)
+        finally:
+            agent.state = ActorState.STOPPED
+            await agent._wind_down_tasks()
+
+        assert running.done()
+        assert connection.exited.is_set()
+        assert agent._ha is None
+        assert not agent._ws_ready.is_set()
+
+    async def test_closure_clears_ready_before_retry_and_retry_can_be_stopped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent = _agent(tmp_path)
+        agent.state = ActorState.RUNNING
+        agent.ha_ws_url, agent.ha_token = "ws://ha/api/websocket", "token"
+        connection = _OpenWS()
+        monkeypatch.setattr(module, "HAWebSocketClient", connection)
+        running = asyncio.create_task(agent._ws_keepalive())
+        agent._tasks.append(running)
+        try:
+            await asyncio.wait_for(connection.waiting.wait(), timeout=5)
+            connection.closed.set()
+            await asyncio.wait_for(connection.exited.wait(), timeout=5)
+
+            assert agent._ha is None
+            assert not agent._ws_ready.is_set()
+            assert not running.done()
+        finally:
+            agent.state = ActorState.STOPPED
+            await agent._wind_down_tasks()
+
+        assert running.done()
+        assert not agent._ws_ready.is_set()
+
     async def test_without_a_url_or_token_it_does_not_connect(self, tmp_path: Path) -> None:
         agent = _agent(tmp_path)
         agent.ha_ws_url = ""
@@ -437,7 +557,7 @@ class TestWebSocketKeepalive:
 
         assert not agent._ws_ready.is_set()
 
-    async def test_a_connection_signals_ready(
+    async def test_a_stopped_connection_clears_ready(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         agent = _agent(tmp_path)
@@ -446,7 +566,7 @@ class TestWebSocketKeepalive:
 
         await agent._ws_keepalive()
 
-        assert agent._ws_ready.is_set()
+        assert not agent._ws_ready.is_set()
         assert agent._ha is None  # released once the actor stopped
 
     async def test_a_failed_connection_clears_ready(

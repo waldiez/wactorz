@@ -219,10 +219,9 @@ function buildHeaderLeft(connState: ConnState): HTMLElement {
 
     const icon = el("img");
     icon.src = "./favicon.svg";
-    icon.width = 22;
-    icon.height = 22;
+    icon.width = 28;
+    icon.height = 28;
     icon.alt = "Wactorz";
-    icon.style.opacity = "0.9";
 
     const title = el("span", "af-title", "Wactorz");
     // Read out when it changes, so losing the server is heard and not only seen.

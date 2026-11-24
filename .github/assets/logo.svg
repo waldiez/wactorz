@@ -1,361 +1,87 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <svg
-  class="wz-icon"
-  viewBox="0 0 32 32"
-  width="32"
-  height="32"
-  fill="none"
-  xmlns="http://www.w3.org/2000/svg"
-  aria-label="Wactoz"
-  role="img"
->
-  <style>
-    /*
-     * Wactoz — connect-the-dots W icon
-     * Five crossroads nodes appear numbered, then lines draw between
-     * them to trace the W letterform, hold with glow, fade, loop.
-     * All selectors scoped to svg.wz-icon.
-     *
-     * Cycle: 5 s
-     *   0  –  1.1 s  dots appear one by one   (0–22%)
-     *   1.1 –  2.6 s  lines draw sequentially  (22–52%)
-     *   2.6 –  3.6 s  hold / breathe           (52–72%)
-     *   3.6 –  4.4 s  fade out                 (72–88%)
-     *   4.4 –  5.0 s  dark / reset             (88–100%)
-     */
-
-    svg.wz-icon {
-      overflow: visible;
-      animation: wz-breathe 5s ease-in-out infinite;
-    }
-    @keyframes wz-breathe {
-      0%,100% { filter: drop-shadow(0 2px 8px rgba(139,92,246,0.3)); }
-      62%      { filter: drop-shadow(0 3px 18px rgba(139,92,246,0.72)); }
-    }
-
-    /* ── Dots (opacity fade-in staggered) ───────────────────── */
-    @keyframes wz-d1 {
-      0%,100%  { opacity:0 }
-      2%        { opacity:1 }
-      72%       { opacity:1 }
-      88%       { opacity:0 }
-    }
-    @keyframes wz-d2 {
-      0%,5%    { opacity:0 }
-      7%        { opacity:1 }
-      72%       { opacity:1 }
-      88%       { opacity:0 }
-      100%      { opacity:0 }
-    }
-    @keyframes wz-d3 {
-      0%,10%   { opacity:0 }
-      12%       { opacity:1 }
-      72%       { opacity:1 }
-      88%       { opacity:0 }
-      100%      { opacity:0 }
-    }
-    @keyframes wz-d4 {
-      0%,15%   { opacity:0 }
-      17%       { opacity:1 }
-      72%       { opacity:1 }
-      88%       { opacity:0 }
-      100%      { opacity:0 }
-    }
-    @keyframes wz-d5 {
-      0%,20%   { opacity:0 }
-      22%       { opacity:1 }
-      72%       { opacity:1 }
-      88%       { opacity:0 }
-      100%      { opacity:0 }
-    }
-
-    /* ── Dot number labels (appear with dot, fade before line arrives) */
-    @keyframes wz-n1 {
-      0%,100%  { opacity:0 }
-      2%        { opacity:0.9 }
-      21%       { opacity:0.9 }
-      26%       { opacity:0 }
-    }
-    @keyframes wz-n2 {
-      0%,5%    { opacity:0 }
-      7%        { opacity:0.9 }
-      29%       { opacity:0.9 }
-      34%       { opacity:0 }
-      100%      { opacity:0 }
-    }
-    @keyframes wz-n3 {
-      0%,10%   { opacity:0 }
-      12%       { opacity:0.9 }
-      37%       { opacity:0.9 }
-      42%       { opacity:0 }
-      100%      { opacity:0 }
-    }
-    @keyframes wz-n4 {
-      0%,15%   { opacity:0 }
-      17%       { opacity:0.9 }
-      45%       { opacity:0.9 }
-      50%       { opacity:0 }
-      100%      { opacity:0 }
-    }
-    @keyframes wz-n5 {
-      0%,20%   { opacity:0 }
-      22%       { opacity:0.9 }
-      51%       { opacity:0.9 }
-      56%       { opacity:0 }
-      100%      { opacity:0 }
-    }
-
-    /* ── Lines (stroke-dashoffset draw-on then reset) ────────── */
-    /* L1  P1→P2  len ≈ 21.4 → dasharray 22  draws 22%–30% */
-    @keyframes wz-l1 {
-      0%,22%   { stroke-dashoffset:22; opacity:0 }
-      23%       { stroke-dashoffset:22; opacity:1 }
-      30%       { stroke-dashoffset:0;  opacity:1 }
-      72%       { stroke-dashoffset:0;  opacity:1 }
-      88%       { stroke-dashoffset:0;  opacity:0 }
-      100%      { stroke-dashoffset:22; opacity:0 }
-    }
-    /* L2  P2→P3  len ≈ 13.9 → dasharray 14  draws 30%–38% */
-    @keyframes wz-l2 {
-      0%,30%   { stroke-dashoffset:14; opacity:0 }
-      31%       { stroke-dashoffset:14; opacity:1 }
-      38%       { stroke-dashoffset:0;  opacity:1 }
-      72%       { stroke-dashoffset:0;  opacity:1 }
-      88%       { stroke-dashoffset:0;  opacity:0 }
-      100%      { stroke-dashoffset:14; opacity:0 }
-    }
-    /* L3  P3→P4  len ≈ 13.9 → dasharray 14  draws 38%–46% */
-    @keyframes wz-l3 {
-      0%,38%   { stroke-dashoffset:14; opacity:0 }
-      39%       { stroke-dashoffset:14; opacity:1 }
-      46%       { stroke-dashoffset:0;  opacity:1 }
-      72%       { stroke-dashoffset:0;  opacity:1 }
-      88%       { stroke-dashoffset:0;  opacity:0 }
-      100%      { stroke-dashoffset:14; opacity:0 }
-    }
-    /* L4  P4→P5  len ≈ 21.4 → dasharray 22  draws 46%–56% */
-    @keyframes wz-l4 {
-      0%,46%   { stroke-dashoffset:22; opacity:0 }
-      47%       { stroke-dashoffset:22; opacity:1 }
-      56%       { stroke-dashoffset:0;  opacity:1 }
-      72%       { stroke-dashoffset:0;  opacity:1 }
-      88%       { stroke-dashoffset:0;  opacity:0 }
-      100%      { stroke-dashoffset:22; opacity:0 }
-    }
-
-    /* ── Travelling spark along each line ────────────────────── */
-    @keyframes wz-sp1 {
-      0%,22%   { offset-distance:  0%; opacity:0 }
-      23%       { offset-distance:  0%; opacity:1 }
-      30%       { offset-distance:100%; opacity:1 }
-      31%       { offset-distance:100%; opacity:0 }
-      100%      { offset-distance:100%; opacity:0 }
-    }
-    @keyframes wz-sp2 {
-      0%,30%   { offset-distance:  0%; opacity:0 }
-      31%       { offset-distance:  0%; opacity:1 }
-      38%       { offset-distance:100%; opacity:1 }
-      39%       { offset-distance:100%; opacity:0 }
-      100%      { offset-distance:100%; opacity:0 }
-    }
-    @keyframes wz-sp3 {
-      0%,38%   { offset-distance:  0%; opacity:0 }
-      39%       { offset-distance:  0%; opacity:1 }
-      46%       { offset-distance:100%; opacity:1 }
-      47%       { offset-distance:100%; opacity:0 }
-      100%      { offset-distance:100%; opacity:0 }
-    }
-    @keyframes wz-sp4 {
-      0%,46%   { offset-distance:  0%; opacity:0 }
-      47%       { offset-distance:  0%; opacity:1 }
-      56%       { offset-distance:100%; opacity:1 }
-      57%       { offset-distance:100%; opacity:0 }
-      100%      { offset-distance:100%; opacity:0 }
-    }
-
-    /* ── Apply animations ────────────────────────────────────── */
-    svg.wz-icon .wz-d1 { animation: wz-d1 5s ease-out infinite; }
-    svg.wz-icon .wz-d2 { animation: wz-d2 5s ease-out infinite; }
-    svg.wz-icon .wz-d3 { animation: wz-d3 5s ease-out infinite; }
-    svg.wz-icon .wz-d4 { animation: wz-d4 5s ease-out infinite; }
-    svg.wz-icon .wz-d5 { animation: wz-d5 5s ease-out infinite; }
-
-    svg.wz-icon .wz-n1 { animation: wz-n1 5s ease-out infinite; }
-    svg.wz-icon .wz-n2 { animation: wz-n2 5s ease-out infinite; }
-    svg.wz-icon .wz-n3 { animation: wz-n3 5s ease-out infinite; }
-    svg.wz-icon .wz-n4 { animation: wz-n4 5s ease-out infinite; }
-    svg.wz-icon .wz-n5 { animation: wz-n5 5s ease-out infinite; }
-
-    svg.wz-icon .wz-l1 { stroke-dasharray:22; animation: wz-l1 5s linear infinite; }
-    svg.wz-icon .wz-l2 { stroke-dasharray:14; animation: wz-l2 5s linear infinite; }
-    svg.wz-icon .wz-l3 { stroke-dasharray:14; animation: wz-l3 5s linear infinite; }
-    svg.wz-icon .wz-l4 { stroke-dasharray:22; animation: wz-l4 5s linear infinite; }
-
-    svg.wz-icon .wz-sp1 {
-      offset-path: path('M 3.5 6 L 11 26');
-      animation: wz-sp1 5s linear infinite;
-    }
-    svg.wz-icon .wz-sp2 {
-      offset-path: path('M 11 26 L 16 13');
-      animation: wz-sp2 5s linear infinite;
-    }
-    svg.wz-icon .wz-sp3 {
-      offset-path: path('M 16 13 L 21 26');
-      animation: wz-sp3 5s linear infinite;
-    }
-    svg.wz-icon .wz-sp4 {
-      offset-path: path('M 21 26 L 28.5 6');
-      animation: wz-sp4 5s linear infinite;
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      svg.wz-icon,
-      svg.wz-icon .wz-d1, svg.wz-icon .wz-d2, svg.wz-icon .wz-d3,
-      svg.wz-icon .wz-d4, svg.wz-icon .wz-d5,
-      svg.wz-icon .wz-n1, svg.wz-icon .wz-n2, svg.wz-icon .wz-n3,
-      svg.wz-icon .wz-n4, svg.wz-icon .wz-n5,
-      svg.wz-icon .wz-l1, svg.wz-icon .wz-l2,
-      svg.wz-icon .wz-l3, svg.wz-icon .wz-l4,
-      svg.wz-icon .wz-sp1, svg.wz-icon .wz-sp2,
-      svg.wz-icon .wz-sp3, svg.wz-icon .wz-sp4 { animation: none !important; }
-      svg.wz-icon .wz-d1, svg.wz-icon .wz-d2, svg.wz-icon .wz-d3,
-      svg.wz-icon .wz-d4, svg.wz-icon .wz-d5 { opacity: 1; }
-      svg.wz-icon .wz-n1, svg.wz-icon .wz-n2, svg.wz-icon .wz-n3,
-      svg.wz-icon .wz-n4, svg.wz-icon .wz-n5 { opacity: 0; }
-      svg.wz-icon .wz-l1, svg.wz-icon .wz-l2,
-      svg.wz-icon .wz-l3, svg.wz-icon .wz-l4 { stroke-dashoffset: 0; opacity: 1; }
-      svg.wz-icon .wz-sp1, svg.wz-icon .wz-sp2,
-      svg.wz-icon .wz-sp3, svg.wz-icon .wz-sp4 { opacity: 0; }
-    }
-  </style>
-
-  <defs>
-    <!-- Background radial -->
-    <radialGradient id="wz-bg" cx="50%" cy="40%" r="65%">
-      <stop offset="0%"   stop-color="#0d1a38"/>
-      <stop offset="100%" stop-color="#040810"/>
-    </radialGradient>
-
-    <!-- W line gradients left→right -->
-    <linearGradient id="wz-gl" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%"   stop-color="#6366f1"/>
-      <stop offset="100%" stop-color="#a78bfa"/>
+   viewBox="0 0 250 100"
+   width="250"
+   height="100"
+   role="img"
+   aria-label="Wactorz"
+   version="1.1"
+   id="svg7"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs6">
+    <linearGradient
+       id="wz"
+       x1="8"
+       y1="0"
+       x2="106"
+       y2="0"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0"
+         stop-color="#22d3ee"
+         id="stop1" />
+      <stop
+         offset=".55"
+         stop-color="#8b5cf6"
+         id="stop2" />
+      <stop
+         offset="1"
+         stop-color="#ec4899"
+         id="stop3" />
     </linearGradient>
-    <linearGradient id="wz-gr" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%"   stop-color="#a78bfa"/>
-      <stop offset="100%" stop-color="#6366f1"/>
+    <linearGradient
+       id="word"
+       x1="80"
+       y1="0"
+       x2="240"
+       y2="0"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0"
+         stop-color="#22d3ee"
+         id="stop4" />
+      <stop
+         offset=".55"
+         stop-color="#8b5cf6"
+         id="stop5" />
+      <stop
+         offset="1"
+         stop-color="#ec4899"
+         id="stop6" />
     </linearGradient>
-
-    <!-- Dot glow -->
-    <filter id="wz-dot-glow" x="-100%" y="-100%" width="300%" height="300%">
-      <feGaussianBlur stdDeviation="1.5" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-    <!-- Line glow -->
-    <filter id="wz-line-glow" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="0.6" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
   </defs>
-
-  <!-- Background -->
-  <rect width="32" height="32" rx="7" fill="url(#wz-bg)"/>
-
-  <!-- ── W lines (drawn via stroke-dashoffset) ── -->
-  <!-- L1: P1(3.5,6) → P2(11,26) -->
-  <line class="wz-l1"
-    x1="3.5" y1="6" x2="11" y2="26"
-    stroke="url(#wz-gl)" stroke-width="1.5" stroke-linecap="round"
-    filter="url(#wz-line-glow)"/>
-  <!-- L2: P2(11,26) → P3(16,13) -->
-  <line class="wz-l2"
-    x1="11" y1="26" x2="16" y2="13"
-    stroke="url(#wz-gl)" stroke-width="1.5" stroke-linecap="round"
-    filter="url(#wz-line-glow)"/>
-  <!-- L3: P3(16,13) → P4(21,26) -->
-  <line class="wz-l3"
-    x1="16" y1="13" x2="21" y2="26"
-    stroke="url(#wz-gr)" stroke-width="1.5" stroke-linecap="round"
-    filter="url(#wz-line-glow)"/>
-  <!-- L4: P4(21,26) → P5(28.5,6) -->
-  <line class="wz-l4"
-    x1="21" y1="26" x2="28.5" y2="6"
-    stroke="url(#wz-gr)" stroke-width="1.5" stroke-linecap="round"
-    filter="url(#wz-line-glow)"/>
-
-  <!-- ── Travelling sparks ── -->
-  <circle class="wz-sp1" r="1.6" fill="#e0e7ff" opacity="0"/>
-  <circle class="wz-sp2" r="1.6" fill="#e0e7ff" opacity="0"/>
-  <circle class="wz-sp3" r="1.6" fill="#e0e7ff" opacity="0"/>
-  <circle class="wz-sp4" r="1.6" fill="#e0e7ff" opacity="0"/>
-
-  <!-- ── Dot 1 — top-left — cyan ── -->
-  <g class="wz-d1">
-    <circle cx="3.5" cy="6" r="2.6" fill="#22d3ee" filter="url(#wz-dot-glow)"/>
-    <circle cx="3.5" cy="6" r="1.1" fill="white" opacity="0.8"/>
-    <!-- crossroads tick marks -->
-    <line x1="3.5" y1="3.2" x2="3.5" y2="4.4" stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-    <line x1="3.5" y1="7.6" x2="3.5" y2="8.8" stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-    <line x1="0.7" y1="6"   x2="1.9" y2="6"   stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-    <line x1="5.1" y1="6"   x2="6.3" y2="6"   stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+  <g
+     transform="translate(8 22) scale(0.583333)"
+     id="g7">
+    <path
+       d="M42 46 V22"
+       stroke="url(#wz)"
+       stroke-width="5"
+       stroke-linecap="round"
+       fill="none"
+       id="path6" />
+    <path
+       d="M12 40 L27 80 L42 46 L55 80 L68 40 H100 L70 80 H102"
+       stroke="url(#wz)"
+       stroke-width="12"
+       stroke-linecap="round"
+       stroke-linejoin="round"
+       fill="none"
+       id="path7" />
+    <circle
+       cx="42"
+       cy="15"
+       r="7"
+       fill="none"
+       stroke="url(#wz)"
+       stroke-width="6.6"
+       id="circle7" />
   </g>
-  <!-- Label 1 -->
-  <text class="wz-n1" x="5.8" y="4.2"
-    font-family="monospace" font-size="2.8" font-weight="700"
-    fill="#a5f3fc" text-anchor="start">1</text>
-
-  <!-- ── Dot 2 — bottom-left — indigo ── -->
-  <g class="wz-d2">
-    <circle cx="11" cy="26" r="2.6" fill="#818cf8" filter="url(#wz-dot-glow)"/>
-    <circle cx="11" cy="26" r="1.1" fill="white" opacity="0.8"/>
-    <line x1="11" y1="23.2" x2="11" y2="24.4" stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-    <line x1="11" y1="27.6" x2="11" y2="28.8" stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-    <line x1="8.2" y1="26"  x2="9.4" y2="26"  stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-    <line x1="12.6" y1="26" x2="13.8" y2="26" stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-  </g>
-  <text class="wz-n2" x="13.4" y="24.5"
-    font-family="monospace" font-size="2.8" font-weight="700"
-    fill="#c7d2fe" text-anchor="start">2</text>
-
-  <!-- ── Dot 3 — peak-centre — pink ── -->
-  <g class="wz-d3">
-    <circle cx="16" cy="13" r="2.6" fill="#f472b6" filter="url(#wz-dot-glow)"/>
-    <circle cx="16" cy="13" r="1.1" fill="white" opacity="0.8"/>
-    <line x1="16" y1="10.2" x2="16" y2="11.4" stroke="#f9a8d4" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-    <line x1="16" y1="14.6" x2="16" y2="15.8" stroke="#f9a8d4" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-    <line x1="13.2" y1="13" x2="14.4" y2="13" stroke="#f9a8d4" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-    <line x1="17.6" y1="13" x2="18.8" y2="13" stroke="#f9a8d4" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-  </g>
-  <text class="wz-n3" x="18.4" y="11.5"
-    font-family="monospace" font-size="2.8" font-weight="700"
-    fill="#fbcfe8" text-anchor="start">3</text>
-
-  <!-- ── Dot 4 — bottom-right — indigo ── -->
-  <g class="wz-d4">
-    <circle cx="21" cy="26" r="2.6" fill="#818cf8" filter="url(#wz-dot-glow)"/>
-    <circle cx="21" cy="26" r="1.1" fill="white" opacity="0.8"/>
-    <line x1="21" y1="23.2" x2="21" y2="24.4" stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-    <line x1="21" y1="27.6" x2="21" y2="28.8" stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-    <line x1="18.2" y1="26" x2="19.4" y2="26" stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-    <line x1="22.6" y1="26" x2="23.8" y2="26" stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-  </g>
-  <text class="wz-n4" x="23.4" y="24.5"
-    font-family="monospace" font-size="2.8" font-weight="700"
-    fill="#c7d2fe" text-anchor="start">4</text>
-
-  <!-- ── Dot 5 — top-right — cyan ── -->
-  <g class="wz-d5">
-    <circle cx="28.5" cy="6" r="2.6" fill="#22d3ee" filter="url(#wz-dot-glow)"/>
-    <circle cx="28.5" cy="6" r="1.1" fill="white" opacity="0.8"/>
-    <line x1="28.5" y1="3.2" x2="28.5" y2="4.4" stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-    <line x1="28.5" y1="7.6" x2="28.5" y2="8.8" stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-    <line x1="25.7" y1="6"   x2="26.9" y2="6"   stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-    <line x1="30.1" y1="6"   x2="31.3" y2="6"   stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
-  </g>
-  <text class="wz-n5" x="22.2" y="4.2"
-    font-family="monospace" font-size="2.8" font-weight="700"
-    fill="#a5f3fc" text-anchor="end">5</text>
-
-  <!-- Rim -->
-  <rect width="32" height="32" rx="7"
-    stroke="#818cf8" stroke-width="0.4" fill="none" opacity="0.22"/>
+  <path
+     d="m 88.769531,66 h 6.816406 l 3.847657,-14.882813 c 0.566406,-2.207031 0.917966,-4.53125 1.289066,-6.953125 0.41015,2.5 0.80078,4.863282 1.32812,6.953125 L 105.91797,66 h 6.79687 l 7.83204,-29.101563 h -6.52344 l -3.37891,14.316407 c -0.58594,2.65625 -1.09375,5.78125 -1.5625,8.75 -0.52734,-2.96875 -1.05469,-6.09375 -1.69922,-8.75 l -3.53515,-14.316407 h -6.19141 l -3.554688,14.316407 c -0.664062,2.675781 -1.171875,5.839843 -1.699218,8.828125 -0.46875,-2.988282 -0.976563,-6.152344 -1.5625,-8.828125 L 87.460937,36.898437 h -6.503906 z m 38.523439,0.429687 c 3.22265,0 5.33203,-1.425781 6.38672,-3.457031 H 133.875 V 66 h 5.54687 V 51.292969 c 0,-5.292969 -4.57031,-7.402344 -9.25781,-7.402344 -4.88281,0 -8.39843,2.167969 -9.51172,5.957031 l 5.3711,0.898438 c 0.46875,-1.40625 1.85547,-2.519532 4.12109,-2.519532 2.1875,0 3.41797,1.054688 3.41797,2.910157 v 0.09766 c 0,1.425781 -1.54297,1.582031 -5.29297,1.953125 -4.29687,0.410156 -8.24219,1.816406 -8.24219,6.699219 0,4.316406 3.10547,6.542968 7.26563,6.542968 z m 1.66015,-4.121093 c -1.93359,0 -3.30078,-0.878907 -3.30078,-2.578125 0,-1.757813 1.44532,-2.597657 3.61328,-2.910157 1.28907,-0.175781 3.61329,-0.488281 4.33594,-0.996093 V 58.1875 c 0,2.304687 -1.91406,4.121094 -4.64844,4.121094 z m 24.73438,4.121093 c 5.23437,0 8.92578,-2.832031 9.74609,-7.421875 l -5.44922,-0.996093 c -0.46875,2.363281 -1.97265,3.808593 -4.23828,3.808593 -3.125,0 -4.76562,-2.753906 -4.76562,-6.660156 0,-3.945312 1.64062,-6.660156 4.76562,-6.660156 2.26563,0 3.71094,1.40625 4.19922,3.671875 l 5.44922,-1.015625 c -0.82031,-4.492188 -4.53125,-7.265625 -9.70703,-7.265625 -6.58203,0 -10.68359,4.53125 -10.68359,11.289062 0,6.71875 4.10156,11.25 10.68359,11.25 z m 24.10937,-22.265625 h -4.08203 V 38.96875 h -5.85937 v 5.195312 h -3.00781 v 4.472657 h 3.00781 v 11.484375 c 0,4.003906 2.38281,6.191406 6.75781,6.191406 1.17188,0 2.48047,-0.136719 3.78906,-0.527344 l -0.83984,-4.394531 c -0.42969,0.117187 -1.40625,0.253906 -1.85547,0.253906 -1.42578,0 -1.99219,-0.644531 -1.99219,-2.03125 V 48.636719 h 4.08203 z m 12.6836,22.265625 c 6.5625,0 10.68359,-4.53125 10.68359,-11.25 0,-6.757812 -4.12109,-11.289062 -10.68359,-11.289062 -6.58203,0 -10.6836,4.53125 -10.6836,11.289062 0,6.71875 4.10157,11.25 10.6836,11.25 z m 0,-4.609375 c -3.125,0 -4.70703,-2.851562 -4.70703,-6.660156 0,-3.867187 1.58203,-6.660156 4.70703,-6.660156 3.125,0 4.72656,2.8125 4.72656,6.660156 0,3.808594 -1.60156,6.660156 -4.72656,6.660156 z M 204.74609,66 h 5.85938 V 53.578125 c 0,-2.714844 1.97265,-4.570313 4.66797,-4.570313 0.85937,0 2.01172,0.136719 2.53906,0.292969 v -5.234375 c -0.52734,-0.117187 -1.28906,-0.195312 -1.89453,-0.195312 -2.46094,0 -4.47266,1.40625 -5.27344,4.101562 h -0.23437 v -3.808594 h -5.66407 z m 15.63282,0 h 18.22265 v -4.726563 h -10.52734 v -0.15625 l 10.15625,-13.066406 v -3.886719 h -17.51953 v 4.726563 h 10.42968 v 0.15625 l -10.76171,13.398437 z"
+     id="text7"
+     style="font-weight:700;font-size:40px;font-family:Inter;letter-spacing:-0.5;fill:url(#word)"
+     aria-label="Wactorz" />
 </svg>

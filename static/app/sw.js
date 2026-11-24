@@ -29,7 +29,7 @@ const CACHE = "wactorz-v6";
 const PAGE = new Set(["", "index.html"]);
 
 /** The shell's own files beside the page, as paths under the scope. */
-const SHELL_FILES = new Set(["favicon.svg", "icon.ico", "icon.png", "site.webmanifest"]);
+const SHELL_FILES = new Set(["favicon.svg", "icon.ico", "icon.png", "icon-maskable.png", "site.webmanifest"]);
 
 /** Where the worker's scope begins: the dashboard may be served under a prefix. */
 function scopePath() {

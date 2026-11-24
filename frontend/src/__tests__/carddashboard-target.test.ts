@@ -64,6 +64,97 @@ afterEach(() => {
     cd?.destroy();
 });
 
+it("reads introductions once per batch of arrivals and never when switching to a stale agent", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async input => {
+        const path = String(input);
+        if (path.endsWith("/api/introductions")) {
+            return new Response(JSON.stringify({ weather: "I give local forecasts." }));
+        }
+        if (/\/api\/actors\/[^/]+$/.test(path)) {
+            return new Response(null, { status: 404 });
+        }
+        return new Response("[]");
+    });
+    try {
+        open([agent("main"), agent("weather", { node: "edge" }), agent("stale")]);
+        goTo("chat", "weather");
+        await vi.waitFor(() => expect(document.body.textContent).toContain("I give local forecasts."));
+
+        pick("stale");
+        expect(document.body.textContent).toContain("Send me a message to get started.");
+        store.removeAgent("stale");
+        await settled();
+        emit("af-agents-settled", { reason: "deleted" });
+        pick("weather");
+        expect(document.body.textContent).toContain("I give local forecasts.");
+
+        const paths = fetch.mock.calls.map(([input]) => String(input));
+        expect(paths.filter(path => path.endsWith("/api/introductions"))).toHaveLength(1);
+        expect(paths.filter(path => /\/api\/actors\/[^/]+$/.test(path))).toEqual([]);
+    } finally {
+        fetch.mockRestore();
+    }
+});
+
+it("refreshes introductions after a wipe or reconnect when the same agent remains", async () => {
+    let description = "Original introduction";
+    const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async input =>
+            String(input).endsWith("/api/introductions")
+                ? Response.json({ weather: description })
+                : Response.json([]),
+        );
+    const weather = agent("weather");
+    try {
+        open([weather]);
+        goTo("chat", weather.name);
+        await vi.waitFor(() => expect(document.body.textContent).toContain(description));
+
+        description = "Survived the reset";
+        emit("af-wipe-all", { survivors: [weather.id] });
+        store.clearAll();
+        store.addOrUpdateAgent(weather);
+        emit("af-agents-settled", { reason: "reset" });
+        await vi.waitFor(() => expect(document.body.textContent).toContain(description));
+
+        description = "Refreshed after reconnect";
+        emit("af-socket", { open: false });
+        emit("af-socket", { open: true });
+        await vi.waitFor(() => expect(document.body.textContent).toContain(description));
+        expect(fetch.mock.calls.filter(([url]) => String(url).endsWith("/api/introductions"))).toHaveLength(
+            3,
+        );
+    } finally {
+        fetch.mockRestore();
+    }
+});
+
+it("updates the open thread when its introduction becomes available", async () => {
+    const introductions: Record<string, string> = {};
+    const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async input =>
+            String(input).endsWith("/api/introductions") ? Response.json(introductions) : Response.json([]),
+        );
+    try {
+        open([agent("weather")]);
+        goTo("chat", "weather");
+        await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/introductions", expect.anything()));
+        expect(document.body.textContent).toContain("Send me a message to get started.");
+
+        introductions["weather"] = "I give local forecasts.";
+        emit("af-introductions-changed");
+        await vi.waitFor(() => expect(document.body.textContent).toContain("I give local forecasts."));
+        expect(paneTitle()).toBe("@weather");
+        expect(fetch.mock.calls.filter(([url]) => String(url).endsWith("/api/introductions"))).toHaveLength(
+            2,
+        );
+    } finally {
+        fetch.mockRestore();
+    }
+});
+
 describe("the chat-target dropdown never shows blank", () => {
     // If the target matches no option -- main absent, or an agent that cannot
     // be messaged -- the control would come up empty, so it shows a messageable

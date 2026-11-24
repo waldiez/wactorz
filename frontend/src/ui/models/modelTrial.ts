@@ -147,7 +147,11 @@ function body(host: TrialHost): HTMLElement {
         return el("p", "af-model-none", `Could not read the trial: ${host.error}`);
     }
     if (!host.trial) {
-        return el("p", "af-model-none", "Reading the trial…");
+        return el(
+            "p",
+            "af-model-none",
+            host.reading ? "Reading the trial…" : "This trial has ended or changed.",
+        );
     }
     if (!host.trial.pairs) {
         return el(

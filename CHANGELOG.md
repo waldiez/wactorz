@@ -34,6 +34,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Promoting or clearing a model trial while another page reads it no longer logs browser 404s.** Trial reads identify the trial shown on the page and return an empty result if it has ended or changed.
+
+- **Chat loads agent introductions together.** Switching threads after a server restart no longer makes requests for introductions from agents that have disappeared. Open threads update when their introduction becomes available. Failed or malformed responses preserve loaded text and retry with a bounded delay.
 - **`wactorz.serve(pipelines_=...)` and `wactorz.run` refuse something that is not a pipeline by saying so.** They raised an `AttributeError` about a missing `name`; they now raise `NotAPipelineError`, a `TypeError` naming what was given, as `agents=` does with `NotAnAgentError`.
 
 - **A deploy from a checkout stops, saying why, when the checkout's wheel cannot be built.** Deploying a node from a source tree builds a wheel of it to send. A build that failed made the deploy install the same version number from PyPI instead: other code, or none, sent with no word of it. A build that hung held the deploy for ever. The build now has a limit of 15 minutes, and a build that fails, runs past it, or makes no wheel of this version stops the deploy. The node's log says which, with pip's last lines when it failed, and the node keeps what it had.

@@ -33,7 +33,7 @@ function trial(name: string, pairs = 3): ShadowTrial {
 
 /** A model with a version on trial. */
 function onTrial(name: string): ModelDetail {
-    const shadow = { version: 2 } as NonNullable<ModelDetail["pointers"]["shadow"]>;
+    const shadow = { version: 2, moved_at: 123.5 } as NonNullable<ModelDetail["pointers"]["shadow"]>;
     return { ...detail(name), pointers: { shadow } };
 }
 
@@ -44,13 +44,29 @@ function server() {
         detail: vi.fn(async (name: string) => ok(detail(name))),
         moves: vi.fn(async (): Promise<Answer<PointerMove[]>> => ok([])),
         move: vi.fn(async (): Promise<Answer<null>> => ok(null)),
-        trial: vi.fn(async (name: string): Promise<Answer<ShadowTrial>> => ok(trial(name))),
+        trial: vi.fn(async (name: string): Promise<Answer<ShadowTrial | null>> => ok(trial(name))),
         trials: vi.fn(async (): Promise<Answer<PastTrial[]>> => ok([])),
         trialSeries: vi.fn(async (): Promise<Answer<TrialBucket[]>> => ok([])),
     };
 }
 
 describe("the catalogue", () => {
+    it("identifies its displayed trial and clears figures if that trial has ended", async () => {
+        const api = server();
+        api.detail.mockResolvedValue(ok(onTrial("hvac")));
+        const catalog = new ModelCatalog(api);
+        await catalog.open("hvac");
+        expect(api.trial).toHaveBeenCalledWith("hvac", 123.5);
+        expect(api.trialSeries).toHaveBeenCalledWith("hvac", 123.5);
+        api.trial.mockResolvedValueOnce(ok(null));
+        await catalog.refreshTrial();
+        expect(catalog.state).toMatchObject({
+            trial: null,
+            trialSeries: [],
+            trialError: "",
+            trialReading: false,
+        });
+    });
     it("reads the list, then a model and its moves when one is opened", async () => {
         const api = server();
         const catalog = new ModelCatalog(api);

@@ -73,19 +73,21 @@ export class ModelsApi {
         return got.ok ? { ok: true, value: got.value.moves ?? [] } : got;
     }
 
-    /** What `name`'s trial under way shows so far. */
-    trial(name: string): Promise<Answer<ShadowTrial>> {
-        return requestJson<ShadowTrial>(
-            `${this.apiBase}/api/models/${encodeURIComponent(name)}/trial`,
+    /** What the trial shows; null when the trial identified by `startedAt` has ended or changed. */
+    trial(name: string, startedAt?: number): Promise<Answer<ShadowTrial | null>> {
+        const query = startedAt === undefined ? "" : `?started_at=${startedAt}`;
+        return requestJson<ShadowTrial | null>(
+            `${this.apiBase}/api/models/${encodeURIComponent(name)}/trial${query}`,
             {},
             TRIAL_TIMEOUT_MS,
         );
     }
 
-    /** `name`'s trial under way over time, oldest first. */
-    async trialSeries(name: string): Promise<Answer<TrialBucket[]>> {
+    /** The identified trial over time, oldest first; empty once it has ended or changed. */
+    async trialSeries(name: string, startedAt?: number): Promise<Answer<TrialBucket[]>> {
+        const query = startedAt === undefined ? "" : `?started_at=${startedAt}`;
         const got = await requestJson<{ buckets?: TrialBucket[] }>(
-            `${this.apiBase}/api/models/${encodeURIComponent(name)}/trial/series`,
+            `${this.apiBase}/api/models/${encodeURIComponent(name)}/trial/series${query}`,
             {},
             TRIAL_TIMEOUT_MS,
         );

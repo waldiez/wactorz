@@ -234,10 +234,11 @@ class _Window:
     until: float
 
 
-async def _trial_window(request: web.Request) -> _Window | web.Response:
+async def _trial_window(request: web.Request) -> _Window | web.Response | None:
     """The window asked for: the trial's own, from when ``shadow`` was set to now,
     unless ``since`` and ``until`` (Unix seconds) say otherwise; with no shadow set
-    and no window given there is no trial to show.
+    and no window given there is no trial to show. ``started_at`` identifies the
+    trial a dashboard is showing; None says it has ended or been replaced.
     """
     name = _name(request)
     if isinstance(name, web.Response):
@@ -249,8 +250,15 @@ async def _trial_window(request: web.Request) -> _Window | web.Response:
         return _refusal(exc)
     since = _moment(request.query.get("since"))
     until = _moment(request.query.get("until"))
-    if since is False or until is False:
-        return web.json_response({"error": "'since' and 'until' are Unix seconds"}, status=400)
+    started_at = _moment(request.query.get("started_at"))
+    if since is False or until is False or started_at is False:
+        return web.json_response(
+            {"error": "'since', 'until' and 'started_at' are Unix seconds"}, status=400
+        )
+    # A dashboard's model snapshot can outlive the trial it names. An empty
+    # answer keeps an ended or replaced trial from becoming another trial's figures.
+    if started_at is not None and (shadow is None or shadow.moved_at != started_at):
+        return None
     if since is None:
         if shadow is None:
             return web.json_response(
@@ -287,6 +295,8 @@ async def trial_handler(request: web.Request) -> web.Response:
     against, over the declaration's or each input's own.
     """
     window = await _trial_window(request)
+    if window is None:
+        return web.json_response(None)
     if isinstance(window, web.Response):
         return window
     rows = await _pairs(window)
@@ -371,6 +381,8 @@ async def trial_series_handler(request: web.Request) -> web.Response:
             {"error": f"'points' is a count from 1 to {MAX_SERIES_POINTS}"}, status=400
         )
     window = await _trial_window(request)
+    if window is None:
+        return web.json_response({"name": _name(request), "buckets": []})
     if isinstance(window, web.Response):
         return window
     rows = await _pairs(window)

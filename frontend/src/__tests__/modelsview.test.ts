@@ -251,13 +251,14 @@ describe("the Models view", () => {
     ) {
         const reads = server();
         return vi.fn(async (url: string, init?: RequestInit) => {
-            if (url.endsWith("/trial")) {
+            const path = new URL(url, "http://localhost").pathname;
+            if (path.endsWith("/trial")) {
                 return trial();
             }
-            if (url.endsWith("/trials")) {
+            if (path.endsWith("/trials")) {
                 return past();
             }
-            if (url.endsWith("/trial/series")) {
+            if (path.endsWith("/trial/series")) {
                 return overTime();
             }
             return reads(url, init);
@@ -289,6 +290,12 @@ describe("the Models view", () => {
         expect(text).toContain("4.1 → 4.6");
         // No output carried a score, so no line says the scores were equal.
         expect(text).not.toContain("Mean score");
+    });
+
+    it("says when the trial ended while its figures were being requested", async () => {
+        await open("#/models/hvac", onTrial(() => Response.json(null)) as never);
+        await vi.waitFor(() => expect(trialCard().textContent).toContain("This trial has ended or changed."));
+        expect(trialCard().textContent).not.toContain("Reading the trial");
     });
 
     const bucket = (ts: number, score: number | null, ms: number | null) => ({
@@ -471,7 +478,10 @@ describe("the Models view", () => {
         const answering = onTrial(() => Response.json({ ...FIGURES, pairs }));
         await open("#/models/hvac", answering as never);
         await vi.waitFor(() => expect(trialCard().textContent).toContain("on 10 inputs"));
-        const reads = () => answering.mock.calls.filter(([url]) => url.endsWith("/trial")).length;
+        const reads = () =>
+            answering.mock.calls.filter(([url]) =>
+                new URL(url, "http://localhost").pathname.endsWith("/trial"),
+            ).length;
         const before = reads();
 
         pairs = 20;

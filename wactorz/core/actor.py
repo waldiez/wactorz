@@ -50,6 +50,7 @@ from .questions import (
     questions_in,
     questions_topic,
 )
+from .spawn_introduction import mark_introductions_changed
 from .state_versions import Upgrade, declared_version, upgraded
 from .subscriptions import SubscriptionHub, is_durable_actor
 from .task_text import TaskEnvelope
@@ -2471,7 +2472,10 @@ class Actor(ABC):
         if self._artifacts and "models" not in manifest:
             # The models it serves, by name: which version stands where is the store's to say.
             manifest = {**manifest, "models": models.served_models(self._artifacts)}
+        previous = self._published_manifest or {}
         self._published_manifest = manifest
+        if previous.get("description") != manifest.get("description"):
+            mark_introductions_changed()
         await self._mqtt_publish(agent_topic(self.actor_id, "manifest"), manifest, retain=True)
 
     async def withdraw_manifest(self) -> None:

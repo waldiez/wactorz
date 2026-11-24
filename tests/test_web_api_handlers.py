@@ -16,18 +16,21 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.agents.catalog_agent import CatalogAgent
+from wactorz.agents.main import MainActor
 from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.identity import derive_actor_id
 from wactorz.core.outbound import numbered
 from wactorz.core.persistence import PickleStore, WactorzDB
 from wactorz.core.persistence.stores import install_stores
-from wactorz.web import api_actors, chat, cost, lifecycle, questions, runtime, ws
+from wactorz.core.registry import ActorRegistry
+from wactorz.web import api_actors, chat, cost, events, lifecycle, questions, runtime, ws
 from wactorz.web.app import build_app
 from wactorz.web.lifecycle import Dispatched
 
@@ -560,6 +563,7 @@ class TestReads:
         assert listed == one
         assert (listed["name"], listed["costUsd"]) == ("cam", 1.0)
         assert (await client.get("/api/actors/zz")).status == 404
+        assert await (await client.get("/api/introductions")).json() == {}
 
     async def test_a_deleted_actor_is_left_out_of_the_list(
         self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
@@ -574,7 +578,7 @@ class TestReads:
         assert [a["name"] for a in listed] == ["weather"]
         assert listed[0]["messagesProcessed"] == 5
 
-    async def test_actor_details_supply_an_introduction_without_chat_history(
+    async def test_introductions_cover_saved_agents_and_live_manifests(
         self,
         client: TestClient[web.Request, web.Application],
         monkeypatch: pytest.MonkeyPatch,
@@ -594,24 +598,95 @@ class TestReads:
             "description": "I suggest article titles.",
             "examples": ["Suggest a title for a garden article."],
         }
-        saved = SpawnRegistry.from_ids({agent["actor_id"]: agent for agent in (weather, helper)})
-        main = SimpleNamespace(_get_spawn_registry=lambda: saved)
-        monkeypatch.setattr(api_actors, "find_main_actor", lambda _: main)
-        monkeypatch.setattr(
-            runtime, "registry", SimpleNamespace(get=lambda _: None, find_by_name=lambda _: catalog)
+        deleted = {
+            "actor_id": derive_actor_id("deleted"),
+            "name": "deleted",
+            "description": "A deleted agent.",
+        }
+        saved = SpawnRegistry.from_ids(
+            {agent["actor_id"]: agent for agent in (weather, helper, deleted)}
         )
+        main = SimpleNamespace(_get_spawn_registry=Mock(return_value=saved))
+        monkeypatch.setattr(api_actors, "find_main_actor", lambda _: main)
+        live = SimpleNamespace(
+            actor_id="live",
+            name="live",
+            _published_manifest={"description": "I report from a live manifest."},
+        )
+        silent = SimpleNamespace(actor_id="silent")
+        actors = {actor.actor_id: actor for actor in (live, silent)}
+        monkeypatch.setattr(
+            runtime,
+            "registry",
+            SimpleNamespace(
+                get=actors.get, all_actors=actors.values, find_by_name=lambda _: catalog
+            ),
+        )
+        runtime.mark_deleted(deleted["actor_id"])
+        reply = await client.get("/api/introductions")
+        assert reply.status == 200
+        introductions = await reply.json()
+        main._get_spawn_registry.assert_called_once_with()
+
+        live_details = await client.get("/api/actors/live")
+        assert live_details.status == 200
+        live_payload = await live_details.json()
+        assert live_payload["state"] == events.STARTING
+        assert live_payload["introduction"] == introductions["live"]
+        assert "live" not in runtime.state["agents"]
+
         for agent in (weather, helper):
             runtime.state["agents"][agent["actor_id"]] = {"name": agent["name"], "state": "running"}
-
         weather_details = await (await client.get(f"/api/actors/{weather['actor_id']}")).json()
         helper_details = await (await client.get(f"/api/actors/{helper['actor_id']}")).json()
 
+        assert introductions == {
+            weather["actor_id"]: weather_details["introduction"],
+            helper["actor_id"]: helper_details["introduction"],
+            "live": "I report from a live manifest.",
+        }
         assert "Open-Meteo" in weather_details["introduction"]
         assert "What's the weather in Athens?" in weather_details["introduction"]
         assert (
             helper_details["introduction"]
             == "I suggest article titles.\n\nTry:\n- Suggest a title for a garden article."
         )
+
+    async def test_introduction_revision_follows_saved_config_and_manifest_changes(
+        self,
+        client: TestClient[web.Request, web.Application],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        registry = ActorRegistry()
+        main = MainActor(persistence_dir=str(tmp_path))
+        await registry.register(main)
+        monkeypatch.setattr(runtime, "registry", registry)
+        monkeypatch.setattr(main, "_mqtt_publish", AsyncMock())
+        helper_id = derive_actor_id("title-helper")
+        runtime.state["agents"][helper_id] = {
+            "agent_id": helper_id,
+            "name": "title-helper",
+            "state": "running",
+        }
+        before = events.snapshot()["introductions_revision"]
+        assert await (await client.get("/api/introductions")).json() == {}
+
+        main._save_to_spawn_registry({"name": "title-helper", "description": "I suggest titles."})
+        saved = events.snapshot(include_totals=False)["introductions_revision"]
+        assert saved > before
+        assert await (await client.get("/api/introductions")).json() == {
+            helper_id: "I suggest titles."
+        }
+
+        await main._send_manifest({"description": "I coordinate agents."})
+        published = events.snapshot()["introductions_revision"]
+        assert published > saved
+        assert (await (await client.get("/api/introductions")).json())[main.actor_id] == (
+            "I coordinate agents."
+        )
+        await main._send_manifest({"description": "I coordinate agents.", "publishes": ["ticks"]})
+        assert events.snapshot(include_totals=False)["introductions_revision"] == published
 
     async def test_history_from_the_actor_the_database_or_nowhere(
         self,

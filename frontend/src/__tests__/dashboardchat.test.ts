@@ -384,16 +384,20 @@ describe("DashboardChat — view construction", () => {
         const weather = agent("weather-agent");
         host.agents.set(weather.id, weather);
         const chat = mount(host);
-        const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async input => {
-            const path = String(input);
-            const value = path.endsWith("/api/actors/weather-agent")
-                ? { introduction: "I give local forecasts.\n\nTry asking about Athens." }
-                : [{ id: 1, ts: 1, role: "assistant", content: "Some conversation history" }];
-            return new Response(JSON.stringify(value));
-        });
+        const fetch = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(
+                async () =>
+                    new Response(
+                        JSON.stringify([
+                            { id: 1, ts: 1, role: "assistant", content: "Some conversation history" },
+                        ]),
+                    ),
+            );
         try {
             chat.setTarget(weather.id);
             await drained();
+            chat.setIntroductions({ [weather.id]: "I give local forecasts.\n\nTry asking about Athens." });
             const conversation = thread(host);
             expect(conversation.firstElementChild?.textContent).toContain("I give local forecasts.");
             expect(conversation.textContent).toContain("Some conversation history");

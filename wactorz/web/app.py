@@ -163,6 +163,7 @@ def build_app() -> web.Application:
 
     # Actor collection
     app.router.add_get("/api/actors", api_actors.actors_handler)
+    app.router.add_get("/api/introductions", api_actors.introductions_handler)
     app.router.add_get("/actors", api_actors.actors_handler)
 
     # Actor control — sub-routes must be registered before /{actor_id} catch-all

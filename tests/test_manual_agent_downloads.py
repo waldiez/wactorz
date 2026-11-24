@@ -39,7 +39,7 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from tests.programs import program_namespace
 
@@ -384,7 +384,12 @@ def _certificate(
     issuer: x509.Certificate | None = None,
     issuer_key: ec.EllipticCurvePrivateKey | None = None,
 ) -> x509.Certificate:
-    """A certificate for ``subject``: a CA's own without ``issuer``, else a server's it signs."""
+    """A certificate for ``subject``: a CA's own without ``issuer``, else a server's it signs.
+
+    Each carries the extensions a real one does. Python 3.13 and later verify
+    with ``VERIFY_X509_STRICT``, which refuses a certificate without them --
+    a missing authority key identifier first -- before any name is compared.
+    """
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, subject)])
     now = datetime.datetime.now(datetime.UTC)
     builder = (
@@ -395,12 +400,40 @@ def _certificate(
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - datetime.timedelta(minutes=5))
         .not_valid_after(now + datetime.timedelta(hours=1))
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), False)
+    )
+    signer = issuer_key or key
+    builder = builder.add_extension(
+        x509.AuthorityKeyIdentifier.from_issuer_public_key(signer.public_key()), False
     )
     if issuer is None:
-        builder = builder.add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
-    else:
-        builder = builder.add_extension(x509.SubjectAlternativeName([x509.DNSName(subject)]), False)
-    return builder.sign(issuer_key or key, hashes.SHA256())
+        return (
+            builder.add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
+            .add_extension(_key_usage(signs_certificates=True), True)
+            .sign(signer, hashes.SHA256())
+        )
+    return (
+        builder.add_extension(x509.SubjectAlternativeName([x509.DNSName(subject)]), False)
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), True)
+        .add_extension(_key_usage(signs_certificates=False), True)
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), False)
+        .sign(signer, hashes.SHA256())
+    )
+
+
+def _key_usage(*, signs_certificates: bool) -> x509.KeyUsage:
+    """What a CA's key (signing certificates) or a server's (signing its handshake) is for."""
+    return x509.KeyUsage(
+        digital_signature=not signs_certificates,
+        content_commitment=False,
+        key_encipherment=False,
+        data_encipherment=False,
+        key_agreement=False,
+        key_cert_sign=signs_certificates,
+        crl_sign=signs_certificates,
+        encipher_only=False,
+        decipher_only=False,
+    )
 
 
 def _tls(tmp_path: Path, server_name: str) -> tuple[ssl.SSLContext, Path]:

@@ -1220,7 +1220,9 @@ restored from the spawn registry after a restart. A spawn config may also name
 it by path, <code>{"type": "module", "target": "mypkg.agents:detect", "name":
 "imu-left", "options": {...}}</code>, which is how one function runs under several
 names — but only a registered target is accepted, because a spawn config can be
-model-authored.</p>
+model-authored. For the same reason its <code>options</code> may not name <code>name</code>,
+<code>actor_id</code>, <code>persistence_dir</code> or <code>llm_provider</code>: those are the system's to
+choose, and a spawn whose options name one is refused, saying which.</p>
 <h3 id="profiles">Profiles</h3>
 <p>Without Home Assistant configured (<code>HA_URL</code> and <code>HA_TOKEN</code>) the Home Assistant
 agents do not start; <code>WACTORZ_HA_AGENTS=on|off</code> decides outright.

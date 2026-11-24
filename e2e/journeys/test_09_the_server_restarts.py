@@ -7,6 +7,7 @@ tab left open across it.
 
 from harness import backend, browser, guard, waiting
 from harness.browser import Said
+from harness.probe import NODE_POLL_S
 from harness.run import NODE_NAME
 
 
@@ -37,6 +38,19 @@ def test_what_was_running_is_running_again(
         lambda: not dashboard.at_sign_in and dashboard.connection() == "● live",
         what="the page to be fed again",
         timeout=60.0,
+    )
+    # Agent traffic can resume before the node reports itself to the new
+    # process. Its heartbeat makes it online for operations such as reset.
+    waiting.until(
+        lambda: any(
+            entry.get("node") == NODE_NAME
+            and entry.get("online") is True
+            and "counter" in (entry.get("agents") or [])
+            for entry in app.rest.nodes()
+        ),
+        what="the node to report its agents to the restarted server",
+        timeout=60.0,
+        interval=NODE_POLL_S,
     )
 
 

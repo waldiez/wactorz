@@ -52,7 +52,7 @@ dependencies = [
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.86.0"]
 openai    = ["openai>=2.29.0"]
-google    = ["google-genai>=1.0.0"]
+google    = ["google-genai>=1.7.0"]
 discord   = ["discord.py>=2.7.1"]
 telegram  = ["python-telegram-bot>=21.0"]
 whatsapp  = ["twilio>=9.10.4"]
@@ -140,7 +140,7 @@ dev       = [
 # suite - and with no dependency lock in this project, nothing else would catch
 # that. Same reasoning as the `docs` extra above pins markdown and pygments: the
 # dependency decides the thing being compared.
-e2e       = ["playwright==1.64.1"]
+e2e       = ["playwright==1.65.0"]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`
 all = [
@@ -411,7 +411,7 @@ ignore = [
 # `log_setup` is the strongest case — it reports to stderr that file logging
 # could not be opened, which is the one message a logger cannot carry.
 "wactorz/app.py" = ["T201"]                          # the startup banner
-"wactorz/cli.py" = ["T201"]                          # warns a secret is in argv, before logging exists
+"wactorz/arguments.py" = ["T201"]                    # warns a secret is in argv, before logging exists
 "wactorz/evalharness.py" = ["T201"]                  # prints the results table
 "wactorz/interfaces/chat/cli.py" = ["T201"]          # a terminal chat UI
 "wactorz/interfaces/google_login.py" = ["T201"]      # interactive consent flow
@@ -462,5 +462,5 @@ exclude_also = [
     "class .*\\bProtocol\\b.*\\):",  # structural types: no runtime behaviour to cover
 ]
 # A ratchet: raise when coverage rises, never lower to pass a branch.
-fail_under = 92
+fail_under = 93
 precision = 2

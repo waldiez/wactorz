@@ -193,8 +193,8 @@ with every hosted provider, or you can use its provider-specific variable.
 | Provider | `LLM_PROVIDER` | Example model | Provider-specific key |
 |---|---|---|---|
 | Anthropic | `anthropic` | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` |
-| OpenAI | `openai` | `gpt-4o` | `OPENAI_API_KEY` |
-| Google Gemini | `gemini` | `gemini-2.5-flash` | `GEMINI_API_KEY` |
+| OpenAI | `openai` | `gpt-5.4-mini` | `OPENAI_API_KEY` |
+| Google Gemini | `gemini` | `gemini-3.5-flash-lite` | `GEMINI_API_KEY` |
 | NVIDIA NIM | `nim` | `meta/llama-3.3-70b-instruct` | `NIM_API_KEY` |
 | Ollama | `ollama` | `llama3` | No key; configure `OLLAMA_URL` |
 

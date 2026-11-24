@@ -6,6 +6,7 @@ not the system Python.
 
 import asyncio
 import contextlib
+import functools
 import importlib
 import ipaddress
 import logging
@@ -218,6 +219,68 @@ class BrokerUnreachableFromNodeError(RuntimeError):
             f"({deploy_env_prefix(node_name)}_BROKER), and that a firewall on the broker's "
             f"host allows inbound {port} from the node."
         )
+
+
+#: How long building this checkout's wheel for a node may take, in seconds. Generous
+#: on purpose: the build fetches its build backend, which on a slow link or a small
+#: board takes minutes. The limit is there to end a build that has hung.
+WHEEL_BUILD_TIMEOUT_S = 900.0
+
+#: How much of what pip said a failed build's message carries.
+_PIP_SAID_LINES = 5
+
+
+class WheelNotBuiltError(RuntimeError):
+    """A checkout's wheel for a node could not be built, so the deploy stops.
+
+    The deploy does not fall back to PyPI: at this version number PyPI has other
+    code, or none, and the point of deploying a checkout is its own code.
+    """
+
+    @classmethod
+    def ran_out(cls, limit_s: float) -> "WheelNotBuiltError":
+        """The error for a build stopped after running for ``limit_s`` seconds."""
+        return cls(
+            f"Building this checkout's wheel ran for more than {round(limit_s / 60)} minutes and "
+            "was stopped. Nothing was installed; the node keeps what it had."
+        )
+
+    @classmethod
+    def failed(cls, returncode: int, said: str) -> "WheelNotBuiltError":
+        """The error for a `pip wheel` that exited with ``returncode``, having said ``said``."""
+        shown = f" pip said: {said}" if said else ""
+        return cls(
+            f"Building this checkout's wheel failed (pip exited with {returncode}). Nothing was "
+            f"installed; the node keeps what it had.{shown}"
+        )
+
+    @classmethod
+    def not_found(cls, out_dir: Path) -> "WheelNotBuiltError":
+        """The error for a build that succeeded with no wheel of this version in ``out_dir``."""
+        return cls(
+            f"pip built no wheel of wactorz {__version__} in {out_dir}. Nothing was installed; "
+            "the node keeps what it had."
+        )
+
+
+def _last_lines(text: str, count: int = _PIP_SAID_LINES) -> str:
+    """The last ``count`` non-blank lines of ``text``, joined by " / " for a log line."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return " / ".join(lines[-count:])
+
+
+def _pip_wheel(root: Path, out_dir: Path, timeout_s: float) -> subprocess.CompletedProcess[str]:
+    """Run `pip wheel` on the source tree at ``root``, into ``out_dir``, for ``timeout_s`` at most.
+
+    Raises `subprocess.TimeoutExpired` when it runs out, having stopped pip.
+    """
+    return subprocess.run(  # noqa: S603  # a literal argv naming this interpreter
+        [sys.executable, "-m", "pip", "wheel", str(root), "--no-deps", "-w", str(out_dir)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout_s,
+    )
 
 
 class BrokerRefusedNodeAccountError(RuntimeError):
@@ -1327,7 +1390,11 @@ class InstallerAgent(Actor):
         # that matters is here, not on PyPI -- and at the same version number
         # pip would find the node already satisfied and change nothing, so a
         # deploy of edited code silently shipped the previous one.
-        wheel = await self._build_wheel()
+        try:
+            wheel = await self._build_wheel()
+        except WheelNotBuiltError as exc:
+            self._log_remote(f"[{node_name}] {exc}")
+            return False
         if wheel is not None:
             return await self._install_wheel(conn, node_name, home, pip, wheel, "this checkout")
         wheel = await self._installed_wheel()
@@ -1432,26 +1499,28 @@ class InstallerAgent(Actor):
         """Build a wheel of this checkout, or None when there is no checkout.
 
         Off the event loop: a build takes seconds to minutes, and every actor in
-        this process shares the loop it would otherwise hold.
+        this process shares the loop it would otherwise hold. Raises
+        `WheelNotBuiltError` when there is a checkout and no wheel of it comes out,
+        within `WHEEL_BUILD_TIMEOUT_S`.
         """
         root = Path(__file__).resolve().parent.parent.parent
         if not (root / "pyproject.toml").exists():
             return None
         out_dir = root / "dist"
-
-        def _build() -> int:
-            return subprocess.run(  # noqa: S603  # a literal argv naming this interpreter
-                [sys.executable, "-m", "pip", "wheel", str(root), "--no-deps", "-w", str(out_dir)],
-                capture_output=True,
-                check=False,
-            ).returncode
-
-        if await asyncio.to_thread(_build) != 0:
-            return None
-        built = sorted(
+        try:
+            built = await asyncio.to_thread(_pip_wheel, root, out_dir, WHEEL_BUILD_TIMEOUT_S)
+        except subprocess.TimeoutExpired as exc:
+            raise WheelNotBuiltError.ran_out(WHEEL_BUILD_TIMEOUT_S) from exc
+        if built.returncode != 0:
+            raise WheelNotBuiltError.failed(
+                built.returncode, _last_lines(built.stderr or built.stdout)
+            )
+        wheels = sorted(
             out_dir.glob(f"wactorz-{__version__}-*.whl"), key=lambda p: p.stat().st_mtime
         )
-        return built[-1] if built else None
+        if not wheels:
+            raise WheelNotBuiltError.not_found(out_dir)
+        return wheels[-1]
 
     def _log_remote(self, message: str) -> None:
         logger.info("[%s] %s", self.name, message)
@@ -1730,10 +1799,8 @@ class InstallerAgent(Actor):
                     # a deploy that failed must not leave it exempt for ever.
                     self._unmark_redeploying(node_name)
                 if heartbeat_error:
-                    tail = await self._node_log_tail(conn, rung, node_name)
-                    msg = f"[{node_name}] {heartbeat_error}"
-                    if tail:
-                        msg += f"\nThe node's log ends with:\n{tail}"
+                    tail = await self._node_log_tail(conn, rung, node_name, user)
+                    msg = f"[{node_name}] {heartbeat_error}\n{tail}"
                     self._log_remote(msg)
                     return {
                         "success": False,
@@ -1859,15 +1926,14 @@ class InstallerAgent(Actor):
             f"retrying; the reason is in its log."
         )
 
-    async def _node_log_tail(self, conn: Any, rung: Any, node_name: str) -> str:
-        """The last lines the node logged, for a deploy that failed."""
-        if rung is node_service.NOHUP:
-            command = f"tail -n 12 ~/wactorz/{shlex.quote(node_name + '.log')} 2>/dev/null"
-        else:
-            journal = "journalctl --user" if rung is node_service.USER else "journalctl"
-            command = f"{journal} -u {node_service.UNIT_NAME} -n 12 --no-pager -o cat 2>/dev/null"
-        _, output = await self._ssh_run(conn, command)
-        return output.strip()[:1500]
+    async def _node_log_tail(
+        self, conn: Any, rung: node_service.Rung, node_name: str, user: str
+    ) -> str:
+        """For a deploy that failed: the last lines the node logged, or why there are none."""
+        run_on_node = functools.partial(self._ssh_run, conn)
+        tail = await node_service.log_tail(run_on_node, rung, node_name=node_name, user=user)
+        lines = tail.lines.strip()[:1500]
+        return f"The node's log ends with:\n{lines}" if lines else tail.why_empty
 
     @staticmethod
     def _nohup_launch(node_name: str, broker: Any, mqtt_port: Any) -> str:

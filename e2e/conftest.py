@@ -13,8 +13,11 @@ A run that passes removes its directory under ``e2e/out``. One that fails keeps
 it: the backend's console, the broker's, and a browser trace.
 """
 
+import asyncio
+import contextlib
 import shutil
 import sys
+import warnings
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -101,16 +104,45 @@ def app_fixture(run: runs.Run) -> Iterator[backend.Backend]:
         broker.down(run)
 
 
+@contextlib.contextmanager
+def _loop_that_can_start_processes() -> Iterator[None]:
+    """On Windows, make the next new event loop a proactor loop, then put the policy back.
+
+    Importing `wactorz` (the journeys do) sets a selector-loop policy for the
+    whole process, as the application needs. A selector loop on Windows cannot
+    start subprocesses, and Playwright makes its loop from the policy and then
+    starts its driver as one. Its loop is made once, on entering, and kept.
+    """
+    if sys.platform != "win32":
+        yield
+        return
+    with warnings.catch_warnings():
+        # Loop policies are deprecated from Python 3.14; `_bootstrap` uses them too.
+        warnings.simplefilter("ignore", DeprecationWarning)
+        before = asyncio.get_event_loop_policy()
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    try:
+        yield
+    finally:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            asyncio.set_event_loop_policy(before)
+
+
 @pytest.fixture(scope="session", name="chromium")
 def chromium_fixture() -> Iterator[object]:
     from playwright.sync_api import sync_playwright  # the optional extra
 
-    with sync_playwright() as playwright:
+    with _loop_that_can_start_processes():
+        playwright = sync_playwright().start()
+    try:
         chromium = playwright.chromium.launch()
         try:
             yield chromium
         finally:
             chromium.close()
+    finally:
+        playwright.stop()
 
 
 @pytest.fixture(scope="session", name="dashboard")

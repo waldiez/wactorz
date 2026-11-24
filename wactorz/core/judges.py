@@ -491,11 +491,23 @@ def judge_classifier(
 # ── The regressor ─────────────────────────────────────────────────────────────
 
 
-def _regressor_side(pairs: Sequence[tuple[float, float | None]]) -> dict[str, Any]:
-    errors = [said - truth for truth, said in pairs if said is not None]
+def _regressor_side(
+    pairs: Sequence[tuple[float, float | None]], both: Sequence[bool]
+) -> dict[str, Any]:
+    """One side's errors, over the inputs both sides answered; ``both`` marks those.
+
+    Over the shared inputs rather than each side's own: a side that leaves the
+    hard inputs unanswered would otherwise be measured on the easy ones alone
+    and look the better for it. What a side left unanswered is its `no_answer`.
+    """
+    errors = [
+        said - truth
+        for (truth, said), shared in zip(pairs, both, strict=True)
+        if shared and said is not None
+    ]
     return {
         "judged": len(errors),
-        "no_answer": len(pairs) - len(errors),
+        "no_answer": sum(said is None for _, said in pairs),
         "mae": statistics.fmean(abs(e) for e in errors) if errors else None,
         "rmse": math.sqrt(statistics.fmean(e * e for e in errors)) if errors else None,
         "bias": statistics.fmean(errors) if errors else None,
@@ -534,6 +546,10 @@ def judge_regressor(
         side: [(truth, number_of(answer_of(row, side, judgement))) for row, truth in truths]
         for side in SIDES
     }
+    both = [
+        active is not None and shadow is not None
+        for (_, active), (_, shadow) in zip(said["active"], said["shadow"], strict=True)
+    ]
     closer: dict[str, int] = dict.fromkeys(SIDES, 0)
     for (truth, active), (_, shadow) in zip(said["active"], said["shadow"], strict=True):
         nearer = _closer(active, shadow, truth)
@@ -545,7 +561,7 @@ def judge_regressor(
         "not_numbers": not_numbers,
         "unlabelled": unlabelled,
         "sources": sorted({source_of(row, judgement) for row, _ in truths}) if truths else [],
-        **{side: _regressor_side(said[side]) for side in SIDES},
+        **{side: _regressor_side(said[side], both) for side in SIDES},
         "closer": {
             "active": closer["active"],
             "shadow": closer["shadow"],

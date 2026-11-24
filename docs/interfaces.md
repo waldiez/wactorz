@@ -194,7 +194,7 @@ Runs Wactorz as a Discord bot. The bot replies when mentioned in a channel it ha
 Discord is a **restricted** channel: conversation, Home Assistant queries and everyday device control work, but spawning agents, deleting agents, running code, pipelines and admin slash commands do not. Use the dashboard for those.
 
 ```bash
-wactorz --interface discord --discord-token $DISCORD_BOT_TOKEN
+wactorz --interface discord   # the token is DISCORD_BOT_TOKEN, in .env or the environment
 ```
 
 #### Setup
@@ -272,7 +272,7 @@ Runs Wactorz as a Telegram bot using the Bot API in long-polling mode — no pub
 Telegram is a **restricted** channel: conversation, Home Assistant queries and everyday device control only — no spawning, deleting, code, pipelines or admin commands.
 
 ```bash
-wactorz --interface telegram --telegram-token $TELEGRAM_BOT_TOKEN
+wactorz --interface telegram  # the token is TELEGRAM_BOT_TOKEN, in .env or the environment
 ```
 
 #### Setup

@@ -1,9 +1,62 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Exceptions a program embedding Wactorz can catch.
+"""Exceptions a program embedding Wactorz can catch, in one place.
 
-Stdlib-only, so it can be imported from anywhere in the package without
-pulling the application in.
+Each is defined beside the code that raises it and named here as well, so a
+library user imports from ``wactorz.errors`` rather than from wherever the
+raise happens to live. Most subclass the built-in a caller would catch
+(`LookupError` for something not there, `TimeoutError` for a wait that ran
+out, `ValueError` for input that cannot be taken, `TypeError` for an object of
+the wrong kind), so code that catches those keeps working; `ModelError`
+belongs to the artifact store's own `ArtifactError`. The library guide's
+*What to catch* says which call raises which, and a test holds the two to
+each other.
+
+`StartupError` and `NoSystemError` are defined here. The modules named below
+must not import :mod:`wactorz.app` or :mod:`wactorz.orchestration`, which
+import this module for `StartupError`.
 """
+
+from .agents.rule_agent import RuleError
+from .core.actor import (
+    AskError,
+    NoAnswerError,
+    NotBytesError,
+    NotCallableError,
+    NotFoundError,
+    ReplyError,
+    UnnamedModelError,
+)
+from .core.artifacts import ArtifactError
+from .core.integrations.ag2 import AG2Error
+from .core.labels import LabelError
+from .core.models import ModelError
+from .core.outbound import OptionsError, UnknownChannelError
+from .core.subscriptions import ConcurrencyError
+from .pipelines import NotAPipelineError, PipelineError
+from .plugins import NotAnAgentError
+
+__all__ = [
+    "AG2Error",
+    "ArtifactError",
+    "AskError",
+    "ConcurrencyError",
+    "LabelError",
+    "ModelError",
+    "NoAnswerError",
+    "NoSystemError",
+    "NotAPipelineError",
+    "NotAnAgentError",
+    "NotBytesError",
+    "NotCallableError",
+    "NotFoundError",
+    "OptionsError",
+    "PipelineError",
+    "ReplyError",
+    "RuleError",
+    "StartupError",
+    "UnknownChannelError",
+    "UnnamedModelError",
+]
 
 
 class StartupError(RuntimeError):

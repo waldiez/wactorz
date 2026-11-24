@@ -568,7 +568,7 @@ Base class for all LLM-backed agents. Manages conversation history, rolling summ
 | `OpenAIProvider` | `--llm openai` | `OPENAI_API_KEY` | Any OpenAI-compatible endpoint. |
 | `OllamaProvider` | `--llm ollama --ollama-model llama3` | — | Local. No cost tracking. |
 | `NIMProvider` | `--llm nim --nim-model meta/llama-3.3-70b-instruct` | `NIM_API_KEY` | NVIDIA NIM. Free tier: 1000 req/month per model. |
-| `GeminiProvider` | `--llm gemini --gemini-model gemini-2.5-flash` | `GEMINI_API_KEY` | Google Gemini via `google-generativeai` SDK. Free tier available. |
+| `GeminiProvider` | `--llm gemini --gemini-model gemini-3.5-flash-lite` | `GEMINI_API_KEY` | Google Gemini via the `google-genai` SDK. Free tier available. |
 
 All providers receive the same `complete(messages, system)` and `stream(messages, system)` calls. Ollama sends the system prompt as the first `{"role": "system"}` message in the native `/api/chat` payload, so local models receive the same persona/instructions as hosted providers.
 

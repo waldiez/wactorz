@@ -280,6 +280,15 @@ without an API key, a broker certificate that cannot be loaded, a chat interface
 whose token is missing. The `wactorz` command logs it and exits with status 1;
 a host program catches it.
 
+### `wactorz.errors`
+
+Every exception the calls in this section raise, importable from one module
+whichever module raises it: `StartupError`, `NoSystemError`, `NotFoundError`,
+`NoAnswerError`, `ReplyError`, `AskError` and the rest. Each subclasses the
+built-in a caller would catch (`LookupError`, `asyncio.TimeoutError`,
+`ValueError`, `TypeError`, `RuntimeError`). The library guide's
+[What to catch](library.md#what-to-catch) says which call raises which.
+
 ### `Actor.subscribe(topic, callback, *, concurrency=1)`
 
 Calls `callback(payload)` for every message matching the MQTT filter `topic`,

@@ -67,6 +67,14 @@ def test_the_api_key_is_always_passed(openai_calls: list[dict[str, Any]]) -> Non
     assert openai_calls[0]["api_key"] == "k"
 
 
+def test_a_provider_with_no_model_named_uses_gpt_5_4_mini(
+    openai_calls: list[dict[str, Any]],
+) -> None:
+    # A model with no shutdown announced, which calls tools on Chat Completions
+    # without being asked for `reasoning_effort: none`.
+    assert OpenAIProvider(api_key="k").model == "gpt-5.4-mini"
+
+
 def test_the_provider_records_the_endpoint_it_uses(openai_calls: list[dict[str, Any]]) -> None:
     # `base_url` is read back for reporting; it must agree with the client.
     provider = OpenAIProvider(model="gpt-4o", api_key="k", base_url=_CUSTOM)

@@ -467,13 +467,14 @@ class TestTheRegressor:
             REGRESSOR, 4, 1, 1,
         )  # fmt: skip
         active, shadow = result["active"], result["shadow"]
+        # Both are measured on the three inputs both answered.
         assert (active["judged"], active["no_answer"], active["mae"], active["bias"]) == (
-            4,
+            3,
             0,
-            15,
+            20,
             0,
         )
-        assert active["rmse"] == pytest.approx(math.sqrt(350))
+        assert active["rmse"] == pytest.approx(math.sqrt(1400 / 3))
         assert active["worst"] == 30
         assert (shadow["judged"], shadow["no_answer"], shadow["bias"], shadow["worst"]) == (
             3,
@@ -483,6 +484,30 @@ class TestTheRegressor:
         )
         assert shadow["mae"] == pytest.approx(40 / 3)
         assert shadow["rmse"] == pytest.approx(math.sqrt(200))
+
+    def test_a_side_that_skips_the_hard_inputs_is_not_measured_on_the_easy_ones_alone(
+        self,
+    ) -> None:
+        # The active side is nearer on every input the shadow answered. Measured on its own
+        # answers alone, the shadow would look nearer (2 against 2.8): the active side's
+        # error on the two hard inputs it alone took on would count against it.
+        rows = [answered(T0 + i, 421, 422) for i in range(1, 9)] + [
+            answered(T0 + 50, 430, None),
+            answered(T0 + 60, 410, None),
+        ]
+
+        result = judge(rows, CO2, READINGS)
+
+        active, shadow = result["active"], result["shadow"]
+        assert active["judged"] == shadow["judged"] == 8
+        assert (active["mae"], shadow["mae"]) == (1, 2)
+        assert (active["no_answer"], shadow["no_answer"]) == (0, 2)
+
+    def test_a_side_that_answers_nothing_leaves_no_figures_on_either_side(self) -> None:
+        result = judge([answered(T0 + 10, 400, None)], CO2, READINGS)
+
+        assert result["active"]["mae"] is None and result["shadow"]["mae"] is None
+        assert result["closer"]["active"] == 1
 
     def test_closer_counts_each_input_once_and_an_answer_beats_none(self) -> None:
         closer = judge(REGRESSED, CO2, READINGS)["closer"]

@@ -682,12 +682,12 @@ send it, and the reply is what the agent answered: a function's return value,
 with a plain value wrapped as `{"result": ...}`. Three things go wrong loudly
 rather than quietly. No agent of that name is running: `LookupError`. The
 agent answered with an error, which is what a function that raised reports:
-`RuntimeError` carrying the message, a `wactorz.core.actor.ReplyError` whose
+`RuntimeError` carrying the message, a `wactorz.errors.ReplyError` whose
 `reply` holds the agent's whole answer. No reply within `timeout` seconds, 60
 by default: `asyncio.TimeoutError`. In every case nothing is left waiting.
 
 `wactorz.ask` needs a running system, from `run()` or `serve()`; it raises
-`RuntimeError` otherwise. Its reply address is a slot of the registry rather
+`NoSystemError`, a `RuntimeError`, otherwise. Its reply address is a slot of the registry rather
 than an actor, so nothing is registered, listed or supervised on the caller's
 behalf.
 
@@ -824,6 +824,59 @@ function; `actor.handle_message(...)` answers a task. Nothing connects until
 `on_start`. `spec_of` is the `AgentSpec` the decorator recorded: `name`,
 `subscribes`, `publishes`, `options`, and `build()` for the actor.
 
+## What to catch
+
+Every exception below can be imported from `wactorz.errors`, whichever module
+raises it. Each one is also a kind of the built-in exception beside it, so
+`except LookupError` catches a missing agent as surely as `except
+NotFoundError` does. The message always says what went wrong.
+
+```python
+from wactorz.errors import NoAnswerError, NotFoundError, ReplyError
+
+try:
+    score = await wactorz.ask("imu-anomaly", reading, timeout=5)
+except NotFoundError:
+    score = None                       # not running here
+except ReplyError as exc:
+    log.warning("imu-anomaly: %s", exc.reply.get("error"))
+except NoAnswerError:
+    ...                                # it may still be working
+```
+
+| Raised by | Exception | A kind of | When |
+| --------- | --------- | --------- | ---- |
+| `wactorz.run`, `wactorz.serve` | `StartupError` | `RuntimeError` | the configuration cannot start; what had started is undone |
+| `wactorz.run`, `wactorz.serve`, `wactorz.pipeline` | `NotAnAgentError` | `TypeError` | `agents=`, or a pipeline's `steps`, holds something that is neither a decorated function nor an `Actor` subclass |
+| `wactorz.run`, `wactorz.serve` | `NotAPipelineError` | `TypeError` | `pipelines_=` holds something that is not a `Pipeline` |
+| `wactorz.ask` | `NoSystemError` | `RuntimeError` | no system is running |
+| `wactorz.ask`, `Actor.ask` | `NotFoundError` | `LookupError` | no agent of that name is running |
+| `wactorz.ask`, `Actor.ask` | `NoAnswerError` | `asyncio.TimeoutError` | no reply within `timeout` seconds |
+| `wactorz.ask`, `Actor.ask` | `ReplyError` | `RuntimeError` | the agent answered with an error; `reply` is its whole answer |
+| `wactorz.ask`, `Actor.ask` | `AskError` | `RuntimeError` | the request could not be sent: the agent's mailbox is full, or the asking actor is in no system |
+| `wactorz.agent`, `Actor.subscribe` | `ConcurrencyError` | `ValueError` | `concurrency` below one |
+| `Actor.subscribe` | `NotCallableError` | `TypeError` | a callback that cannot be called with a payload |
+| `wactorz.pipeline` | `PipelineError` | `ValueError` | no name, neither steps nor rules, or steps that do not connect, each problem named |
+| `wactorz.pipeline` with rules as dicts, `RuleConfig.from_dict` and its parts' | `RuleError` | `ValueError` | a rule that cannot run as written |
+| `notify_user`, `ask_operator` | `OptionsError` | `ValueError` | options a chat channel cannot show, or a question with none |
+| `notify_user`, `ask_operator` | `UnknownChannelError` | `ValueError` | a channel no interface is called |
+| `wait_for_answer` | `NotFoundError` | `LookupError` | a question this agent did not ask |
+| `ask_operator`, `wait_for_answer` | `NoAnswerError` | `asyncio.TimeoutError` | no answer within `timeout`; `ask_operator` waits once more on the dashboard first, for a question asked on a chat channel, and the question stays open |
+| `ask_operator` | `LabelError` | `ValueError` | a `label=` that cannot be used, before anything is sent |
+| `label` | `LabelError` | `ValueError` | a label that cannot be taken as written, or from an agent that cannot reach main's database |
+| `artifact_path`, `load_model` | `UnnamedModelError` | `KeyError` | a key the agent's `models` does not declare |
+| `load_model` | `ModelError` | `ArtifactError` | a format that runs code, without `allow_code=True`; one with no loader; a library the format needs that is not installed |
+| `recall_bytes` | `NotBytesError` | `TypeError` | a key holding something `persist_bytes` did not write |
+| `wactorz.core.integrations.ag2.model_config` | `AG2Error` | `RuntimeError` | AG2 is not installed, or its client cannot be built for the system's model |
+
+What goes wrong inside an agent stays with that agent. A function that raises
+answers an ask with an error, which reaches the asker as a `ReplyError`. One
+that raises on a message is logged and goes on to the next, until it has failed
+several times in a row; then it is marked failed, and its supervisor restarts
+it. A
+catalogue agent spawned from chat, such as the trainer or drift, reports what
+it refuses in its reply in the same way.
+
 ## Where things go
 
 - **Streams stay where they are produced.** An agent that watches a camera or
@@ -853,6 +906,7 @@ What this guide uses is the surface you can rely on:
 | `wactorz.DirectOrchestrator`, `wactorz.MainOrchestrator` | the model-free orchestrator of the minimal profile, and main behind the same seam |
 | `wactorz.spec_of` | the `AgentSpec` behind a decorated function, with `build()` for tests |
 | `wactorz.StartupError` | what `serve` and `run` raise for a configuration that cannot start |
+| `wactorz.errors` | every exception a call above raises, in one module (see *What to catch*) |
 | `wactorz.Actor` with `subscribe`, `window`, `publish`, `persist`, `recall`, `send`, `notify_user`, `on_start`, `on_stop`, `handle_message`, `state_dir`, `record_llm_cost` | the base class |
 | `notify_user(text, options=[...], channel=..., user=...)` and `agents/<id>/answer` | a message to the person on a chat channel, with a choice; the pick comes back on the agent's topic (see *Messages from an agent* in the interfaces guide) |
 | `ask_operator(text, options=[...], channel=..., user=..., timeout=..., label=..., context=...)`, `wait_for_answer`, `open_questions`, `on_operator_answer` | the same, waiting for the pick; a question outlives a restart, and with `label=` its answer becomes a label |

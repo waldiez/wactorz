@@ -194,9 +194,14 @@ class PipelineError(ValueError):
         """The error for a pipeline ``name`` declared with neither steps nor rules."""
         return cls(f"pipeline {name!r} has neither steps nor rules")
 
+    @classmethod
+    def not_wired(cls, name: str, problems: Iterable[str]) -> PipelineError:
+        """The error for a pipeline ``name`` whose steps do not connect, one problem each."""
+        return cls(f"pipeline {name!r} is not wired: " + "; ".join(problems))
+
 
 class NotAPipelineError(TypeError):
-    """An entry point that holds something other than pipelines."""
+    """Something other than a pipeline, where pipelines are expected."""
 
     @classmethod
     def holds(cls, target: str, item: Any) -> NotAPipelineError:
@@ -207,6 +212,11 @@ class NotAPipelineError(TypeError):
     def is_not(cls, target: str) -> NotAPipelineError:
         """The error for a ``target`` that names something other than a :class:`Pipeline`."""
         return cls(f"{target} is not a Pipeline")
+
+    @classmethod
+    def given(cls, item: Any) -> NotAPipelineError:
+        """The error for ``item``, handed to :func:`wactorz.serve` as a pipeline."""
+        return cls(f"{item!r} is not a Pipeline; declare one with wactorz.pipeline()")
 
 
 def pipeline(
@@ -248,7 +258,7 @@ def pipeline(
     )
     problems = wiring_errors(pipe)
     if problems:
-        raise ValueError(f"pipeline {name!r} is not wired: " + "; ".join(problems))
+        raise PipelineError.not_wired(name, problems)
     register(pipe)
     return pipe
 
@@ -279,6 +289,8 @@ def registered(pipes: Iterable[Pipeline]) -> Iterator[list[Pipeline]]:
     added: list[Pipeline] = []
     try:
         for pipe in pipes:
+            if not isinstance(pipe, Pipeline):
+                raise NotAPipelineError.given(pipe)
             added.append(register(pipe))
         yield added
     finally:

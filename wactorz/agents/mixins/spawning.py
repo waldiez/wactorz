@@ -525,7 +525,9 @@ class SpawnMixin(_Host):
             # A library agent's keyword arguments, as the spawn gave them.
             kwargs["options"] = dict(options)
         logger.info("[%s] Spawning native catalog agent '%s'", self.name, name)
-        return await self.spawn(factory, actor_id=config.get("actor_id"), **kwargs)
+        return await self.spawn(
+            factory, actor_id=config.get("actor_id"), avatar=spawn_avatar(config, name), **kwargs
+        )
 
     async def _spawn_ha_actuator(self, config: dict[str, Any], name: str) -> Actor | None:
         """Spawn a HomeAssistantActuatorAgent (type: ha_actuator).
@@ -563,6 +565,7 @@ class SpawnMixin(_Host):
             config=actuator_cfg,
             name=name,
             persistence_dir=str(self._persistence_dir.parent),
+            avatar=spawn_avatar(config, name),
         )
 
     async def _spawn_scheduled_agent(self, config: dict[str, Any], name: str) -> Actor | None:
@@ -591,6 +594,7 @@ class SpawnMixin(_Host):
                 publish_topic=publish_topic,
                 description=config.get("description", ""),
                 persistence_dir=str(self._persistence_dir.parent),
+                avatar=spawn_avatar(config, name),
             )
             logger.info(
                 "[%s] Spawned ScheduledAgent '%s' (%s → %s)",
@@ -624,6 +628,7 @@ class SpawnMixin(_Host):
             config=rule,
             name=name,
             persistence_dir=str(self._persistence_dir.parent),
+            avatar=spawn_avatar(config, name),
         )
 
     async def _spawn_module_agent(self, config: dict[str, Any], name: str) -> Actor | None:
@@ -661,6 +666,7 @@ class SpawnMixin(_Host):
             persistence_dir=str(self._persistence_dir.parent),
             llm_provider=self.llm,
             options=dict(options) if isinstance(options, dict) else {},
+            avatar=spawn_avatar(config, name),
         )
 
     async def _spawn_llm_agent(self, config: dict[str, Any], name: str) -> Actor | None:

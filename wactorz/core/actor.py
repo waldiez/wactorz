@@ -1410,7 +1410,12 @@ class Actor(ABC):
     # ─── Actor Spawning ───────────────────────────────────────────────────────
 
     async def spawn(
-        self, actor_class: type[Actor], *, actor_id: str | None = None, **kwargs: Any
+        self,
+        actor_class: type[Actor],
+        *,
+        actor_id: str | None = None,
+        avatar: Avatar | None = None,
+        **kwargs: Any,
     ) -> Actor:
         """Spawn a child actor, under ``actor_id`` when one is given. The child inherits:
         - MQTT client (so it can publish heartbeats/status)
@@ -1421,11 +1426,17 @@ class Actor(ABC):
         Erlang/OTP supervision: if the owning ActorSystem has a Supervisor,
         the child is automatically registered under it with ONE_FOR_ONE so it
         will be restarted if it crashes — no child is an orphan.
+
+        ``avatar`` is what the child wears in place of its class's kind: put on
+        it here, before it starts and on every rebuild after a crash, rather
+        than handed to its constructor, which not every agent class takes.
         """
         # Default persistence to same root as parent
         kwargs.setdefault("persistence_dir", str(self._persistence_dir.parent))
 
         child = build_actor(actor_class, actor_id, kwargs)
+        if avatar is not None:
+            child.avatar = dict(avatar)
 
         # Inherit everything from parent
         child._mqtt_client = self._mqtt_client  # MQTT publish connection
@@ -1477,8 +1488,12 @@ class Actor(ABC):
                     mp = self._mqtt_port
                     papi = self._persistence_api
 
+                    worn = dict(avatar) if avatar is not None else None
+
                     async def _child_factory() -> Actor:
                         c = build_actor(cls, kept_id, kw)
+                        if worn is not None:
+                            c.avatar = dict(worn)
                         c._mqtt_client = mc
                         c._mqtt_broker = mb
                         c._mqtt_port = mp

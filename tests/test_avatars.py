@@ -7,6 +7,7 @@ carries the result, which the web layer copies out for the dashboard. The
 dictionary's shape is checked here; what its words mean is the dashboard's.
 """
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -16,12 +17,15 @@ from typing import Any, cast
 import pytest
 from aiohttp import web
 
+from wactorz import plugins
 from wactorz.agents.catalog_agent import _build_catalog
 from wactorz.agents.dynamic.agent import DynamicAgent
-from wactorz.agents.function_agent import FunctionAgent
+from wactorz.agents.function_agent import FunctionAgent, agent
+from wactorz.agents.mixins.spawning import SpawnMixin
 from wactorz.agents.rule_agent import RuleAgent
-from wactorz.core.actor import Actor
+from wactorz.core.actor import Actor, ActorState, born_stopped
 from wactorz.core.avatars import AvatarError, checked_avatar, spawn_avatar
+from wactorz.core.paths import resolve_state_dir
 from wactorz.node.agent import NodeAgent
 from wactorz.node.runner import NodeRunner
 from wactorz.web import events, runtime
@@ -140,6 +144,140 @@ class TestWhatAnActorWears:
         agent = NodeAgent({"name": "edge", "code": ""}, runner)
 
         assert agent._build_heartbeat()["avatar"] == {"kind": "dynamic"}
+
+
+@agent(subscribes="in/x")
+def _module_step(reading: dict[str, Any]) -> dict[str, Any]:
+    return reading
+
+
+class _Supervisor:
+    """Keeps the factory a spawn hands over, which a restart calls."""
+
+    def __init__(self) -> None:
+        self.factories: dict[str, Any] = {}
+
+    def adopt(self, name: str, factory: Any, _child: Any, **_kw: Any) -> None:
+        self.factories[name] = factory
+
+    def release(self, name: str) -> None:
+        return None
+
+
+class _Registry:
+    """The part of a registry a spawn uses: registering, and the supervisor."""
+
+    def __init__(self) -> None:
+        self._supervisor_ref = _Supervisor()
+
+    async def register(self, _actor: Any) -> None:
+        return None
+
+    def find_by_name(self, _name: str) -> Any:
+        return None
+
+
+def _parent(tmp_path: Path) -> Plain:
+    parent = Plain(name="parent", persistence_dir=str(tmp_path / "parent"))
+    parent._registry = cast(Any, _Registry())
+    return parent
+
+
+class TestWhatASpawnPutsOn:
+    async def test_the_child_wears_it_before_it_starts(self, tmp_path: Path) -> None:
+        with born_stopped():
+            child = await _parent(tmp_path).spawn(Sailor, name="child", avatar={"kind": "flic"})
+
+        assert child.avatar == {"kind": "flic"}
+        assert child.state == ActorState.STOPPED
+
+    async def test_without_one_the_class_kind_stays(self, tmp_path: Path) -> None:
+        with born_stopped():
+            child = await _parent(tmp_path).spawn(Sailor, name="child")
+
+        assert child.avatar == {"kind": "main"}
+
+    async def test_a_class_whose_constructor_takes_no_avatar_wears_it(self, tmp_path: Path) -> None:
+        plugins.clear()
+        plugin = plugins.register(_module_step, target="tests.test_avatars:_module_step")
+        with born_stopped():
+            child = await _parent(tmp_path).spawn(
+                cast(Any, plugin.build), name="step", options={}, avatar={"kind": "flic"}
+            )
+        plugins.clear()
+
+        assert child.avatar == {"kind": "flic"}
+
+    async def test_a_rebuild_after_a_crash_wears_it_too(self, tmp_path: Path) -> None:
+        parent = _parent(tmp_path)
+        with born_stopped():
+            await parent.spawn(Sailor, name="child", avatar={"kind": "flic"})
+        factory = cast(Any, parent._registry)._supervisor_ref.factories["child"]
+
+        assert (await factory()).avatar == {"kind": "flic"}
+
+
+class _RecordingHost(SpawnMixin):
+    """Main's spawn paths, with `spawn` recording what each hands over instead of starting anything."""
+
+    def __init__(self) -> None:
+        self.name = "main"
+        self.actor_id = "id-main"
+        self.llm = None
+        self._registry = cast(Any, _Registry())
+        self._result_futures: dict[str, asyncio.Future[Any]] = {}
+        self._persistence_dir = Path(resolve_state_dir()) / "main"
+        self.handed: dict[str, Any] = {}
+        self.state = ActorState.RUNNING
+
+    async def spawn(self, actor_class: Any, **kwargs: Any) -> Any:
+        self.handed = kwargs
+        return SimpleNamespace(name=kwargs.get("name"))
+
+    def persist(self, key: str, value: Any) -> None:
+        return None
+
+    def recall(self, key: str, default: Any = None) -> Any:
+        return default
+
+    async def send(self, target_id: str, msg_type: Any, payload: Any = None) -> bool:
+        return True
+
+    def run_detached(self, coro: Any, *, name: str | None = None) -> asyncio.Task[Any]:
+        return asyncio.create_task(coro, name=name)
+
+
+#: One config of each kind main spawns itself, each asking for the Flic button's character.
+_SPAWNS = {
+    "native": ("_spawn_native_agent", "weather-agent", {}),
+    "ha_actuator": ("_spawn_ha_actuator", "lights", {"automation_id": "lights", "actions": []}),
+    "scheduled": (
+        "_spawn_scheduled_agent",
+        "tick",
+        {"schedule": {"type": "interval", "seconds": 60}},
+    ),
+    "rule": (
+        "_spawn_rule_agent",
+        "watch",
+        {"triggers": ["in/x"], "actions": [{"type": "publish", "topic": "out/x"}]},
+    ),
+    "module": ("_spawn_module_agent", "step", {"target": "tests.test_avatars:_module_step"}),
+    "llm": ("_spawn_llm_agent", "writer", {}),
+}
+
+
+class TestEverySpawnPathPassesItOn:
+    @pytest.mark.parametrize("kind", sorted(_SPAWNS))
+    async def test_the_avatar_a_config_asks_for_reaches_the_spawn(self, kind: str) -> None:
+        method, name, config = _SPAWNS[kind]
+        plugins.clear()
+        plugins.register(_module_step, target="tests.test_avatars:_module_step")
+        host = _RecordingHost()
+
+        await getattr(host, method)({**config, "name": name, "avatar": {"kind": "flic"}}, name)
+
+        assert host.handed.get("avatar") == {"kind": "flic"}, kind
+        plugins.clear()
 
 
 class TestTheCatalogue:

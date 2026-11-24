@@ -217,6 +217,83 @@ class TestWhatASpawnPutsOn:
         assert (await factory()).avatar == {"kind": "flic"}
 
 
+@agent(avatar="monitor")
+def _watches(reading: dict[str, Any]) -> dict[str, Any]:
+    return reading
+
+
+@agent(avatar={"kind": "monitor", "accent": "#2bb3a3", "prop": "gear"})
+def _dressed(reading: dict[str, Any]) -> dict[str, Any]:
+    return reading
+
+
+@agent
+def _undressed(reading: dict[str, Any]) -> dict[str, Any]:
+    return reading
+
+
+class TestWhatADecoratorGives:
+    """``@agent(avatar=...)``: a function picks its character as a class does with AVATAR_KIND."""
+
+    def test_a_kind_by_name(self, tmp_path: Path) -> None:
+        built = plugins.plugin_from(_watches).build(persistence_dir=str(tmp_path))
+
+        assert built.avatar == {"kind": "monitor"}
+
+    def test_a_kind_and_parts(self, tmp_path: Path) -> None:
+        built = plugins.plugin_from(_dressed).build(persistence_dir=str(tmp_path))
+
+        assert built.avatar == {"kind": "monitor", "accent": "#2bb3a3", "prop": "gear"}
+
+    def test_without_one_the_class_kind_stays(self, tmp_path: Path) -> None:
+        built = plugins.plugin_from(_undressed).build(persistence_dir=str(tmp_path))
+
+        assert built.avatar == {"kind": FunctionAgent.AVATAR_KIND}
+
+    def test_two_agents_of_one_function_do_not_share_one_dictionary(self, tmp_path: Path) -> None:
+        plugin = plugins.plugin_from(_dressed)
+        first = plugin.build(name="a", persistence_dir=str(tmp_path))
+        second = plugin.build(name="b", persistence_dir=str(tmp_path))
+
+        first.avatar["accent"] = "#000000"
+
+        assert second.avatar["accent"] == "#2bb3a3"
+
+    def test_what_it_was_given_is_copied(self) -> None:
+        given: dict[str, str | int] = {"kind": "monitor"}
+
+        @agent(avatar=given)
+        def step(reading: dict[str, Any]) -> dict[str, Any]:
+            return reading
+
+        given["kind"] = "flic"
+
+        spec = plugins.plugin_from(step).obj
+        assert spec.avatar == {"kind": "monitor"}
+
+    @pytest.mark.parametrize(
+        ("avatar", "words"),
+        [
+            ("monitor; drop", "'kind'"),
+            ({"Kind": "monitor"}, "part name"),
+            ({"kind": 3.5}, "'kind'"),
+            (["monitor"], "dictionary"),
+        ],
+    )
+    def test_a_mistake_fails_when_the_decorator_runs(self, avatar: Any, words: str) -> None:
+        with pytest.raises(AvatarError, match=words):
+            agent(avatar=avatar)(_module_step)
+
+    async def test_what_the_spawn_gave_comes_before_it(self, tmp_path: Path) -> None:
+        plugin = plugins.plugin_from(_dressed)
+        with born_stopped():
+            child = await _parent(tmp_path).spawn(
+                cast(Any, plugin.build), name="step", options={}, avatar={"kind": "flic"}
+            )
+
+        assert child.avatar == {"kind": "flic"}
+
+
 class _RecordingHost(SpawnMixin):
     """Main's spawn paths, with `spawn` recording what each hands over instead of starting anything."""
 

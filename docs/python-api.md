@@ -235,6 +235,7 @@ reads and `spec.build()` turns into a `FunctionAgent`.
 | `description`, `capabilities`, `input_schema`, `output_schema` | The manifest |
 | `requires` | `{"ram_mb": ..., "packages": [...], ...}`, carried in the manifest and spawn record |
 | `autostart` | `False` keeps the agent in the catalogue until asked for |
+| `avatar` | The character the dashboard draws: a kind (`"monitor"`) or a dictionary of a kind and parts; a spawn's own `avatar` comes first |
 
 ### `wactorz.pipeline(name, steps=(), *, inputs=(), schedule=None, rules=(), description="")`
 

@@ -27,6 +27,7 @@ from .core.actor import (
     UnnamedModelError,
 )
 from .core.artifacts import ArtifactError
+from .core.avatars import AvatarError
 from .core.integrations.ag2 import AG2Error
 from .core.labels import LabelError
 from .core.models import ModelError
@@ -39,6 +40,7 @@ __all__ = [
     "AG2Error",
     "ArtifactError",
     "AskError",
+    "AvatarError",
     "ConcurrencyError",
     "LabelError",
     "ModelError",

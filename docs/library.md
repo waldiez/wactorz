@@ -270,6 +270,18 @@ class PumpWatch(Actor):
     AVATAR_KIND = "monitor"
 ```
 
+A decorated function picks one with `avatar`: a kind by name, or a dictionary
+of a kind and parts (below). A mistake in it fails when the decorator runs,
+with an `AvatarError` saying what is wrong:
+
+```python
+@wactorz.agent(subscribes="pumps/+/pressure", avatar="monitor")
+def pump_watch(reading: dict) -> dict: ...
+
+@wactorz.agent(avatar={"kind": "monitor", "accent": "#2bb3a3", "prop": "gear"})
+def boiler_watch(reading: dict) -> dict: ...
+```
+
 The kinds are `main`, `planner`, `llm`, `monitor`, `home-assistant`,
 `ha-actuator`, `ha-map`, `ha-state-bridge`, `installer`, `train`, `recorder`,
 `rule`, `scheduled`, `function`, `dynamic` (an agent generated from code, holding a
@@ -278,7 +290,8 @@ name (`weather-agent`, `flic`, `gmail-agent`, `google-calendar-agent`,
 `doc-to-pptx-agent`, `anomaly-detector`, `smart-energy`, `manual-agent`,
 `reachy-mini`, `timeseries-collector`).
 
-A spawn config may carry an `avatar` of its own, a kind or parts over one:
+A spawn config may carry an `avatar` of its own, a kind or parts over one,
+and it comes before what the class or the decorator gave:
 
 ```json
 {"name": "pump-watch", "type": "dynamic", "code": "...",
@@ -297,8 +310,8 @@ A spawn config may carry an `avatar` of its own, a kind or parts over one:
 | `prop` | `""`, `whistle`, `envelope`, `calendar`, `clock`, `magnifier`, `gear`, `books`, `book`, `slides`, `button`, `mic`, `spike`, `pin`, `switch`, `sync`, `function`, `code`, `wave`, `sun`, `clipboard`, `thought`, `database`, `bolt`, `house`, `chart` |
 
 An avatar is decoration: a kind or a part the dashboard does not know is
-passed over, and one that is not a small dictionary of words is left out with
-a warning in the log; neither stops the agent. The eyes show how the agent is
+passed over, and one in a spawn config that is not a small dictionary of words
+is left out with a warning in the log; neither stops the agent. The eyes show how the agent is
 doing, which is the dashboard's to decide, not the agent's.
 
 ## More than one at a time
@@ -856,6 +869,7 @@ except NoAnswerError:
 | `wactorz.ask`, `Actor.ask` | `ReplyError` | `RuntimeError` | the agent answered with an error; `reply` is its whole answer |
 | `wactorz.ask`, `Actor.ask` | `AskError` | `RuntimeError` | the request could not be sent: the agent's mailbox is full, or the asking actor is in no system |
 | `wactorz.agent`, `Actor.subscribe` | `ConcurrencyError` | `ValueError` | `concurrency` below one |
+| `wactorz.agent` | `AvatarError` | `ValueError` | an `avatar` that is not a kind's name or a small dictionary of parts |
 | `Actor.subscribe` | `NotCallableError` | `TypeError` | a callback that cannot be called with a payload |
 | `wactorz.pipeline` | `PipelineError` | `ValueError` | no name, neither steps nor rules, or steps that do not connect, each problem named |
 | `wactorz.pipeline` with rules as dicts, `RuleConfig.from_dict` and its parts' | `RuleError` | `ValueError` | a rule that cannot run as written |

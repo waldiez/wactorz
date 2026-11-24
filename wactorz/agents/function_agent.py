@@ -50,6 +50,7 @@ from typing import Any, ClassVar
 
 from ..core import models
 from ..core.actor import Actor, Message, MessageType, run_callable
+from ..core.avatars import Avatar, checked_avatar
 from ..core.paths import resolve_state_dir
 from ..core.subscriptions import ConcurrencyError
 from ..core.topics import agent_topic
@@ -120,6 +121,10 @@ class AgentSpec:
     models: dict[str, Any] = field(default_factory=dict)
     #: Whether the agent is started with the system, or only when asked for.
     autostart: bool = True
+    #: The character the dashboard draws for the agent, as ``@agent(avatar=...)``
+    #: gave it, checked; None leaves it to `FunctionAgent.AVATAR_KIND`. A
+    #: spawn's own ``avatar`` comes before it.
+    avatar: Avatar | None = None
     #: How many messages, and tasks, the function handles at once. One keeps
     #: messages on a topic in order; more is for a function that waits on a
     #: model or a job and would otherwise queue its topic behind itself.
@@ -187,6 +192,7 @@ def agent(
     models: dict[str, Any] | None = None,
     autostart: bool = True,
     concurrency: int = 1,
+    avatar: str | Mapping[str, str | int] | None = None,
 ) -> Any:
     """Declare a function as an agent. Works bare, ``@agent``, or with arguments.
 
@@ -197,9 +203,13 @@ def agent(
     ``models`` names the artifacts the function loads -- ``{"model":
     "imu-detector:3"}`` -- which are found before the agent starts, and read
     with ``me.artifact_path("model")`` or ``await me.load_model("model")``.
+    ``avatar`` is the character the dashboard draws for it: one of its kinds
+    by name (``"monitor"``), or a dictionary of a kind and parts, checked here
+    so a mistake fails at import rather than on the dashboard.
     """
     if concurrency < 1:
         raise ConcurrencyError(concurrency)
+    worn = _declared_avatar(avatar)
 
     def _declare(target: Callable[..., Any]) -> Callable[..., Any]:
         spec = AgentSpec(
@@ -215,6 +225,7 @@ def agent(
             models=dict(models or {}),
             concurrency=concurrency,
             autostart=autostart,
+            avatar=worn,
         )
         setattr(target, SPEC_ATTRIBUTE, spec)
         return target
@@ -222,6 +233,13 @@ def agent(
     if fn is not None:
         return _declare(fn)
     return _declare
+
+
+def _declared_avatar(avatar: str | Mapping[str, str | int] | None) -> Avatar | None:
+    """The avatar ``@agent(avatar=...)`` gave, checked: a kind by name, or a kind and parts."""
+    if avatar is None:
+        return None
+    return checked_avatar({"kind": avatar} if isinstance(avatar, str) else avatar)
 
 
 def spec_of(obj: Any) -> AgentSpec | None:
@@ -295,7 +313,12 @@ class FunctionAgent(Actor):
         llm_provider: Any = None,
         options: dict[str, Any] | None = None,
     ) -> None:
-        super().__init__(actor_id=actor_id, name=name or spec.name, persistence_dir=persistence_dir)
+        super().__init__(
+            actor_id=actor_id,
+            name=name or spec.name,
+            persistence_dir=persistence_dir,
+            avatar=spec.avatar,
+        )
         self.spec = spec
         self.description: str = spec.description
         self.capabilities: list[str] = list(spec.capabilities)

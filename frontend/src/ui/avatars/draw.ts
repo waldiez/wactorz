@@ -80,8 +80,20 @@ export function avatarSvg(look: Look, crop: Crop = "full"): string {
     );
 }
 
-/** Drawn characters by what they were drawn from: a page shows the same few many times. */
+/**
+ * How many drawn characters are kept. More than a page shows at once, every
+ * mood and both crops included; a look named by a spawn can be any colour, so
+ * without a bound a long-open page would keep every one it was ever shown.
+ */
+export const MAX_DRAWN = 256;
+
+/** Drawn characters by what they were drawn from, the one used longest ago first. */
 const drawn = new Map<string, string>();
+
+/** How many drawn characters are kept now. */
+export function drawnCount(): number {
+    return drawn.size;
+}
 
 /** The address of the image of `look`: the same string for the same look, so an `<img>` given it again does not reload. */
 export function avatarUrl(look: Look, crop: Crop = "full"): string {
@@ -89,7 +101,13 @@ export function avatarUrl(look: Look, crop: Crop = "full"): string {
     let url = drawn.get(key);
     if (url === undefined) {
         url = `data:image/svg+xml,${encodeURIComponent(avatarSvg(look, crop))}`;
-        drawn.set(key, url);
+        if (drawn.size >= MAX_DRAWN) {
+            drawn.delete(drawn.keys().next().value!);
+        }
+    } else {
+        // Moved to the end, as the one used last.
+        drawn.delete(key);
     }
+    drawn.set(key, url);
     return url;
 }

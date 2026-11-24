@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { KINDS, lookFor, type Mood } from "../../ui/avatars/cast";
-import { avatarSvg, avatarUrl, type Look } from "../../ui/avatars/draw";
+import { avatarSvg, avatarUrl, drawnCount, MAX_DRAWN, type Look } from "../../ui/avatars/draw";
 import { boxOf, placedBox, PROP_NAMES, prop, type Box } from "../../ui/avatars/props";
 import { bright, deep, isColour, luminance, shadeOf, tint } from "../../ui/avatars/svg";
 
@@ -231,6 +231,17 @@ describe("a character's drawing", () => {
 
     it("writes no number longer than it is drawn", () => {
         expect(avatarSvg(BASE)).not.toMatch(/\d\.\d{3,}/);
+    });
+
+    it("keeps no more drawn characters than its bound, dropping the one used longest ago", () => {
+        const kept = avatarUrl(BASE);
+        const colour = (i: number): string => `#${i.toString(16).padStart(6, "0")}`;
+        for (let i = 0; i < MAX_DRAWN * 2; i++) {
+            avatarUrl({ ...BASE, accent: colour(i) });
+            avatarUrl(BASE); // used all along, so never the one dropped
+        }
+        expect(drawnCount()).toBe(MAX_DRAWN);
+        expect(avatarUrl(BASE)).toBe(kept);
     });
 
     it("gives the same address for the same look, and another for another", () => {

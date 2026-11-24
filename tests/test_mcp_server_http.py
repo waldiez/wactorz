@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-pytest.importorskip("mcp.server.fastmcp")
+pytest.importorskip("mcp")
 
 from aiohttp import web
 from aiohttp.test_utils import TestServer

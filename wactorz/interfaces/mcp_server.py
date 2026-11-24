@@ -50,7 +50,7 @@ class McpMissingError(SystemExit):
 
 
 try:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 except ImportError as _missing:  # private: the name would otherwise read as part of the module
     raise McpMissingError() from _missing
 
@@ -77,7 +77,7 @@ CALENDAR_MCP_TOKEN_FILE = os.getenv("CALENDAR_MCP_TOKEN_FILE") or str(
     Path.home() / ".wactorz" / "calendar_mcp_token.json"
 )
 
-mcp: "FastMCP[Any]" = FastMCP("wactorz")
+mcp: "MCPServer[Any]" = MCPServer("wactorz")
 
 
 def _wactorz_headers() -> dict[str, str]:

@@ -411,6 +411,7 @@ stop_agent,
 ha_list_entities, ha_get_state, ha_call_service
 </code></pre></div>
 
+<p>The <code>mcp</code> extra uses MCP Python SDK 2 (<code>MCPServer</code>). The server's tool and resource contract is checked through a real stdio client in <code>tests/test_mcp_sdk.py</code>; the same tests exercise the Google client's Streamable HTTP transport, stored OAuth token and structured results against a local endpoint.</p>
 <p>Test with the MCP Inspector:</p>
 <div class="highlight"><pre><span></span><code>npx<span class="w"> </span>@modelcontextprotocol/inspector<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>wactorz.interfaces.mcp_server
 </code></pre></div>

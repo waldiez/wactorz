@@ -190,9 +190,25 @@ class TestFormatting:
     def test_structured_content_is_rendered_as_json(self) -> None:
         class _Result:
             def __init__(self) -> None:
-                self.structuredContent = {"events": []}  # the MCP field name
+                self.structured_content = {"events": []}
+                self.content = []
 
         assert json.loads(format_mcp_content(_Result())) == {"events": []}
+
+    @pytest.mark.parametrize("structured", [{"events": [{"id": "e1"}]}, {}])
+    def test_sdk_result_prefers_structured_content_over_text(
+        self, structured: dict[str, Any]
+    ) -> None:
+        # Optional dependency: the rest of these formatting tests run without MCP.
+        pytest.importorskip("mcp")
+        from mcp.types import CallToolResult, TextContent
+
+        result = CallToolResult(
+            content=[TextContent(type="text", text="lossy summary")],
+            structured_content=structured,
+        )
+
+        assert json.loads(format_mcp_content(result)) == structured
 
     def test_content_parts_are_joined(self) -> None:
         class _Text:
@@ -330,12 +346,17 @@ class _Transport:
     def __init__(self) -> None:
         self.opened: list[tuple[str, Any, Any]] = []
 
-    def __call__(self, url: str, headers: Any = None, auth: Any = None) -> "_Transport":
-        self.opened.append((url, headers, auth))
+    def __call__(self, url: str, *, http_client: Any) -> "_Transport":
+        headers = (
+            {"Authorization": http_client.headers["Authorization"]}
+            if "Authorization" in http_client.headers
+            else {}
+        )
+        self.opened.append((url, headers, http_client.auth))
         return self
 
-    async def __aenter__(self) -> tuple[str, str, None]:
-        return "read", "write", None
+    async def __aenter__(self) -> tuple[str, str]:
+        return "read", "write"
 
     async def __aexit__(self, *_exc: object) -> None:
         return None
@@ -345,7 +366,7 @@ class TestMcpTransport:
     @pytest.fixture(name="transport")
     def transport_fixture(self, monkeypatch: pytest.MonkeyPatch) -> _Transport:
         transport = _Transport()
-        monkeypatch.setattr(google_mcp, "streamablehttp_client", transport)
+        monkeypatch.setattr(google_mcp, "streamable_http_client", transport)
         monkeypatch.setattr(google_mcp, "ClientSession", _Session)
         return transport
 
@@ -631,13 +652,13 @@ class TestAuthorizeDirect:
         opened: list[str] = []
 
         def _callback(config: GoogleMcpConfig) -> Any:
-            async def _wait() -> tuple[str, str | None]:
+            async def _wait() -> google_mcp._AuthorizationCallback:
                 if state == "echo":
                     while not opened:
                         await asyncio.sleep(0)
                     sent = dict(p.split("=", 1) for p in opened[0].split("?", 1)[1].split("&"))
-                    return code, sent["state"]
-                return code, state
+                    return google_mcp._AuthorizationCallback(code, sent["state"])
+                return google_mcp._AuthorizationCallback(code, state)
 
             return _wait
 
@@ -712,14 +733,25 @@ def _free_port() -> int:
 
 
 class TestCallbackServer:
+    @pytest.mark.parametrize(
+        "mcp_oauth,issuer", [(False, None), (True, None), (True, "https://issuer.example")]
+    )
     async def test_the_code_and_state_arrive_on_the_configured_path(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mcp_oauth: bool, issuer: str | None
     ) -> None:
         port = _free_port()
         config = _config(
             tmp_path, monkeypatch, REDIRECT_URI=f"http://127.0.0.1:{port}/oauth/callback"
         )
-        waiting = asyncio.create_task(google_mcp._make_callback_handler(config)())
+        if mcp_oauth:
+            pytest.importorskip("mcp")
+            monkeypatch.setenv(f"{PREFIX}_CLIENT_ID", "test-client")
+            monkeypatch.setenv(f"{PREFIX}_CLIENT_SECRET", "test-secret")
+            provider = build_auth(config, interactive=True)
+            assert provider is not None and provider.context.callback_handler is not None
+            waiting = asyncio.ensure_future(provider.context.callback_handler())
+        else:
+            waiting = asyncio.ensure_future(google_mcp._make_callback_handler(config)())
         base = f"http://127.0.0.1:{port}"
 
         async with aiohttp.ClientSession() as http:
@@ -730,13 +762,21 @@ class TestCallbackServer:
                     break
                 except aiohttp.ClientConnectionError:
                     await asyncio.sleep(0.01)
-            async with http.get(f"{base}/oauth/callback?code=c1&state=s1") as right:
+            async with http.get(
+                f"{base}/oauth/callback",
+                params={"code": "c1", "state": "s1", **({"iss": issuer} if issuer else {})},
+            ) as right:
                 assert "authentication complete" in await right.text()
 
         # `asyncio.wait`, not `wait_for`, which can lose a cancellation on 3.11.
         done, _ = await asyncio.wait({waiting}, timeout=5)
         assert waiting in done
-        assert waiting.result() == ("c1", "s1")
+        result = waiting.result()
+        assert result.code == "c1"
+        assert result.state == "s1"
+        assert result.iss == issuer
+        if mcp_oauth:
+            assert isinstance(result, google_mcp.AuthorizationCodeResult)
 
     async def test_the_browser_handler_prints_the_url_first(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

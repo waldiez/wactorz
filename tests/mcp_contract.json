@@ -1,0 +1,509 @@
+{
+  "tools": [
+    {
+      "name": "ask_wactorz",
+      "description": "Send a message to the wactorz main orchestrator.\n\nThe orchestrator will route to an existing agent, spawn a new one, or\nanswer directly. Use for fuzzy requests (\"monitor my CPU temp\",\n\"what's the weather\") where you don't know which agent should handle it.\n",
+      "inputSchema": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "ask_wactorzArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "ask_wactorzOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "ask_agent",
+      "description": "Send a message to a named agent and return that agent's reply.\n\nMain hands it straight to the agent, without deciding who should answer:\nit finds the agent running here, spawns it from the catalogue, or asks the\nnode it runs on. Use when you already know which agent should handle the\nrequest. Agent names are lowercase-hyphenated (e.g. \"home-assistant-agent\").\nRun list_agents() first if unsure.\n",
+      "inputSchema": {
+        "properties": {
+          "agent_name": {
+            "title": "Agent Name",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_name",
+          "message"
+        ],
+        "title": "ask_agentArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "ask_agentOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "calendar_status",
+      "description": "Show sanitized Google Calendar MCP configuration status.",
+      "inputSchema": {
+        "properties": {},
+        "title": "calendar_statusArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "calendar_statusOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "calendar_mcp_list_tools",
+      "description": "List tools exposed by the configured Google Calendar MCP server.",
+      "inputSchema": {
+        "properties": {},
+        "title": "calendar_mcp_list_toolsArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "calendar_mcp_list_toolsOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "calendar_mcp_call_tool",
+      "description": "Call any tool exposed by the configured remote Calendar MCP server.\n\narguments_json must be a JSON object string. Use calendar_mcp_list_tools()\nto discover the exact tool names and schemas.\n",
+      "inputSchema": {
+        "properties": {
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "arguments_json": {
+            "default": "{}",
+            "title": "Arguments Json",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_name"
+        ],
+        "title": "calendar_mcp_call_toolArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "calendar_mcp_call_toolOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "calendar_list",
+      "description": "List upcoming Google Calendar events through the Google Calendar MCP server.",
+      "inputSchema": {
+        "properties": {
+          "count": {
+            "default": 10,
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "title": "calendar_listArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "calendar_listOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "calendar_today",
+      "description": "List today's Google Calendar events through the Google Calendar MCP server.",
+      "inputSchema": {
+        "properties": {},
+        "title": "calendar_todayArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "calendar_todayOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "calendar_week",
+      "description": "List this week's Google Calendar events through the Google Calendar MCP server.",
+      "inputSchema": {
+        "properties": {},
+        "title": "calendar_weekArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "calendar_weekOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "calendar_create_event",
+      "description": "Create a Google Calendar event through the Google Calendar MCP server.",
+      "inputSchema": {
+        "properties": {
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          },
+          "end": {
+            "default": "",
+            "title": "End",
+            "type": "string"
+          },
+          "location": {
+            "default": "",
+            "title": "Location",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary",
+          "start"
+        ],
+        "title": "calendar_create_eventArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "calendar_create_eventOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "calendar_delete_event",
+      "description": "Delete a Google Calendar event through the Google Calendar MCP server.",
+      "inputSchema": {
+        "properties": {
+          "event_id": {
+            "title": "Event Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id"
+        ],
+        "title": "calendar_delete_eventArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "calendar_delete_eventOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_agents",
+      "description": "List all currently running agents with their id, name, and state.",
+      "inputSchema": {
+        "properties": {},
+        "title": "list_agentsArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "list_agentsOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_capabilities",
+      "description": "List the full agent capability catalog (running + spawnable).\n\nEach entry shows name, description, capabilities, and whether the agent\nis running or available as a catalog recipe. Filter with an optional\nkeyword (e.g. \"weather\", \"pdf\", \"sensor\").\n",
+      "inputSchema": {
+        "properties": {
+          "keyword": {
+            "default": "",
+            "title": "Keyword",
+            "type": "string"
+          }
+        },
+        "title": "list_capabilitiesArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "list_capabilitiesOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "stop_agent",
+      "description": "Stop a running agent by its id (first 8 chars from list_agents is enough).",
+      "inputSchema": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id"
+        ],
+        "title": "stop_agentArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "stop_agentOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "ha_list_entities",
+      "description": "List Home Assistant entities. Filter by domain (e.g. \"light\", \"sensor\",\n\"switch\", \"climate\") or pass \"\" for all. Returns up to 100 entities.\n",
+      "inputSchema": {
+        "properties": {
+          "domain": {
+            "default": "",
+            "title": "Domain",
+            "type": "string"
+          }
+        },
+        "title": "ha_list_entitiesArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "ha_list_entitiesOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "ha_get_state",
+      "description": "Get the current state and attributes of a Home Assistant entity.",
+      "inputSchema": {
+        "properties": {
+          "entity_id": {
+            "title": "Entity Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_id"
+        ],
+        "title": "ha_get_stateArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "ha_get_stateOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "ha_call_service",
+      "description": "Call a Home Assistant service (e.g. turn on a light, set thermostat).\n\nExamples:\n  ha_call_service(\"light\", \"turn_on\", \"light.kitchen\")\n  ha_call_service(\"light\", \"turn_on\", \"light.kitchen\", '{\"brightness\": 128}')\n  ha_call_service(\"climate\", \"set_temperature\", \"climate.bedroom\", '{\"temperature\": 20}')\n\ndata_json is a JSON string of extra service data (optional).\n",
+      "inputSchema": {
+        "properties": {
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "service": {
+            "title": "Service",
+            "type": "string"
+          },
+          "entity_id": {
+            "default": "",
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "data_json": {
+            "default": "{}",
+            "title": "Data Json",
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "service"
+        ],
+        "title": "ha_call_serviceArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "ha_call_serviceOutput",
+        "type": "object"
+      }
+    }
+  ],
+  "resources": [
+    {
+      "name": "agents_resource",
+      "uri": "wactorz://agents",
+      "description": "Current list of running agents as JSON.",
+      "mimeType": "text/plain"
+    },
+    {
+      "name": "capabilities_resource",
+      "uri": "wactorz://capabilities",
+      "description": "Full capability catalog (running + spawnable agents).",
+      "mimeType": "text/plain"
+    },
+    {
+      "name": "ha_map_resource",
+      "uri": "wactorz://ha-map",
+      "description": "Home Assistant entity + location map snapshot (from home-assistant-map-agent).",
+      "mimeType": "text/plain"
+    },
+    {
+      "name": "config_resource",
+      "uri": "wactorz://config",
+      "description": "MCP server configuration (sanitized \u2014 no tokens).",
+      "mimeType": "text/plain"
+    }
+  ]
+}

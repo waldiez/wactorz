@@ -255,6 +255,8 @@ stop_agent,
 ha_list_entities, ha_get_state, ha_call_service
 ```
 
+The `mcp` extra uses MCP Python SDK 2 (`MCPServer`). The server's tool and resource contract is checked through a real stdio client in `tests/test_mcp_sdk.py`; the same tests exercise the Google client's Streamable HTTP transport, stored OAuth token and structured results against a local endpoint.
+
 Test with the MCP Inspector:
 
 ```bash

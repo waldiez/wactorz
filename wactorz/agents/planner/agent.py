@@ -20,7 +20,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 from ...core import topic_bus
 from ...core.actor import Actor, Message, MessageType
@@ -58,7 +58,7 @@ SKIP_AGENTS = {
 class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixin):
     """On-demand orchestrator. Spawned per complex task, self-terminates when done."""
 
-    AVATAR_KIND = "planner"
+    AVATAR_KIND: ClassVar[str] = "planner"
 
     #: Hard cap on a planner's life. A caller awaiting its reply must not wait
     #: longer than this plus delivery: once the cap fires the planner is gone

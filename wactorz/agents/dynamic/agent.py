@@ -27,7 +27,7 @@ import secrets
 import time
 import traceback
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from ...core import topic_bus
 from ...core.actor import Actor, ActorState, Message, MessageType
@@ -116,7 +116,7 @@ class DynamicAgent(Actor):
     #: Generated agents look alike as a group, a screen of code in hand, and
     #: apart by their names. A catalogue recipe names its own character in its
     #: spawn config, which comes before this.
-    AVATAR_KIND = "dynamic"
+    AVATAR_KIND: ClassVar[str] = "dynamic"
 
     #: Whether the stored history (`agent.query_ts` and the rest) is read from
     #: main over the broker rather than from this process's database: true only

@@ -44,7 +44,7 @@ Use the live date/time context from the system prompt to resolve relative dates.
 class GoogleCalendarAgent(LLMAgent):
     """Google Calendar agent for listing, creating, and deleting events."""
 
-    AVATAR_KIND = "google-calendar-agent"
+    AVATAR_KIND: ClassVar[str] = "google-calendar-agent"
 
     #: What this agent's model requests have taken, kept by the base class's
     #: accounting and added to here.

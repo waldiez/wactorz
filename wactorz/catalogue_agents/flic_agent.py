@@ -22,7 +22,7 @@ from collections.abc import Callable, Collection, Iterable
 from dataclasses import asdict, dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.atomic_io import write_private_json
@@ -255,7 +255,7 @@ class FlicAgent(Actor):
     each time and asking costs nothing.
     """
 
-    AVATAR_KIND = "flic"
+    AVATAR_KIND: ClassVar[str] = "flic"
 
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "flic")

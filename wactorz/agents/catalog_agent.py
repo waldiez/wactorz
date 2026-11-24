@@ -31,7 +31,7 @@ import pathlib
 import sys
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from .. import plugins
 from ..core.actor import Actor, Message, MessageType, ReplyError
@@ -782,7 +782,7 @@ class CatalogAgent(Actor):
     Spawns any catalog agent on request by delegating to main's spawn pipeline.
     """
 
-    AVATAR_KIND = "catalog"
+    AVATAR_KIND: ClassVar[str] = "catalog"
 
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "catalog")

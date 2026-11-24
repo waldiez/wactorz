@@ -46,7 +46,7 @@ import re
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from ..core import models
 from ..core.actor import Actor, Message, MessageType, run_callable
@@ -283,7 +283,7 @@ class MeteredLLM:
 class FunctionAgent(Actor):
     """The actor behind a decorated function; see :func:`agent`."""
 
-    AVATAR_KIND = "function"
+    AVATAR_KIND: ClassVar[str] = "function"
 
     def __init__(
         self,

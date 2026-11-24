@@ -79,7 +79,7 @@ def topics_of(value: Any) -> tuple[str, ...]:
 class RecorderAgent(Actor):
     """Records the readings of ``topics`` as Parquet, one source per device or topic."""
 
-    AVATAR_KIND = "recorder"
+    AVATAR_KIND: ClassVar[str] = "recorder"
 
     #: What the catalogue lists it as, and says of it.
     AGENT_NAME = NAME

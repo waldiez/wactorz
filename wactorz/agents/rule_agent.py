@@ -54,7 +54,7 @@ import string
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 import aiohttp
 
@@ -496,7 +496,7 @@ class RuleConfig:
 class RuleAgent(Actor):
     """Runs one :class:`RuleConfig`; see the module docstring."""
 
-    AVATAR_KIND = "rule"
+    AVATAR_KIND: ClassVar[str] = "rule"
 
     def __init__(self, config: RuleConfig, **kwargs: Any) -> None:
         super().__init__(**kwargs)

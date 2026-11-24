@@ -521,7 +521,7 @@ class Actor(ABC):
 
     #: Which of the dashboard's ready-made characters stands for agents of this
     #: class; empty for a character drawn from the agent's name.
-    AVATAR_KIND: str = ""
+    AVATAR_KIND: ClassVar[str] = ""
 
     def __init__(
         self,

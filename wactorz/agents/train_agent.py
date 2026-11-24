@@ -61,7 +61,7 @@ NAME = "trainer"
 class TrainAgent(Actor):
     """Trains ``model`` from ``source`` with ``recipe`` when asked, and sets the shadow when it is better."""
 
-    AVATAR_KIND = "train"
+    AVATAR_KIND: ClassVar[str] = "train"
 
     #: What the catalogue lists it as, and says of it.
     AGENT_NAME = NAME

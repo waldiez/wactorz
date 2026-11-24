@@ -3,7 +3,7 @@ import asyncio
 import logging
 import os
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 from ..config import CONFIG, _env_truthy
 from ..core.actor import Actor, ActorState, Message, MessageType
@@ -36,7 +36,7 @@ class HomeAssistantStateBridgeAgent(Actor):
                                                events to {base_topic}.
     """
 
-    AVATAR_KIND = "ha-state-bridge"
+    AVATAR_KIND: ClassVar[str] = "ha-state-bridge"
 
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "home-assistant-state-bridge")

@@ -49,7 +49,7 @@ This agent never sends email; it only drafts.
 class GmailAgent(LLMAgent):
     """Gmail agent for searching, reading, labeling, and drafting mail."""
 
-    AVATAR_KIND = "gmail-agent"
+    AVATAR_KIND: ClassVar[str] = "gmail-agent"
 
     #: What this agent's model requests have taken, kept by the base class's
     #: accounting and added to here.

@@ -187,7 +187,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     together and keeps the conversation.
     """
 
-    AVATAR_KIND = "main"
+    AVATAR_KIND: ClassVar[str] = "main"
 
     DESCRIPTION = "Main orchestrator: spawns agents, routes tasks, manages the multi-agent system"
     CAPABILITIES: ClassVar[list[str]] = [

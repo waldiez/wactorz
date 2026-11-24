@@ -29,7 +29,7 @@ import json
 import logging
 import re
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, ClassVar
 
 import aiohttp
 
@@ -668,7 +668,7 @@ def parse_query(raw: str, today: date | None = None) -> dict[str, Any]:
 class WeatherAgent(Actor):
     """Open-Meteo weather lookup with robust natural-language parsing."""
 
-    AVATAR_KIND = "weather-agent"
+    AVATAR_KIND: ClassVar[str] = "weather-agent"
 
     def __init__(self, llm_provider: LLMProvider | None = None, **kwargs: Any) -> None:
         kwargs.setdefault("name", "weather-agent")

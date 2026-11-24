@@ -18,7 +18,7 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import asyncssh
 
@@ -437,7 +437,7 @@ class InstallerAgent(Actor):
     Uses sys.executable so packages are installed into the active venv.
     """
 
-    AVATAR_KIND = "installer"
+    AVATAR_KIND: ClassVar[str] = "installer"
 
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "installer")

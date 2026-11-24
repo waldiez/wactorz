@@ -24,7 +24,7 @@ const OUTFITS: readonly Outfit[] = ["vest", "suit", "stripes"];
 const NECKWEAR: readonly Neckwear[] = ["gem", "tie", "bowtie", "none"];
 const SPECS: readonly Specs[] = ["round", "square", "shades", "monocle", "none"];
 const MOUTHS: readonly Mouth[] = ["smile", "blush", "beard", "mustache", "open"];
-const HATS: readonly Hat[] = ["", "gradcap", "hardhat", "tophat", "captain", "beanie", "headset"];
+const HATS: readonly Hat[] = ["", "gradcap", "hardhat", "tophat", "captain", "beanie", "headset", "refcap"];
 const ANTENNAE: readonly Antenna[] = [0, 1, 2, "left", "right"];
 
 /** The character every other one starts from. */
@@ -59,14 +59,8 @@ const CAST: Record<string, Member> = {
     installer: { accent: "#ff8a3d", outfit: "stripes", neck: "gem", top: "hardhat", prop: "gear" },
     train: { accent: "#7b61ff", outfit: "suit", neck: "bowtie", top: "gradcap" },
     recorder: { accent: "#ef5b6b", specs: "square", neck: "bowtie", ant: 1, prop: "database" },
-    rule: {
-        accent: "#8a94a6",
-        outfit: "suit",
-        neck: "bowtie",
-        specs: "monocle",
-        face: "mustache",
-        top: "tophat",
-    },
+    // A referee, who applies the rules: striped cap and shirt, and a whistle.
+    rule: { accent: "#f2f4f8", outfit: "stripes", neck: "none", top: "refcap", prop: "whistle" },
     scheduled: { accent: "#ff6fa5", neck: "bowtie", ant: 1, prop: "clock" },
     function: { accent: "#3fbf5f", prop: "function", varied: true },
     dynamic: { prop: "code", varied: true },

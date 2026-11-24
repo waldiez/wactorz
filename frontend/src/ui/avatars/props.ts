@@ -6,7 +6,9 @@
  * for mail, a clock for a schedule, a gear for the installer.
  *
  * Drawn last, at the character's side, and left out at the small sizes where
- * it could not be read.
+ * it could not be read. Each prop is drawn where it is easiest to write, in a
+ * box of its own, and then scaled into a slot that lies wholly inside the
+ * round disc the dashboard shows a character on: a prop is never cut by it.
  */
 import { GOLD, INK, SHADE, SKIN, stroke, tint } from "./svg";
 
@@ -15,6 +17,33 @@ const S26 = stroke(2.6);
 
 /** One prop, drawn in `accent` and its lighter shade. */
 type Prop = (accent: string, light: string) => string;
+
+/** A rectangle of the drawing, as its left, top, right and bottom edges. */
+export type Box = readonly [number, number, number, number];
+
+/** Where most props are drawn: the lower right of the drawing. */
+const CORNER: Box = [94, 94, 126, 127];
+
+/** The props drawn somewhere else, by name, with the box their drawing fills. */
+const DRAWN_ELSEWHERE: Record<string, Box> = {
+    database: [0, 98, 34, 126],
+    thought: [98, 9, 124, 39],
+};
+
+/** What a prop is scaled into: a square, by its centre and its side, inside the disc. */
+interface Slot {
+    cx: number;
+    cy: number;
+    side: number;
+}
+
+/** In the hand, at the lower right, clear of the corner where a card puts its state dot. */
+const HAND: Slot = { cx: 95, cy: 98, side: 24 };
+/** Beside the head, at the upper right, for what a character thinks rather than holds. */
+const BESIDE_HEAD: Slot = { cx: 97, cy: 31, side: 22 };
+
+/** The props that go beside the head rather than in the hand. */
+const BESIDE: ReadonlySet<string> = new Set(["thought"]);
 
 const CALENDAR_DAYS: [number, number, boolean][] = [
     [100, 111, false],
@@ -34,6 +63,12 @@ function around(part: string, cx: number, cy: number): string {
 }
 
 const PROPS: Record<string, Prop> = {
+    whistle: accent =>
+        `<path d="M100 107 Q94 98 103 95.5" fill="none" stroke="${accent}" stroke-width="2.4" stroke-linecap="round"/>` +
+        `<rect x="114" y="104.5" width="12" height="7" rx="1.8" fill="${SKIN}" ${S26}/>` +
+        `<rect x="95" y="104" width="23" height="16" rx="8" fill="${SKIN}" ${S26}/>` +
+        `<circle cx="103" cy="112" r="3.4" fill="${INK}"/>` +
+        `<path d="M108 108 Q112 107.5 114.5 109" fill="none" stroke="${SHADE}" stroke-width="2" stroke-linecap="round"/>`,
     envelope: accent =>
         `<rect x="95" y="102" width="30" height="21" rx="3" fill="${SKIN}" ${S26}/>` +
         `<path d="M96 104 L110 115 L124 104" fill="none" ${S26}/>` +
@@ -144,7 +179,38 @@ const PROPS: Record<string, Prop> = {
 /** The names of the props there are. */
 export const PROP_NAMES: readonly string[] = Object.keys(PROPS);
 
-/** The prop named `kind` in `accent`, or nothing for a name that is not one. */
+/** The box the prop named `kind` is drawn in. */
+export function boxOf(kind: string): Box {
+    return Object.hasOwn(DRAWN_ELSEWHERE, kind) ? DRAWN_ELSEWHERE[kind]! : CORNER;
+}
+
+/** The square the prop named `kind` ends up in, as a box. */
+export function placedBox(kind: string): Box {
+    const slot = BESIDE.has(kind) ? BESIDE_HEAD : HAND;
+    const half = slot.side / 2;
+    return [slot.cx - half, slot.cy - half, slot.cx + half, slot.cy + half];
+}
+
+/** Two decimals, which is all the drawing is written to. */
+function short(n: number): string {
+    return String(Math.round(n * 100) / 100);
+}
+
+/** The transform that scales the box `kind` is drawn in into its slot, keeping its shape. */
+function placement(kind: string): string {
+    const [x0, y0, x1, y1] = boxOf(kind);
+    const [sx0, sy0, sx1, sy1] = placedBox(kind);
+    const k = Math.min((sx1 - sx0) / (x1 - x0), (sy1 - sy0) / (y1 - y0));
+    return (
+        `translate(${short((sx0 + sx1) / 2)} ${short((sy0 + sy1) / 2)}) scale(${short(k)}) ` +
+        `translate(${short(-(x0 + x1) / 2)} ${short(-(y0 + y1) / 2)})`
+    );
+}
+
+/** The prop named `kind` in `accent`, placed in its slot, or nothing for a name that is not one. */
 export function prop(kind: string, accent: string): string {
-    return Object.hasOwn(PROPS, kind) ? PROPS[kind]!(accent, tint(accent, 0.45)) : "";
+    if (!Object.hasOwn(PROPS, kind)) {
+        return "";
+    }
+    return `<g transform="${placement(kind)}">${PROPS[kind]!(accent, tint(accent, 0.45))}</g>`;
 }

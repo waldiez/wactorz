@@ -55,6 +55,14 @@ describe("the character an agent gets", () => {
         expect([...KINDS].sort()).toEqual([...named].sort());
     });
 
+    it("draws rule as a referee, and no ready-made character with a beard or a moustache", () => {
+        const rule = lookFor("rule", { kind: "rule" }, "running");
+        expect(rule).toMatchObject({ outfit: "stripes", top: "refcap", prop: "whistle" });
+        for (const kind of KINDS) {
+            expect(["beard", "mustache"], kind).not.toContain(lookFor(kind, { kind }, "running").face);
+        }
+    });
+
     it("is made up from its name when it names no kind, the same every time", () => {
         const first = lookFor("pump-watcher", undefined, "running");
         expect(lookFor("pump-watcher", {}, "running")).toEqual(first);

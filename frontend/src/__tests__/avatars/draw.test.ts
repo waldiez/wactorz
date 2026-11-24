@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { KINDS, lookFor, type Mood } from "../../ui/avatars/cast";
 import { avatarSvg, avatarUrl, type Look } from "../../ui/avatars/draw";
-import { PROP_NAMES, prop } from "../../ui/avatars/props";
+import { boxOf, placedBox, PROP_NAMES, prop, type Box } from "../../ui/avatars/props";
 import { bright, deep, isColour, luminance, shadeOf, tint } from "../../ui/avatars/svg";
 
 const MOODS: readonly Mood[] = ["running", "initializing", "late", "stopped", "failed"];
@@ -18,6 +18,123 @@ function parsed(svg: string): Document {
     expect(doc.querySelector("parsererror")).toBeNull();
     return doc;
 }
+
+/** How far a stroke may reach past the points a shape is drawn through. */
+const STROKE_SLACK = 3;
+
+/** Every point a path's commands pass through or bend toward, absolute and relative alike. */
+function pathPoints(d: string): [number, number][] {
+    const tokens = d.match(/[a-zA-Z]|-?\d*\.?\d+(?:e-?\d+)?/g) ?? [];
+    const points: [number, number][] = [];
+    let [x, y] = [0, 0];
+    let command = "";
+    let i = 0;
+    const next = (): number => Number(tokens[i++]);
+    while (i < tokens.length) {
+        if (/[a-zA-Z]/.test(tokens[i]!)) {
+            command = tokens[i++]!;
+        }
+        const relative = command === command.toLowerCase();
+        const [ox, oy] = relative ? [x, y] : [0, 0];
+        switch (command.toUpperCase()) {
+            case "Z":
+                continue;
+            case "H":
+                x = ox + next();
+                break;
+            case "V":
+                y = oy + next();
+                break;
+            case "Q":
+                points.push([ox + next(), oy + next()]);
+                [x, y] = [ox + next(), oy + next()];
+                break;
+            case "C":
+                points.push([ox + next(), oy + next()], [ox + next(), oy + next()]);
+                [x, y] = [ox + next(), oy + next()];
+                break;
+            case "A":
+                i += 5; // radii, rotation and flags: the arc's end is what is checked
+                [x, y] = [ox + next(), oy + next()];
+                break;
+            default: // M, L, T
+                [x, y] = [ox + next(), oy + next()];
+        }
+        points.push([x, y]);
+    }
+    return points;
+}
+
+/** The points an element of a prop's drawing reaches. A rotated part is checked by its turning point. */
+function pointsOf(node: Element): [number, number][] {
+    const n = (name: string): number => Number(node.getAttribute(name) ?? 0);
+    const turn = node.getAttribute("transform")?.match(/rotate\(\S+ (\S+) (\S+)\)/);
+    if (turn) {
+        return [[Number(turn[1]), Number(turn[2])]];
+    }
+    switch (node.tagName) {
+        case "rect":
+            return [
+                [n("x"), n("y")],
+                [n("x") + n("width"), n("y") + n("height")],
+            ];
+        case "circle":
+            return [
+                [n("cx") - n("r"), n("cy") - n("r")],
+                [n("cx") + n("r"), n("cy") + n("r")],
+            ];
+        case "ellipse":
+            return [
+                [n("cx") - n("rx"), n("cy") - n("ry")],
+                [n("cx") + n("rx"), n("cy") + n("ry")],
+            ];
+        case "path":
+            return pathPoints(node.getAttribute("d") ?? "");
+        default:
+            return [];
+    }
+}
+
+function inside([x, y]: [number, number], [x0, y0, x1, y1]: Box): boolean {
+    return (
+        x >= x0 - STROKE_SLACK && x <= x1 + STROKE_SLACK && y >= y0 - STROKE_SLACK && y <= y1 + STROKE_SLACK
+    );
+}
+
+describe("where a prop goes", () => {
+    it("draws every prop within the box it says it is drawn in", () => {
+        for (const name of PROP_NAMES) {
+            const doc = parsed(`<svg xmlns="http://www.w3.org/2000/svg">${prop(name, "#3fbf5f")}</svg>`);
+            const outside = [...doc.querySelectorAll("rect, circle, ellipse, path")]
+                .flatMap(pointsOf)
+                .filter(point => !inside(point, boxOf(name)));
+            expect(outside, name).toEqual([]);
+        }
+    });
+
+    it("places every prop wholly inside the round disc a character is shown on", () => {
+        for (const name of PROP_NAMES) {
+            const [x0, y0, x1, y1] = placedBox(name);
+            for (const [x, y] of [
+                [x0, y0],
+                [x1, y0],
+                [x0, y1],
+                [x1, y1],
+            ] as const) {
+                expect(Math.hypot(x - 64, y - 64), name).toBeLessThanOrEqual(64);
+            }
+        }
+    });
+
+    it("scales the box a prop is drawn in onto its place, keeping its shape", () => {
+        const drawn = prop("database", "#3fbf5f");
+        const scale = Number(drawn.match(/scale\((\S+)\)/)?.[1]);
+        const [x0, , x1] = boxOf("database");
+        const [px0, , px1] = placedBox("database");
+        expect(scale).toBeCloseTo((px1 - px0) / (x1 - x0), 2);
+        expect(placedBox("thought")).not.toEqual(placedBox("clock"));
+    });
+});
 
 describe("the colours of a character", () => {
     it("knows a colour from anything else", () => {
@@ -69,9 +186,11 @@ describe("a character's drawing", () => {
             ...(["round", "square", "shades", "monocle", "none"] as const).map(specs => ({ specs })),
             ...(["smile", "blush", "beard", "mustache", "open"] as const).map(face => ({ face })),
             ...(["awake", "happy", "thinking", "busy", "asleep", "crashed"] as const).map(look => ({ look })),
-            ...(["", "gradcap", "hardhat", "tophat", "captain", "beanie", "headset"] as const).map(top => ({
-                top,
-            })),
+            ...(["", "gradcap", "hardhat", "tophat", "captain", "beanie", "headset", "refcap"] as const).map(
+                top => ({
+                    top,
+                }),
+            ),
             ...([0, 1, 2, "left", "right"] as const).map(ant => ({ ant })),
         ];
         const drawn = new Map<string, string>();

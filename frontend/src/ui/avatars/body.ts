@@ -14,7 +14,7 @@ export type Outfit = "vest" | "suit" | "stripes";
 /** What sits at a character's collar. */
 export type Neckwear = "gem" | "tie" | "bowtie" | "none";
 /** What a character wears on its head; the tuft hides under any of them. */
-export type Hat = "" | "gradcap" | "hardhat" | "tophat" | "captain" | "beanie" | "headset";
+export type Hat = "" | "gradcap" | "hardhat" | "tophat" | "captain" | "beanie" | "headset" | "refcap";
 
 /** The underside of the collar band; its top edge covers the chin. */
 const BAND = 94.6;
@@ -146,6 +146,12 @@ const HATS: Record<Exclude<Hat, "">, (accent: string) => string> = {
             `<circle cx="64" cy="9" r="5" fill="${SKIN}" ${headStroke(3)}/>`
         );
     },
+    // A referee's cap: black and white panels, a peak in the accent colour.
+    refcap: accent =>
+        `<path d="M31 37 Q30 12 64 11 Q98 12 97 37 Z" fill="${INK}" ${headStroke()}/>` +
+        `<path d="M44 15 V36 M56 12 V36 M68 12 V36 M80 14 V36" stroke="${SKIN}" stroke-width="4"/>` +
+        `<path d="M31 37 Q30 12 64 11 Q98 12 97 37 Z" fill="none" ${headStroke()}/>` +
+        `<path d="M27 36 H101 Q104 36 103 39 Q64 46 25 39 Q24 36 27 36 Z" fill="${accent}" ${headStroke(2.8)}/>`,
     headset: accent =>
         `<path d="M25 47 Q24 13 64 13 Q104 13 103 47" fill="none" ${headStroke(4.5)}/>` +
         `<path d="M23 64 Q25 80 47 80" fill="none" ${headStroke(2.6)}/>` +

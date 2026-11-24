@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Exercise the SDK's real transports and the server's public wire contract."""
 
+import inspect
 import json
 import sys
 from collections.abc import AsyncIterator
@@ -18,6 +19,11 @@ from mcp.client.stdio import stdio_client
 
 from wactorz.core.integrations import google_mcp
 from wactorz.core.integrations.google_mcp import GoogleMcpClient, GoogleMcpConfig
+
+
+def _normalize_descriptions(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Python versions differ in whether compiled docstrings retain indentation."""
+    return [{**item, "description": inspect.cleandoc(item["description"])} for item in items]
 
 
 class _WactorzBackend:
@@ -46,13 +52,15 @@ async def test_stdio_preserves_tools_resources_and_calls() -> None:
             await client.initialize()
             tools = await client.list_tools()
             resources = await client.list_resources()
-            assert [
-                t.model_dump(mode="json", by_alias=True, exclude_none=True) for t in tools.tools
-            ] == expected["tools"]
-            assert [
-                r.model_dump(mode="json", by_alias=True, exclude_none=True)
-                for r in resources.resources
-            ] == expected["resources"]
+            assert _normalize_descriptions(
+                [t.model_dump(mode="json", by_alias=True, exclude_none=True) for t in tools.tools]
+            ) == _normalize_descriptions(expected["tools"])
+            assert _normalize_descriptions(
+                [
+                    r.model_dump(mode="json", by_alias=True, exclude_none=True)
+                    for r in resources.resources
+                ]
+            ) == _normalize_descriptions(expected["resources"])
             result = await client.call_tool("ask_agent", {"agent_name": "weather", "message": "hi"})
             assert not result.is_error
             assert result.content[0].type == "text"

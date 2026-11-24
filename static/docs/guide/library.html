@@ -403,6 +403,16 @@ A function agent holds an <em>f(x)</em> card; each differs a little by its name.
     <span class="n">AVATAR_KIND</span> <span class="o">=</span> <span class="s2">"monitor"</span>
 </code></pre></div>
 
+<p>A decorated function picks one with <code>avatar</code>: a kind by name, or a dictionary
+of a kind and parts (below). A mistake in it fails when the decorator runs,
+with an <code>AvatarError</code> saying what is wrong:</p>
+<div class="highlight"><pre><span></span><code><span class="nd">@wactorz</span><span class="o">.</span><span class="n">agent</span><span class="p">(</span><span class="n">subscribes</span><span class="o">=</span><span class="s2">"pumps/+/pressure"</span><span class="p">,</span> <span class="n">avatar</span><span class="o">=</span><span class="s2">"monitor"</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">pump_watch</span><span class="p">(</span><span class="n">reading</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span> <span class="o">...</span>
+
+<span class="nd">@wactorz</span><span class="o">.</span><span class="n">agent</span><span class="p">(</span><span class="n">avatar</span><span class="o">=</span><span class="p">{</span><span class="s2">"kind"</span><span class="p">:</span> <span class="s2">"monitor"</span><span class="p">,</span> <span class="s2">"accent"</span><span class="p">:</span> <span class="s2">"#2bb3a3"</span><span class="p">,</span> <span class="s2">"prop"</span><span class="p">:</span> <span class="s2">"gear"</span><span class="p">})</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">boiler_watch</span><span class="p">(</span><span class="n">reading</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span> <span class="o">...</span>
+</code></pre></div>
+
 <p>The kinds are <code>main</code>, <code>planner</code>, <code>llm</code>, <code>monitor</code>, <code>home-assistant</code>,
 <code>ha-actuator</code>, <code>ha-map</code>, <code>ha-state-bridge</code>, <code>installer</code>, <code>train</code>, <code>recorder</code>,
 <code>rule</code>, <code>scheduled</code>, <code>function</code>, <code>dynamic</code> (an agent generated from code, holding a
@@ -410,7 +420,8 @@ screen of <code>&lt;/&gt;</code>), <code>catalog</code>, and the catalogue's rec
 name (<code>weather-agent</code>, <code>flic</code>, <code>gmail-agent</code>, <code>google-calendar-agent</code>,
 <code>doc-to-pptx-agent</code>, <code>anomaly-detector</code>, <code>smart-energy</code>, <code>manual-agent</code>,
 <code>reachy-mini</code>, <code>timeseries-collector</code>).</p>
-<p>A spawn config may carry an <code>avatar</code> of its own, a kind or parts over one:</p>
+<p>A spawn config may carry an <code>avatar</code> of its own, a kind or parts over one,
+and it comes before what the class or the decorator gave:</p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pump-watch"</span><span class="p">,</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"dynamic"</span><span class="p">,</span><span class="w"> </span><span class="nt">"code"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
 <span class="w"> </span><span class="nt">"avatar"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"monitor"</span><span class="p">,</span><span class="w"> </span><span class="nt">"accent"</span><span class="p">:</span><span class="w"> </span><span class="s2">"#2bb3a3"</span><span class="p">,</span><span class="w"> </span><span class="nt">"top"</span><span class="p">:</span><span class="w"> </span><span class="s2">"hardhat"</span><span class="p">,</span><span class="w"> </span><span class="nt">"prop"</span><span class="p">:</span><span class="w"> </span><span class="s2">"gear"</span><span class="p">}}</span>
 </code></pre></div>
@@ -458,8 +469,8 @@ name (<code>weather-agent</code>, <code>flic</code>, <code>gmail-agent</code>, <
 </tbody>
 </table>
 <p>An avatar is decoration: a kind or a part the dashboard does not know is
-passed over, and one that is not a small dictionary of words is left out with
-a warning in the log; neither stops the agent. The eyes show how the agent is
+passed over, and one in a spawn config that is not a small dictionary of words
+is left out with a warning in the log; neither stops the agent. The eyes show how the agent is
 doing, which is the dashboard's to decide, not the agent's.</p>
 <h2 id="more-than-one-at-a-time">More than one at a time</h2>
 <p>By default an agent handles one message of a topic at a time, in order, and
@@ -1018,6 +1029,12 @@ NotFoundError</code> does. The message always says what went wrong.</p>
 <td><code>ConcurrencyError</code></td>
 <td><code>ValueError</code></td>
 <td><code>concurrency</code> below one</td>
+</tr>
+<tr>
+<td><code>wactorz.agent</code></td>
+<td><code>AvatarError</code></td>
+<td><code>ValueError</code></td>
+<td>an <code>avatar</code> that is not a kind's name or a small dictionary of parts</td>
 </tr>
 <tr>
 <td><code>Actor.subscribe</code></td>

@@ -179,6 +179,23 @@ class TestTheNodeRunningOne:
         (answer,) = [p for t, p, _r in runner.published if t == "reply/here"]
         assert answer["echo"] == 5
 
+    async def test_options_naming_what_the_system_sets_do_not_start_it(
+        self, runner: RecordingRunner, targets: dict[str, str]
+    ) -> None:
+        await runner.spawn_agent(
+            {
+                "name": "echo",
+                "type": "module",
+                "target": targets["echo"],
+                "options": {"name": "main"},
+                "_migration_token": "t",
+            }
+        )
+
+        assert runner.hosted("echo") is None
+        (ack,) = [p for t, p, _r in runner.published if t.endswith("/spawn_ack")]
+        assert "refused" in ack and "which the system sets" in str(ack)
+
     async def test_a_plain_value_comes_back_as_a_result(
         self, runner: RecordingRunner, targets: dict[str, str]
     ) -> None:

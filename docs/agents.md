@@ -697,7 +697,9 @@ restored from the spawn registry after a restart. A spawn config may also name
 it by path, `{"type": "module", "target": "mypkg.agents:detect", "name":
 "imu-left", "options": {...}}`, which is how one function runs under several
 names — but only a registered target is accepted, because a spawn config can be
-model-authored.
+model-authored. For the same reason its `options` may not name `name`,
+`actor_id`, `persistence_dir` or `llm_provider`: those are the system's to
+choose, and a spawn whose options name one is refused, saying which.
 
 ### Profiles
 

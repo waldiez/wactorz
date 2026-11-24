@@ -39,6 +39,12 @@ MODULE_TYPE = "module"
 #: The environment variable naming targets to load, comma or space separated.
 ENV_VAR = "WACTORZ_AGENTS"
 
+#: The arguments the system decides for an agent it builds: who it is, where
+#: its state lives and which model it uses. A spawn's ``options`` may not name
+#: one, since an option and the system's own value would arrive as the same
+#: keyword argument and the agent could not tell which it was given.
+SYSTEM_ARGUMENTS = frozenset({"actor_id", "name", "persistence_dir", "llm_provider"})
+
 #: The library agents the package itself brings, found on main and on every
 #: node alike, so a spawn naming one by target is built wherever it lands.
 #: None starts with the system: each waits in the catalogue to be asked for.
@@ -96,7 +102,14 @@ class AgentPlugin:
         ``actor_id`` is the id the spawn registry keeps for the agent. A class
         whose own ``__init__`` does not take one is given it once built, so the
         agent runs under the id main keeps whatever its author wrote.
+
+        Options naming one of :data:`SYSTEM_ARGUMENTS` are refused with
+        :class:`SystemArgumentOptionError`: a spawn config can be written by
+        the model, and those values are the ones main checked and chose.
         """
+        clashing = system_arguments_in(options)
+        if clashing:
+            raise SystemArgumentOptionError(self.name, clashing)
         if self.kind == "function":
             spec: AgentSpec = self.obj
             return spec.build(
@@ -154,6 +167,13 @@ class AgentPlugin:
 def is_module_config(config: dict[str, Any]) -> bool:
     """Whether a spawn config names a plugin to build rather than code to run."""
     return (config.get("type") or "").strip().lower() == MODULE_TYPE
+
+
+def system_arguments_in(options: Any) -> list[str]:
+    """The keys of a spawn's ``options`` that only the system may set, sorted."""
+    if not isinstance(options, dict):
+        return []
+    return sorted(SYSTEM_ARGUMENTS.intersection(options))
 
 
 def targets_in(value: str) -> list[str]:
@@ -217,6 +237,18 @@ def _init_parameters(cls: type) -> tuple[set[str], bool]:
 
 def _first_line(text: str | None) -> str:
     return (text or "").strip().split("\n")[0].strip()
+
+
+class SystemArgumentOptionError(ValueError):
+    """A spawn whose options name an argument only the system sets."""
+
+    def __init__(self, agent: str, keys: list[str]) -> None:
+        super().__init__(
+            f"the options for {agent!r} name {', '.join(keys)}, which the system sets "
+            "itself: give the agent's name at the top of the spawn config, and leave its "
+            "id, state folder and model to the system"
+        )
+        self.keys = keys
 
 
 class NotAnAgentError(TypeError):

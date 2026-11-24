@@ -282,6 +282,32 @@ class TestANodeMainWouldNotHearFrom:
         assert isinstance(await Placement(host).place(config), NotSpawned)
 
 
+@pytest.mark.usefixtures("unset")
+class TestOptionsNamingWhatTheSystemSets:
+    """Refused before it goes anywhere, saying which keys, wherever it would have run."""
+
+    @pytest.mark.parametrize("node", ["", "raspberrypi"])
+    async def test_a_module_spawn_is_refused(self, host: _Host, node: str) -> None:
+        config = {
+            "name": "notes-1",
+            "type": "module",
+            "target": "pkg.notes:Notes",
+            "node": node,
+            "options": {"folder": "inbox", "persistence_dir": "/tmp/elsewhere", "name": "main"},
+        }
+
+        placed = await Placement(host).place(config)
+
+        assert isinstance(placed, NotSpawned)
+        assert placed.name == "notes-1"
+        assert "name, persistence_dir" in placed.reason
+
+    async def test_other_options_are_placed(self, host: _Host) -> None:
+        config = {"name": "notes-1", "type": "module", "options": {"folder": "inbox"}}
+
+        assert await Placement(host).place(config) == config
+
+
 @pytest.mark.usefixtures("sandboxed")
 class TestAskingForMain:
     async def test_allow_lets_it_run_on_main(

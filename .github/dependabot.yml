@@ -100,6 +100,11 @@ updates:
       # with its author, not a version bump.
       - dependency-name: "deepgram-sdk"
         update-types: ["version-update:semver-major"]
+      # The Reachy Mini SDK is pinned twice, in the `reachy` extra and in the
+      # catalogue recipe (`_REACHY_MINI_SDK_VERSION`), and a test holds them
+      # equal. Moving it is checked against the simulator and the robot
+      # (docs/reachy/developer-guide.md), so it is done by hand, both pins at once.
+      - dependency-name: "reachy-mini"
       # Pinned exactly in the docs extra so the committed static/docs is
       # reproducible: a bump changes the generated HTML, so it is made by hand
       # together with `make docs-build`.

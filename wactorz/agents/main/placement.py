@@ -41,6 +41,7 @@ from ...config import CONFIG, MODEL_CODE_NODE, MODEL_CODE_ON_MAIN
 from ...core.outbound import Answer
 from ...core.packages import APPROVAL_TIMEOUT_S
 from ...core.refusals import REFUSED, UNANSWERED, RecentRefusals
+from ...plugins import SystemArgumentOptionError, system_arguments_in
 from ..dynamic.safety import parse_program
 from ..mixins import KeptHere, NotSpawned, PlacedOnNode
 from .spawn_registry import address_of
@@ -172,8 +173,14 @@ class Placement:
 
         A node main would not hear from is refused here, whoever chose it, so
         the caller can say why at once rather than wait for an agent that never
-        counts as started.
+        counts as started. So are options naming what the system sets itself
+        (`plugins.SYSTEM_ARGUMENTS`), which the agent would be built with in
+        place of the name and folder checked here.
         """
+        clashing = system_arguments_in(config.get("options"))
+        if clashing:
+            name = str(config.get("name") or "")
+            return NotSpawned(name, str(SystemArgumentOptionError(name, clashing)))
         placed = await self._placed(config)
         if isinstance(placed, NotSpawned):
             return placed

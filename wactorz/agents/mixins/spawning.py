@@ -51,7 +51,7 @@ from ...core.pip import PIP_TIMEOUT_S, install_wait_s, missing_requirements, pen
 from ...core.state_codec import decode_state
 from ...core.topic_bus import TopicContract
 from ...core.topics import agent_topic, topic_name_error
-from ...plugins import for_target
+from ...plugins import SystemArgumentOptionError, for_target, system_arguments_in
 from ..dependency_install import InstallOutcome, outcome_from_result
 from ..lookup import find_main_actor
 from ..rule_agent import RuleAgent, RuleConfig
@@ -354,6 +354,18 @@ class SpawnMixin(_Host):
             # built with it could never be reached — and a message to it that the
             # outbox cannot send would stall every message behind it.
             logger.error("[%s] Cannot spawn %r: %s", self.name, name, problem)
+            return None
+        clashing = system_arguments_in(config.get("options"))
+        if clashing:
+            # Checked on every route here, the registry's included: an agent
+            # built with these would run under another name, folder or model
+            # than the ones just checked.
+            logger.error(
+                "[%s] Cannot spawn %r: %s",
+                self.name,
+                name,
+                SystemArgumentOptionError(str(name), clashing),
+            )
             return None
         try:
             agent_state_dir(self._persistence_dir.parent, str(name))

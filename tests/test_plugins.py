@@ -191,6 +191,83 @@ class TestBuildingAClassThatTakesKeywords:
         assert built.actor_id == kept
 
 
+class TakesTheSystemsArguments(Actor):
+    """A library agent that names every argument the system decides, and counts its builds."""
+
+    built: ClassVar[int] = 0
+
+    def __init__(
+        self,
+        folder: str = "notes",
+        *,
+        actor_id: str | None = None,
+        name: str | None = None,
+        persistence_dir: str | None = None,
+        llm_provider: Any = None,
+    ) -> None:
+        super().__init__(actor_id=actor_id, name=name, persistence_dir=persistence_dir)
+        type(self).built += 1
+        self.folder = folder
+        self.llm_provider = llm_provider
+
+    async def handle_message(self, msg: Message) -> None:
+        return None
+
+
+SYSTEM_OPTIONS = [
+    {"name": "main"},
+    {"persistence_dir": "/tmp/elsewhere"},
+    {"llm_provider": None},
+    {"actor_id": "id-main"},
+]
+
+
+class TestOptionsNamingWhatTheSystemSets:
+    """A spawn config can be written by the model: its options do not choose the system's values."""
+
+    @pytest.mark.parametrize("option", SYSTEM_OPTIONS, ids=lambda o: next(iter(o)))
+    def test_a_class_is_not_built(self, tmp_path: Path, option: dict[str, Any]) -> None:
+        TakesTheSystemsArguments.built = 0
+        plugin = plugins.plugin_from(TakesTheSystemsArguments)
+
+        with pytest.raises(plugins.SystemArgumentOptionError, match=next(iter(option))) as raised:
+            plugin.build(
+                name="notes-1",
+                persistence_dir=str(tmp_path),
+                llm_provider=object(),
+                options={"folder": "inbox", **option},
+            )
+
+        assert raised.value.keys == list(option)
+        assert TakesTheSystemsArguments.built == 0
+
+    @pytest.mark.parametrize("option", SYSTEM_OPTIONS, ids=lambda o: next(iter(o)))
+    def test_a_function_is_not_built_either(self, tmp_path: Path, option: dict[str, Any]) -> None:
+        with pytest.raises(plugins.SystemArgumentOptionError):
+            plugins.plugin_from(decorated).build(persistence_dir=str(tmp_path), options=option)
+
+    def test_every_clashing_key_is_named(self) -> None:
+        options = {"persistence_dir": "/x", "name": "main", "folder": "inbox"}
+
+        assert plugins.system_arguments_in(options) == ["name", "persistence_dir"]
+        assert plugins.system_arguments_in(None) == []
+
+    def test_the_system_s_values_reach_the_agent_otherwise(self, tmp_path: Path) -> None:
+        provider = object()
+
+        built = plugins.plugin_from(TakesTheSystemsArguments).build(
+            name="notes-1",
+            persistence_dir=str(tmp_path),
+            llm_provider=provider,
+            options={"folder": "inbox"},
+        )
+
+        assert isinstance(built, TakesTheSystemsArguments)
+        assert built.name == "notes-1" and built.folder == "inbox"
+        assert built.llm_provider is provider
+        assert built._persistence_dir == tmp_path / "notes-1"
+
+
 class MachineRecorder(RecorderAgent):
     AGENT_NAME = "machine-recorder"
 

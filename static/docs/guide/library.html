@@ -348,8 +348,8 @@ cannot follow the rule. A node from before this release takes no code from
 main, and is refused the move until it is deployed again.</p>
 <p>On the node the agent subscribes, publishes and persists as it does on main,
 answers tasks sent to it by name, and keeps its state under the node's state
-directory. It has no model there: <code>me.llm</code> is <code>None</code>, since a node makes no
-model calls.</p>
+directory. It has no model there: <code>me.llm</code> is <code>None</code>, and <code>me.llm_for(...)</code>
+raises <code>ProviderUnavailableError</code>, since a node makes no model calls.</p>
 <div class="highlight"><pre><span></span><code>/migrate imu-anomaly rpi-kitchen      # its code, packages and models go with it
 /migrate imu-anomaly local            # and back, with its state
 </code></pre></div>
@@ -689,7 +689,24 @@ its key is persisted rather than with every counter, and a migration carries it.
 <h2 id="spend-made-elsewhere">Spend made elsewhere</h2>
 <p>A call through <code>me.llm</code> is counted as it returns: tokens and cost on the
 agent's card, and against the cost limit, with nothing to write in the
-function. A model called another way, through LangChain, AG2 or an SDK
+function. A model other than the system's is counted the same way when it
+comes from <code>me.llm_for(provider, model)</code>, which answers just as <code>me.llm</code> does:</p>
+<div class="highlight"><pre><span></span><code><span class="nd">@wactorz</span><span class="o">.</span><span class="n">agent</span><span class="p">(</span><span class="n">subscribes</span><span class="o">=</span><span class="s2">"sensors/+/reading"</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">classify</span><span class="p">(</span><span class="n">reading</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">me</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">FunctionAgent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+    <span class="n">small</span> <span class="o">=</span> <span class="n">me</span><span class="o">.</span><span class="n">llm_for</span><span class="p">(</span><span class="s2">"anthropic"</span><span class="p">,</span> <span class="s2">"claude-haiku-5-5"</span><span class="p">)</span>  <span class="c1"># the system stays on its own model</span>
+    <span class="n">label</span><span class="p">,</span> <span class="n">_usage</span> <span class="o">=</span> <span class="k">await</span> <span class="n">small</span><span class="o">.</span><span class="n">complete</span><span class="p">([{</span><span class="s2">"role"</span><span class="p">:</span> <span class="s2">"user"</span><span class="p">,</span> <span class="s2">"content"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">reading</span><span class="p">)}])</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">"label"</span><span class="p">:</span> <span class="n">label</span><span class="p">}</span>
+</code></pre></div>
+
+<p>Its key and endpoint are the ones the system reads for that provider
+(<code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code> and <code>OPENAI_URL</code>, <code>GEMINI_API_KEY</code>,
+<code>NIM_API_KEY</code>, <code>OLLAMA_URL</code>); the call names neither. <code>LLM_API_KEY</code> belongs to
+the system's own provider and is used only when that is the one asked for.
+Each provider and model is built once per agent, on the first call. One that
+cannot be built here, for want of a key or of its extra, raises
+<code>ProviderUnavailableError</code> with the reason, rather than answering on the
+system's model at another price.</p>
+<p>A model called another way, through LangChain, AG2 or an SDK
 directly, is invisible until the agent says what it spent:</p>
 <div class="highlight"><pre><span></span><code><span class="n">me</span><span class="o">.</span><span class="n">record_llm_cost</span><span class="p">(</span><span class="mf">0.0012</span><span class="p">,</span> <span class="n">input_tokens</span><span class="o">=</span><span class="mi">300</span><span class="p">,</span> <span class="n">output_tokens</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">"gpt-4o-mini"</span><span class="p">)</span>
 </code></pre></div>
@@ -1100,6 +1117,12 @@ NotFoundError</code> does. The message always says what went wrong.</p>
 <td>a label that cannot be taken as written, or from an agent that cannot reach main's database</td>
 </tr>
 <tr>
+<td><code>FunctionAgent.llm_for</code></td>
+<td><code>ProviderUnavailableError</code></td>
+<td><code>ValueError</code></td>
+<td>a provider that cannot be built here: unknown, no model named, no key, its extra not installed, or on a node</td>
+</tr>
+<tr>
 <td><code>artifact_path</code>, <code>load_model</code></td>
 <td><code>UnnamedModelError</code></td>
 <td><code>KeyError</code></td>
@@ -1229,7 +1252,7 @@ it refuses in its reply in the same way.</p>
 </tr>
 <tr>
 <td><code>wactorz.FunctionAgent</code></td>
-<td>the actor behind a decorated function: <code>call</code>, <code>options</code>, <code>log</code></td>
+<td>the actor behind a decorated function: <code>call</code>, <code>options</code>, <code>log</code>, <code>llm</code>, <code>llm_for</code></td>
 </tr>
 <tr>
 <td><code>wactorz.RuleConfig</code>, <code>RuleCondition</code>, <code>RuleAction</code>, <code>wactorz.RuleAgent</code></td>

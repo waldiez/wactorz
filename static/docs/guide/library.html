@@ -714,19 +714,25 @@ directly, is invisible until the agent says what it spent:</p>
 <p>That joins the agent's card and the process-wide total the cost limit is
 checked against. Two helpers do it for the common cases:</p>
 <ul>
-<li><code>wactorz.core.integrations.langchain.CostCallback(me, prices={...})</code> is a LangChain
+<li><code>wactorz.core.integrations.langchain.CostCallback(me)</code> is a LangChain
   callback handler: pass it in a chain's or a graph's <code>config</code>, and every
-  model call is reported with its tokens. LangChain reports tokens, not money,
-  so <code>prices</code> maps a model name to dollars per million input and output
-  tokens; an unpriced model is counted at no cost.</li>
-<li><code>wactorz.core.integrations.ag2.record_reply(me, reply, prices={...})</code> reads
-  AG2's usage report for a reply, tokens by model, prices them and reports
-  them. <code>model_config(me)</code> in the same module gives AG2's agents the model
-  the system runs on. AG2 1.x, <code>import ag2</code>, plus AG2's extra for the
-  provider (<code>pip install 'ag2[anthropic]'</code>, <code>'ag2[openai]'</code>), which carries
-  that provider's SDK at the version AG2 asks for. A price table is keyed by
-  model family and matches the resolved name a provider reports as a prefix.</li>
+  model call is reported with its tokens and its cost, priced as Wactorz
+  prices its own calls, a long-prompt tier included.</li>
+<li><code>wactorz.core.integrations.ag2.record_reply(me, reply)</code> reads AG2's usage
+  report for a reply, tokens by model, prices them and reports them. The
+  report sums a whole run, so each model is priced at its base rate: no one
+  request's prompt is known to decide a tier. <code>model_config(me)</code> in the same
+  module gives AG2's agents the model the system runs on. AG2 1.x, <code>import
+  ag2</code>, plus AG2's extra for the provider (<code>pip install 'ag2[anthropic]'</code>,
+  <code>'ag2[openai]'</code>), which carries that provider's SDK at the version AG2 asks
+  for.</li>
 </ul>
+<p>Wactorz's prices come from the LiteLLM catalogue, else a table of its own. For
+prices of yours, negotiated or self-hosted, both take <code>prices=</code>, dollars per
+million input and output tokens by model name (<code>{"gpt-5.4-mini": (0.75,
+4.50)}</code>), which wins for the models it names. A table is keyed by model family
+and matches the resolved name a provider reports as a prefix. A model priced
+nowhere is counted at no cost, its tokens still shown.</p>
 <h2 id="langgraph-langchain-and-ag2">LangGraph, LangChain and AG2</h2>
 <p>Wactorz does not compete with them. LangGraph and AG2 decide how an agent
 thinks: the graph, the prompts, the conversation. Wactorz keeps that running,

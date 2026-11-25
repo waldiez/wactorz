@@ -218,6 +218,53 @@ class TestARefusalSaysWhy:
         ):
             agent_provider("openai", "gpt-5.4-nano")
 
+    def test_a_gemini_refusal_names_the_variables_read_when_none_is_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def unkeyed(model: str | None, shared_key: str) -> LLMProvider:
+            raise ValueError("No API key was provided.")
+
+        monkeypatch.setitem(llm_factory._PROVIDERS, "gemini", unkeyed)
+        _system(monkeypatch, "openai", "sk-system")
+
+        with pytest.raises(
+            ProviderUnavailableError,
+            match=r"No API key was provided\. \(set GEMINI_API_KEY or GOOGLE_API_KEY\)$",
+        ):
+            agent_provider("gemini", "gemini-3.5-flash-lite")
+
+    @pytest.mark.parametrize("variable", ["GEMINI_API_KEY", "GOOGLE_API_KEY"])
+    def test_a_gemini_refusal_with_a_key_set_is_the_clients_alone(
+        self, monkeypatch: pytest.MonkeyPatch, variable: str
+    ) -> None:
+        # The key is there, so naming it would send the reader the wrong way.
+        def rejected(model: str | None, shared_key: str) -> LLMProvider:
+            raise ValueError("Project not found.")
+
+        monkeypatch.setitem(llm_factory._PROVIDERS, "gemini", rejected)
+        monkeypatch.setenv(variable, "test-key-not-used")
+        _system(monkeypatch, "openai", "sk-system")
+
+        with pytest.raises(ProviderUnavailableError, match=r"Project not found\.$"):
+            agent_provider("gemini", "gemini-3.5-flash-lite")
+
+    @pytest.mark.skipif(
+        importlib.util.find_spec("google.genai") is None, reason="the google extra is not installed"
+    )
+    def test_the_real_gemini_client_without_a_key_is_refused_naming_them(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for variable in (
+            "GOOGLE_GENAI_USE_VERTEXAI",
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_CLOUD_LOCATION",
+        ):
+            monkeypatch.delenv(variable, raising=False)
+        _system(monkeypatch, "openai", "sk-system")
+
+        with pytest.raises(ProviderUnavailableError, match="set GEMINI_API_KEY or GOOGLE_API_KEY"):
+            agent_provider("gemini", "gemini-3.5-flash-lite")
+
     def test_a_refusal_is_a_value_error(self) -> None:
         assert issubclass(ProviderUnavailableError, ValueError)
 

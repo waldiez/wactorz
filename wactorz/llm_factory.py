@@ -215,14 +215,36 @@ class ProviderUnavailableError(ValueError):
         return cls(f"Provider {provider!r} needs its SDK: pip install 'wactorz[{extra}]'")
 
     @classmethod
-    def failed(cls, provider: str, exc: Exception) -> "ProviderUnavailableError":
-        """The provider's client refused to be built, for its own reason."""
-        return cls(f"Provider {provider!r} could not be built: {exc}")
+    def failed(
+        cls, provider: str, exc: Exception, unset: tuple[str, ...] = ()
+    ) -> "ProviderUnavailableError":
+        """The provider's client refused to be built, for its own reason.
+
+        ``unset`` names the key variables Wactorz reads for the provider when none
+        of them is set, since the client's own message cannot name them.
+        """
+        hint = f" (set {' or '.join(unset)})" if unset else ""
+        return cls(f"Provider {provider!r} could not be built: {exc}{hint}")
 
     @classmethod
     def on_node(cls) -> "ProviderUnavailableError":
         """Asked for on a node, which makes no model calls of its own."""
         return cls("An agent on a node has no model: a node makes no model calls")
+
+
+#: The variables Wactorz reads a provider's key from, for a provider whose client
+#: decides for itself whether it can be built without one: Gemini's takes Vertex
+#: credentials from the environment with no API key, so the key is not checked
+#: here, and only a refusal says which variables were read.
+_KEY_VARIABLES: dict[str, tuple[str, ...]] = {"gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY")}
+
+
+def _unset_key_variables(name: str, shared_key: str) -> tuple[str, ...]:
+    """The key variables ``_KEY_VARIABLES`` lists for ``name``, if none of them is set."""
+    variables = _KEY_VARIABLES.get(name, ())
+    if shared_key or any(os.getenv(variable) for variable in variables):
+        return ()
+    return variables
 
 
 def _anthropic_key_variables(shared_key: str) -> tuple[str, ...]:
@@ -264,7 +286,9 @@ def agent_provider(provider_name: str, model: str) -> LLMProvider:
     except ImportError as exc:
         raise ProviderUnavailableError.not_installed(name, _EXTRAS.get(name, name)) from exc
     except Exception as exc:
-        raise ProviderUnavailableError.failed(name, exc) from exc
+        raise ProviderUnavailableError.failed(
+            name, exc, _unset_key_variables(name, shared_key)
+        ) from exc
 
 
 def _provider_from_spec(spec: str) -> LLMProvider | None:

@@ -19,10 +19,6 @@ from langgraph.graph import END, START, StateGraph
 import wactorz
 from wactorz.core.integrations.langchain import CostCallback
 
-#: Dollars per million input and output tokens, for the LangChain models the
-#: callback may see. Extend for the models you use.
-PRICES = {"gpt-4o-mini": (0.15, 0.60), "gpt-4o": (2.50, 10.00)}
-
 CATEGORIES = ("outage", "billing", "feature", "question")
 
 #: Keywords that decide a category without a model.
@@ -133,4 +129,4 @@ async def triage(ticket: dict, me: wactorz.FunctionAgent) -> dict | None:
 
 async def _run_graph(graph: Any, state: Triage, me: wactorz.FunctionAgent) -> Triage:
     """Invoke with the cost callback, so a LangChain model inside is accounted for."""
-    return await graph.ainvoke(state, config={"callbacks": [CostCallback(me, PRICES)]})
+    return await graph.ainvoke(state, config={"callbacks": [CostCallback(me)]})

@@ -239,6 +239,16 @@ def calc_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     return (input_tokens * price_in + output_tokens * price_out) / _PER_MILLION
 
 
+def base_rates(model: str) -> tuple[float, float] | None:
+    """A short prompt's (input, output) rates for ``model``, in dollars per 1M tokens; None if unpriced.
+
+    For tokens that are a sum over many requests, where no one request's prompt is known: a
+    long-prompt tier is per request, and a sum over it says nothing about any one of them.
+    """
+    price = _price_of(model)
+    return (price.input, price.output) if price is not None else None
+
+
 def _tiers_info(price: Price) -> list[dict[str, float]]:
     return [
         {"above_tokens": tier.above, "input_per_1m": tier.input, "output_per_1m": tier.output}

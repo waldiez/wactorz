@@ -23,17 +23,6 @@ MAX_TURNS = 3
 #: What the critic says when there is nothing left to fix.
 APPROVED = "APPROVED"
 
-#: Dollars per million input and output tokens, by model family. AG2 reports
-#: the model the provider resolved to (`gpt-4o-mini-2024-07-18`), which a
-#: family name matches as a prefix. Add the models you use.
-PRICES = {
-    "gpt-5.4-mini": (0.75, 4.50),
-    "gpt-4o-mini": (0.15, 0.60),
-    "gpt-4o": (2.50, 10.00),
-    "claude-haiku-4-5": (1.00, 5.00),
-    "claude-sonnet-4-6": (3.00, 15.00),
-}
-
 
 def make_agents(config: Any) -> tuple[Agent, Agent]:
     """The writer and the critic, fresh for one draft, on ``config``.
@@ -102,7 +91,7 @@ async def review(draft: dict, me: wactorz.FunctionAgent) -> dict | None:
         verdict = await verdict.ask(f"The revised draft:\n\n{reply.body}")
         turns += 2
     # A reply's usage covers its whole conversation, so each is counted once, at the end.
-    cost = await record_reply(me, reply, prices=PRICES)
-    cost += await record_reply(me, verdict, prices=PRICES)
+    cost = await record_reply(me, reply)
+    cost += await record_reply(me, verdict)
     me.persist("drafts_total", int(me.recall("drafts_total", 0)) + 1)
     return {"id": draft.get("id"), "text": reply.body, "turns": turns, "cost_usd": round(cost, 6)}

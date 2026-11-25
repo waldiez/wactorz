@@ -37,9 +37,7 @@ mosquitto_sub -t tickets/triaged
 async def triage(ticket: dict, me: wactorz.FunctionAgent) -> dict | None:
     graph = me.options.get("_graph") or build_graph(me.llm)  # compiled once, kept on the actor
     me.options["_graph"] = graph
-    result = await graph.ainvoke(
-        {"ticket": ticket}, config={"callbacks": [CostCallback(me, PRICES)]}
-    )
+    result = await graph.ainvoke({"ticket": ticket}, config={"callbacks": [CostCallback(me)]})
     return {"id": ticket["id"], **result}
 ```
 
@@ -55,8 +53,10 @@ Three things to notice:
   `concurrency` set, up to four tickets run at once and order is not kept,
   which is right for tickets and wrong for a sensor stream.
 - **`CostCallback`.** If a node uses a LangChain chat model instead of
-  `me.llm`, the callback reports its tokens and, for models listed in
-  `PRICES`, their cost, so the agent's card shows the spend either way.
+  `me.llm`, the callback reports its tokens and their cost, priced as Wactorz
+  prices its own calls, so the agent's card shows the spend either way. For
+  prices of your own, `CostCallback(me, {"gpt-5.4-mini": (0.75, 4.50)})`
+  (dollars per million input and output tokens) wins for the models it names.
 
 The graph's checkpointer, if you add one, can keep its SQLite file in
 `me.state_dir`, the agent's own directory, which survives restarts.

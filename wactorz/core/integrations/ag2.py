@@ -13,17 +13,20 @@ it cost to the actor that ran it, through
     reply = await writer.ask(text)
     await record_reply(me, reply, prices=PRICES)
 
-AG2 reports tokens by model, not money, so ``prices`` maps a model name to
-dollars per million input and output tokens; the name AG2 reports is the one
-the provider resolved to, so a listed family name matches it as a prefix. An
-unpriced model is counted at no cost. Written for AG2 1.x (``import ag2``);
+AG2 reports tokens by model, not money. They are priced as Wactorz prices
+its own calls, at each model's base rate: the report sums a whole run, so no
+one request's prompt is known to decide a long-prompt tier. ``prices``
+overrides that for the models it names, in dollars per million input and
+output tokens; the name AG2 reports is the one the provider resolved to, so a
+listed family name matches it as a prefix. A model with no price either way
+is counted at no cost. Written for AG2 1.x (``import ag2``);
 the 0.x line, ``import autogen``, is a different library.
 """
 
 import os
 from typing import Any
 
-from .pricing import Prices, cost_of
+from .pricing import Prices, cost_of, total_cost
 
 __all__ = ["Prices", "cost_of", "model_config", "record_reply"]
 
@@ -150,14 +153,15 @@ def _build(extra: str, config_class: Any, **settings: Any) -> Any:
 def usage_totals(report: Any, prices: Prices | None = None) -> tuple[float, int, int, str]:
     """Cost, input tokens, output tokens and the model, from an AG2 usage report.
 
-    The report's per-model breakdown is priced model by model; its total is
-    what the tokens are read from, so a run with no records still counts.
+    The report's per-model breakdown is priced model by model, from ``prices``
+    or at Wactorz's base rate (see the module docstring); its total is what the
+    tokens are read from, so a run with no records still counts.
     """
     prices = prices or {}
     by_model = dict(getattr(report, "by_model", {}) or {})
     cost = 0.0
     for model, usage in by_model.items():
-        cost += cost_of(
+        cost += total_cost(
             prices,
             str(model),
             int(getattr(usage, "prompt_tokens", 0) or 0),

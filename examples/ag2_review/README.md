@@ -34,11 +34,14 @@ OpenAI protocol) or `ag2[gemini]` for the provider you run. Without it the
 agent answers with `AG2's openai client is not usable ... pip install
 'ag2[openai]'` and nothing else happens.
 
-The cost on the card comes from `PRICES` in `agent.py`: dollars per million
-input and output tokens by model family. AG2 reports the model the provider
-resolved to, `gpt-4o-mini-2024-07-18` for `gpt-4o-mini`, and the family name
-matches it as a prefix. A model not in the table is counted at no cost, with
-its tokens still shown; add a line for the model you use.
+The cost on the card is priced as Wactorz prices its own calls, from the
+LiteLLM catalogue or Wactorz's built-in table, at each model's base rate:
+AG2 reports a whole run's tokens, so no one request's prompt is known to
+decide a long-prompt tier. For prices of your own, negotiated or
+self-hosted, pass `prices={"gpt-5.4-mini": (0.75, 4.50)}` to `record_reply`:
+dollars per million input and output tokens, by model family, which wins
+for the models it names. A model priced nowhere is counted at no cost, with
+its tokens still shown.
 
 ## How it works
 
@@ -53,9 +56,7 @@ async def review(draft: dict, me: wactorz.FunctionAgent) -> dict | None:
     while APPROVED not in verdict.body and turns < 2 * MAX_TURNS:
         reply = await reply.ask(f"A reviewer said:\n\n{verdict.body}\n\nRevise accordingly.")
         verdict = await verdict.ask(f"The revised draft:\n\n{reply.body}")
-    cost = await record_reply(me, reply, prices=PRICES) + await record_reply(
-        me, verdict, prices=PRICES
-    )
+    cost = await record_reply(me, reply) + await record_reply(me, verdict)
     return {"id": draft["id"], "text": reply.body, "turns": turns, "cost_usd": cost}
 ```
 
@@ -69,7 +70,7 @@ async def review(draft: dict, me: wactorz.FunctionAgent) -> dict | None:
   whole review, so the writer sees its earlier versions and the critic
   whether its points were taken.
 - **`record_reply`** reads AG2's usage report for a reply, the tokens by
-  model, prices them from `PRICES`, and reports them to the actor, which feeds
+  model, prices them, and reports them to the actor, which feeds
   the dashboard's counters and the system's cost limit. A reply's report
   covers the whole conversation behind it, which is why each agent's is
   recorded once, at the end.

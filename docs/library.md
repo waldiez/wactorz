@@ -557,18 +557,25 @@ me.record_llm_cost(0.0012, input_tokens=300, output_tokens=40, model="gpt-4o-min
 That joins the agent's card and the process-wide total the cost limit is
 checked against. Two helpers do it for the common cases:
 
-- `wactorz.core.integrations.langchain.CostCallback(me, prices={...})` is a LangChain
+- `wactorz.core.integrations.langchain.CostCallback(me)` is a LangChain
   callback handler: pass it in a chain's or a graph's `config`, and every
-  model call is reported with its tokens. LangChain reports tokens, not money,
-  so `prices` maps a model name to dollars per million input and output
-  tokens; an unpriced model is counted at no cost.
-- `wactorz.core.integrations.ag2.record_reply(me, reply, prices={...})` reads
-  AG2's usage report for a reply, tokens by model, prices them and reports
-  them. `model_config(me)` in the same module gives AG2's agents the model
-  the system runs on. AG2 1.x, `import ag2`, plus AG2's extra for the
-  provider (`pip install 'ag2[anthropic]'`, `'ag2[openai]'`), which carries
-  that provider's SDK at the version AG2 asks for. A price table is keyed by
-  model family and matches the resolved name a provider reports as a prefix.
+  model call is reported with its tokens and its cost, priced as Wactorz
+  prices its own calls, a long-prompt tier included.
+- `wactorz.core.integrations.ag2.record_reply(me, reply)` reads AG2's usage
+  report for a reply, tokens by model, prices them and reports them. The
+  report sums a whole run, so each model is priced at its base rate: no one
+  request's prompt is known to decide a tier. `model_config(me)` in the same
+  module gives AG2's agents the model the system runs on. AG2 1.x, `import
+  ag2`, plus AG2's extra for the provider (`pip install 'ag2[anthropic]'`,
+  `'ag2[openai]'`), which carries that provider's SDK at the version AG2 asks
+  for.
+
+Wactorz's prices come from the LiteLLM catalogue, else a table of its own. For
+prices of yours, negotiated or self-hosted, both take `prices=`, dollars per
+million input and output tokens by model name (`{"gpt-5.4-mini": (0.75,
+4.50)}`), which wins for the models it names. A table is keyed by model family
+and matches the resolved name a provider reports as a prefix. A model priced
+nowhere is counted at no cost, its tokens still shown.
 
 ## LangGraph, LangChain and AG2
 

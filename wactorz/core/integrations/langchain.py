@@ -10,10 +10,11 @@ handler here reports each model call to the actor that runs the chain, with
 
     result = await graph.ainvoke(state, config={"callbacks": [CostCallback(me)]})
 
-LangChain reports tokens, not money. Give ``prices`` to turn them into a cost:
-``{"gpt-4o-mini": (0.15, 0.60)}`` is dollars per million input and output
-tokens for that model name, as LangChain reports it. Without a price the
-tokens are still counted and the cost is zero.
+LangChain reports tokens, not money. Each call is priced as Wactorz prices
+its own, long-prompt tiers included. ``prices`` overrides that for the models
+it names: ``{"gpt-5.4-mini": (0.75, 4.50)}`` is dollars per million input and
+output tokens for that model name, as LangChain reports it. A model with no
+price either way still has its tokens counted, at no cost.
 """
 
 from typing import Any
@@ -23,7 +24,7 @@ from typing import Any
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 
-from .pricing import Prices, cost_of
+from .pricing import Prices, call_cost, cost_of
 
 __all__ = ["CostCallback", "Prices", "cost_of", "token_usage"]
 
@@ -67,7 +68,7 @@ class CostCallback(BaseCallbackHandler):
         """
         input_tokens, output_tokens, model = token_usage(response)
         self.actor.record_llm_cost(
-            cost_of(self.prices, model, input_tokens, output_tokens),
+            call_cost(self.prices, model, input_tokens, output_tokens),
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             model=model,

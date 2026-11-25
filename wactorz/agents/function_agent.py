@@ -54,6 +54,7 @@ from ..core.avatars import Avatar, checked_avatar
 from ..core.paths import resolve_state_dir
 from ..core.subscriptions import ConcurrencyError
 from ..core.topics import agent_topic
+from ..llm_factory import agent_provider
 from .shadow_serving import PairRecorder, ShadowView, flush_every, now_ms, pair_row, shadow_topic
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -346,6 +347,28 @@ class FunctionAgent(Actor):
         #: How many inputs got a shadow pass, and how many were passed over.
         self.shadow_passes: int = 0
         self.shadow_skipped: int = 0
+        #: The providers `llm_for` built, by provider and model, so each is built once.
+        self._llms: dict[tuple[str, str], MeteredLLM] = {}
+
+    def llm_for(self, provider: str, model: str) -> MeteredLLM:
+        """A model other than the system's, metered like :attr:`llm`.
+
+        ``me.llm_for("anthropic", "claude-haiku-5-5")`` reads like ``me.llm``:
+        every call is charged to this agent and counts toward the cost limit.
+        The key and the endpoint are the ones the system reads from its
+        environment for that provider; the call names neither. Built once per
+        provider and model, on the first call that asks for it.
+
+        Raises :class:`~wactorz.llm_factory.ProviderUnavailableError` (a
+        ``ValueError``) with the reason when the provider cannot be built here,
+        a missing key or SDK among them. Nothing falls back to the system's model.
+        """
+        key = ((provider or "").strip().lower(), (model or "").strip())
+        metered = self._llms.get(key)
+        if metered is None:
+            metered = MeteredLLM(agent_provider(*key), self)
+            self._llms[key] = metered
+        return metered
 
     def declared_models(self) -> dict[str, Any]:
         """The models the decorator named, resolved before `on_start`."""

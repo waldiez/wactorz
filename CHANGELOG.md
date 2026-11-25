@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A decorated agent can call a model other than the system's, metered: `me.llm_for(provider, model)`.** It answers as `me.llm` does, and every call is charged to the agent and counts toward `LLM_COST_LIMIT_USD`, so a small model can classify each reading while the system stays on a large one. The key and endpoint come from the variables the system already reads for that provider, never from the call; `LLM_API_KEY` goes only to the system's own provider. A provider that cannot be built (unknown, no model named, no key, its extra missing, or on a node) raises `ProviderUnavailableError`, in `wactorz.errors`, with the reason, rather than falling back to the system's model.
+
 - **A new mark, the WZ, everywhere Wactorz shows one.** The dashboard's header, the browser tab and the sign-in page show it; the installed app, the `.ico` and both Home Assistant add-ons show it on a dark rounded tile (a launcher that cuts its own shape gets a full square); the add-ons' store logo and the README show it with the name. A link to the documentation is now previewed with a card of the mark, the name and what Wactorz does. `scripts/gen_icons.py` draws every one of them from the mark's single definition.
 
 - **A decorated function picks its avatar: `@wactorz.agent(avatar="monitor")`, or a dictionary of a kind and parts.** Every decorated function wore the same *f(x)* card unless its spawn config asked for another; a class could already choose with `AVATAR_KIND`. The avatar is checked when the decorator runs, so a mistake fails at import with an `AvatarError`, now in `wactorz.errors`. A spawn's own `avatar` still comes first.

@@ -33,6 +33,7 @@ from .core.labels import LabelError
 from .core.models import ModelError
 from .core.outbound import OptionsError, UnknownChannelError
 from .core.subscriptions import ConcurrencyError
+from .llm_factory import ProviderUnavailableError
 from .pipelines import NotAPipelineError, PipelineError
 from .plugins import NotAnAgentError
 
@@ -53,6 +54,7 @@ __all__ = [
     "NotFoundError",
     "OptionsError",
     "PipelineError",
+    "ProviderUnavailableError",
     "ReplyError",
     "RuleError",
     "StartupError",

@@ -194,8 +194,8 @@ main, and is refused the move until it is deployed again.
 
 On the node the agent subscribes, publishes and persists as it does on main,
 answers tasks sent to it by name, and keeps its state under the node's state
-directory. It has no model there: `me.llm` is `None`, since a node makes no
-model calls.
+directory. It has no model there: `me.llm` is `None`, and `me.llm_for(...)`
+raises `ProviderUnavailableError`, since a node makes no model calls.
 
 ```text
 /migrate imu-anomaly rpi-kitchen      # its code, packages and models go with it
@@ -527,7 +527,27 @@ checkpointer = SqliteSaver.from_conn_string(str(me.state_dir / "graph.sqlite"))
 
 A call through `me.llm` is counted as it returns: tokens and cost on the
 agent's card, and against the cost limit, with nothing to write in the
-function. A model called another way, through LangChain, AG2 or an SDK
+function. A model other than the system's is counted the same way when it
+comes from `me.llm_for(provider, model)`, which answers just as `me.llm` does:
+
+```python
+@wactorz.agent(subscribes="sensors/+/reading")
+async def classify(reading: dict, me: wactorz.FunctionAgent) -> dict:
+    small = me.llm_for("anthropic", "claude-haiku-5-5")  # the system stays on its own model
+    label, _usage = await small.complete([{"role": "user", "content": str(reading)}])
+    return {"label": label}
+```
+
+Its key and endpoint are the ones the system reads for that provider
+(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `OPENAI_URL`, `GEMINI_API_KEY`,
+`NIM_API_KEY`, `OLLAMA_URL`); the call names neither. `LLM_API_KEY` belongs to
+the system's own provider and is used only when that is the one asked for.
+Each provider and model is built once per agent, on the first call. One that
+cannot be built here, for want of a key or of its extra, raises
+`ProviderUnavailableError` with the reason, rather than answering on the
+system's model at another price.
+
+A model called another way, through LangChain, AG2 or an SDK
 directly, is invisible until the agent says what it spent:
 
 ```python
@@ -879,6 +899,7 @@ except NoAnswerError:
 | `ask_operator`, `wait_for_answer` | `NoAnswerError` | `asyncio.TimeoutError` | no answer within `timeout`; `ask_operator` waits once more on the dashboard first, for a question asked on a chat channel, and the question stays open |
 | `ask_operator` | `LabelError` | `ValueError` | a `label=` that cannot be used, before anything is sent |
 | `label` | `LabelError` | `ValueError` | a label that cannot be taken as written, or from an agent that cannot reach main's database |
+| `FunctionAgent.llm_for` | `ProviderUnavailableError` | `ValueError` | a provider that cannot be built here: unknown, no model named, no key, its extra not installed, or on a node |
 | `artifact_path`, `load_model` | `UnnamedModelError` | `KeyError` | a key the agent's `models` does not declare |
 | `load_model` | `ModelError` | `ArtifactError` | a format that runs code, without `allow_code=True`; one with no loader; a library the format needs that is not installed |
 | `recall_bytes` | `NotBytesError` | `TypeError` | a key holding something `persist_bytes` did not write |
@@ -929,7 +950,7 @@ What this guide uses is the surface you can rely on:
 | `models=` on `wactorz.agent`, `MODELS` on an `Actor`, with `artifact_path`, `load_model` and `artifacts` | the models an agent loads |
 | `concurrency=` on `wactorz.agent` and `Actor.subscribe` | messages and tasks at once |
 | `wactorz.core.integrations.langchain.CostCallback`, `wactorz.core.integrations.ag2.model_config` and `record_reply` | LangChain and AG2 beside the system |
-| `wactorz.FunctionAgent` | the actor behind a decorated function: `call`, `options`, `log` |
+| `wactorz.FunctionAgent` | the actor behind a decorated function: `call`, `options`, `log`, `llm`, `llm_for` |
 | `wactorz.RuleConfig`, `RuleCondition`, `RuleAction`, `wactorz.RuleAgent` | typed rules |
 | `wactorz.Message`, `MessageType` | what `handle_message` receives |
 | `WACTORZ_AGENTS`, `WACTORZ_PIPELINES`, `WACTORZ_MINIMAL`, `WACTORZ_HA_AGENTS`, `WACTORZ_ORCHESTRATOR` | the settings above |

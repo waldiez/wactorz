@@ -22,13 +22,14 @@ node before it starts.
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from ..agents.function_agent import FunctionAgent
 from ..core import agent_reset
 from ..core.actor import Actor, ReplyError, ask_through, forbidden
 from ..core.manifests import AgentManifest
 from ..core.state_codec import decode_state
+from ..llm_factory import ProviderUnavailableError
 from .state import JsonState, agent_state, flush_states
 
 if TYPE_CHECKING:
@@ -182,6 +183,16 @@ class NodeHosted(_Base):
         agent of a node of this release runs, and how to send to it.
         """
         await super()._send_manifest({**manifest, "node": self._node, "tasks_by_node": True})
+
+    # ── Models ────────────────────────────────────────────────────────────────
+
+    def llm_for(self, provider: str, model: str) -> NoReturn:
+        """Refused: an agent on a node has no model, as its ``llm`` is None.
+
+        A function agent's ``llm_for`` would build a provider from the node's
+        own environment and call it from here; a node makes no model calls.
+        """
+        raise ProviderUnavailableError.on_node()
 
     # ── Tasks, which arrive on a topic rather than in a mailbox ───────────────
 

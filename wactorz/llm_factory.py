@@ -84,44 +84,49 @@ def parse_overrides(raw: str | None) -> dict[str, str]:
     return table
 
 
-def _build_anthropic(model: str | None) -> LLMProvider:
+# Each builder takes the model and the key to fall back on when the provider's
+# own variable is unset: ``LLM_API_KEY`` for the system's call sites, nothing
+# for an agent asking for a provider other than the system's (`agent_provider`).
+
+
+def _build_anthropic(model: str | None, shared_key: str) -> LLMProvider:
     return AnthropicProvider(
         model=model or CONFIG.llm_model,
-        api_key=os.getenv("ANTHROPIC_API_KEY") or CONFIG.llm_api_key,
+        api_key=os.getenv("ANTHROPIC_API_KEY") or shared_key,
     )
 
 
-def _build_openai(model: str | None) -> LLMProvider:
+def _build_openai(model: str | None, shared_key: str) -> LLMProvider:
     return OpenAIProvider(
         model=model or CONFIG.llm_model,
-        api_key=os.getenv("OPENAI_API_KEY") or CONFIG.llm_api_key,
+        api_key=os.getenv("OPENAI_API_KEY") or shared_key,
         # Empty means "the public API"; the client rejects an empty string.
         base_url=CONFIG.openai_url or None,
     )
 
 
-def _build_ollama(model: str | None) -> LLMProvider:
+def _build_ollama(model: str | None, shared_key: str) -> LLMProvider:
     return OllamaProvider(model=model or CONFIG.llm_model, base_url=CONFIG.ollama_url)
 
 
-def _build_nim(model: str | None) -> LLMProvider:
+def _build_nim(model: str | None, shared_key: str) -> LLMProvider:
     return NIMProvider(
         model=model or CONFIG.llm_model,
-        api_key=CONFIG.nim_api_key or CONFIG.nvidia_api_key or CONFIG.llm_api_key,
+        api_key=CONFIG.nim_api_key or CONFIG.nvidia_api_key or shared_key,
     )
 
 
-def _build_gemini(model: str | None) -> LLMProvider:
+def _build_gemini(model: str | None, shared_key: str) -> LLMProvider:
     return GeminiProvider(
         # `CONFIG.llm_model` always has a value, so the trailing default only
         # answers an explicitly empty LLM_MODEL. It is not a way to catch one
         # holding another provider's model name — nothing here can tell.
         model=model or CONFIG.llm_model or GEMINI_DEFAULT_MODEL,
-        api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or CONFIG.llm_api_key,
+        api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or shared_key,
     )
 
 
-def _build_fake(model: str | None) -> LLMProvider:
+def _build_fake(model: str | None, shared_key: str) -> LLMProvider:
     """The deterministic provider, configured from the environment.
 
     Registered like any other backend so it is reached through the same factory
@@ -140,7 +145,7 @@ def _build_fake(model: str | None) -> LLMProvider:
 
 # Provider name → constructor. Adding a backend means adding its module under
 # ``agents/llm/providers/`` and one entry here; nothing else selects on name.
-_PROVIDERS: dict[str, Callable[[str | None], LLMProvider]] = {
+_PROVIDERS: dict[str, Callable[[str | None, str], LLMProvider]] = {
     "anthropic": _build_anthropic,
     "openai": _build_openai,
     "ollama": _build_ollama,
@@ -174,7 +179,92 @@ def create_provider(provider_name: str, model: str | None = None) -> LLMProvider
     build = _PROVIDERS.get(name)
     if build is None:
         raise UnknownProviderError(provider_name)
-    return build(model)
+    return build(model, CONFIG.llm_api_key)
+
+
+# The extra that brings each provider's SDK, for a refusal to name.
+_EXTRAS: dict[str, str] = {
+    "anthropic": "anthropic",
+    "openai": "openai",
+    "nim": "openai",
+    "gemini": "google",
+}
+
+
+class ProviderUnavailableError(ValueError):
+    """A provider an agent asked for that cannot be built here, with the reason."""
+
+    @classmethod
+    def no_model(cls, provider: str) -> "ProviderUnavailableError":
+        """No model named: another provider's default model would be a guess."""
+        return cls(f"A model is needed with provider {provider!r}")
+
+    @classmethod
+    def unknown(cls, provider: str) -> "ProviderUnavailableError":
+        """A provider name this release has no provider for."""
+        return cls(f"Unknown LLM provider: {provider!r} (known: {', '.join(sorted(_PROVIDERS))})")
+
+    @classmethod
+    def no_key(cls, provider: str, variables: tuple[str, ...]) -> "ProviderUnavailableError":
+        """The provider's own key variable is unset."""
+        return cls(f"No key for provider {provider!r}: set {' or '.join(variables)}")
+
+    @classmethod
+    def not_installed(cls, provider: str, extra: str) -> "ProviderUnavailableError":
+        """The provider's SDK is not installed."""
+        return cls(f"Provider {provider!r} needs its SDK: pip install 'wactorz[{extra}]'")
+
+    @classmethod
+    def failed(cls, provider: str, exc: Exception) -> "ProviderUnavailableError":
+        """The provider's client refused to be built, for its own reason."""
+        return cls(f"Provider {provider!r} could not be built: {exc}")
+
+    @classmethod
+    def on_node(cls) -> "ProviderUnavailableError":
+        """Asked for on a node, which makes no model calls of its own."""
+        return cls("An agent on a node has no model: a node makes no model calls")
+
+
+def _anthropic_key_variables(shared_key: str) -> tuple[str, ...]:
+    """The variables Anthropic's client can read a credential from, if none is set.
+
+    The client is built without a key and fails on its first request, so the
+    check is made here, where it can say which variable to set.
+    """
+    if shared_key or os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN"):
+        return ()
+    return ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
+
+def agent_provider(provider_name: str, model: str) -> LLMProvider:
+    """A provider for one agent's own choice of model, or the reason there is none.
+
+    Keys and endpoints come from the environment the system already reads,
+    never from the caller, since a spawn config may be written by a model.
+    ``LLM_API_KEY`` is the key of the system's provider (``LLM_PROVIDER``), so it
+    is used only when that is the provider asked for: another provider gets its
+    own variable or nothing, never the system's key sent to another service.
+
+    Raises :class:`ProviderUnavailableError` (a ``ValueError``) with the reason
+    when the provider cannot be built, rather than falling back to the
+    system's model and its price.
+    """
+    name = (provider_name or "").strip().lower()
+    build = _PROVIDERS.get(name)
+    if build is None:
+        raise ProviderUnavailableError.unknown(provider_name)
+    model = (model or "").strip()
+    if not model:
+        raise ProviderUnavailableError.no_model(name)
+    shared_key = CONFIG.llm_api_key if name == CONFIG.llm_provider.strip().lower() else ""
+    if name == "anthropic" and (missing := _anthropic_key_variables(shared_key)):
+        raise ProviderUnavailableError.no_key(name, missing)
+    try:
+        return build(model, shared_key)
+    except ImportError as exc:
+        raise ProviderUnavailableError.not_installed(name, _EXTRAS.get(name, name)) from exc
+    except Exception as exc:
+        raise ProviderUnavailableError.failed(name, exc) from exc
 
 
 def _provider_from_spec(spec: str) -> LLMProvider | None:

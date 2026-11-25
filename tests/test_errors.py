@@ -30,6 +30,7 @@ import pytest
 
 import wactorz
 from wactorz import errors
+from wactorz.agents.function_agent import FunctionAgent
 from wactorz.agents.rule_agent import RuleConfig
 from wactorz.core.actor import Actor
 from wactorz.core.integrations import ag2
@@ -53,6 +54,7 @@ _CALLS: dict[str, Callable[..., Any]] = {
     "artifact_path": Actor.artifact_path,
     "load_model": Actor.load_model,
     "recall_bytes": Actor.recall_bytes,
+    "FunctionAgent.llm_for": FunctionAgent.llm_for,
     "wactorz.core.integrations.ag2.model_config": ag2.model_config,
 }
 
@@ -208,7 +210,10 @@ def test_every_call_the_table_names_is_one_this_test_knows() -> None:
 @pytest.mark.parametrize("call", sorted(_CALLS))
 def test_the_table_gives_each_call_every_exception_it_can_raise(call: str) -> None:
     fn = _CALLS[call]
-    owner = Actor if getattr(fn, "__qualname__", "").startswith("Actor.") else None
+    owner = next(
+        (cls for cls in (Actor, FunctionAgent) if fn.__qualname__.startswith(f"{cls.__name__}.")),
+        None,
+    )
     not_reached = _NOT_REACHED.get(call, {})
 
     missing = _raised(fn, owner, set()) - _documented()[call] - set(not_reached)

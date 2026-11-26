@@ -28,6 +28,7 @@ import aiomqtt
 from paho.mqtt.packettypes import PacketTypes
 from paho.mqtt.properties import Properties
 
+from . import topics
 from .mqtt_tls import client_context, tls_enabled
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -177,10 +178,24 @@ def client_id(role: str, scope: str, detail: str | None = None) -> str:
     separates connections that share a role and scope.
 
     ⚠ **``detail`` is not optional for a role that opens more than one
-    connection.** Main runs six long-lived listeners; giving any two of them the
-    same id makes the broker kick them in a loop, inside a single process.
+    connection.** Main runs several long-lived listeners; giving any two of them
+    the same id makes the broker kick them in a loop, inside a single process.
+
+    The install's namespace (``WACTORZ_NAMESPACE``) is part of the id when one is
+    set. A durable session keeps its subscriptions, so an id shared across a
+    namespace change would resume the old namespace's subscriptions beside the
+    new ones, and the install would go on hearing the other namespace's topics.
+    With no namespace the id is as it always is.
+
+    The namespace goes first, after its length: ``wactorz3.dev-node-rpi``.
+    Joined with ``-`` like the rest it would be ambiguous, since a namespace and a
+    node name may both contain one: namespace ``dev`` and node ``rpi`` would read
+    like node ``rpi-dev`` with none, and two connections sharing an id disconnect
+    each other in a loop. ``wactorz-`` starts an id with no namespace, a digit
+    one with, and the length says where the namespace ends.
     """
-    parts = ["wactorz", role, scope]
+    namespace = topics.NAMESPACE
+    parts = [f"wactorz{len(namespace)}.{namespace}" if namespace else "wactorz", role, scope]
     if detail:
         parts.append(detail)
     return "-".join(parts)

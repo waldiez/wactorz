@@ -145,19 +145,38 @@ class ManifestRegistry:
         """Log once that main's own manifest from before the namespace is still retained.
 
         A sign that the install ran without its namespace, or under another, and
-        has left retained topics behind there. Nothing is cleared: another
-        install may own what is under the bare topics.
+        has left retained topics behind there. Main's id is the same in every
+        install, so the manifest there may instead be another install's, live:
+        the install it names tells them apart (`MainActor._send_manifest`). One
+        that names none, from a release before, cannot be told apart, and is said
+        without the way to clear it. Nothing is cleared here.
         """
         if self.leftover_said or not payload:
             return
+        data = _decoded_json(payload)
+        named = data.get("install") if isinstance(data, dict) else None
         self.leftover_said = True
+        if isinstance(named, str) and named and named != install_id():
+            logger.debug("[main] %s is another install's main, not this one's", topic)
+            return
+        if named == install_id():
+            logger.warning(
+                "[main] Main's own manifest from before WACTORZ_NAMESPACE=%r is still retained "
+                "on %s. Retained topics of this install's from then are left there; nodes "
+                "deployed before the change need deploying again. To clear one: "
+                "mosquitto_pub -r -n -t <topic>",
+                NAMESPACE,
+                topic,
+            )
+            return
         logger.warning(
-            "[main] Main's own manifest from before WACTORZ_NAMESPACE=%r is still retained on "
-            "%s. Retained topics of this install's from then are left there; nodes deployed "
-            "before the change need deploying again. To clear one: "
-            "mosquitto_pub -r -n -t <topic>",
-            NAMESPACE,
+            "[main] A main's manifest is retained on %s: this install's from before "
+            "WACTORZ_NAMESPACE=%r, or another install's with no namespace on this broker. Main "
+            "has the same id in every install, and this manifest does not say which install "
+            "sent it. If it is this install's, its retained topics from then are left there, "
+            "and nodes deployed before the change need deploying again.",
             topic,
+            NAMESPACE,
         )
 
     async def manifest_listener(self) -> None:

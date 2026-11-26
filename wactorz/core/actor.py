@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import dataclasses
 import functools
 import inspect
 import json
@@ -51,12 +52,15 @@ from .questions import (
     CUT_SHORT,
     QUESTIONS_KEY,
     Question,
+    QuestionIdError,
     answered,
     book_frame,
     book_of,
+    checked_id,
     context_text,
     questions_in,
     questions_topic,
+    same_question,
 )
 from .spawn_introduction import mark_introductions_changed
 from .state_versions import Upgrade, declared_version, upgraded
@@ -653,6 +657,9 @@ class Actor(ABC):
         self._answer_waiters: dict[str, tuple[asyncio.Future[str], int]] = {}
         #: Whether this actor already listens on its own answer topic.
         self._hearing_answers = False
+        #: The task sending each question still being sent, by question id: one
+        #: per question, so two asking at once send it once.
+        self._deliveries: dict[str, asyncio.Task[None]] = {}
         self._setup_default_handlers()
 
         # Background tasks
@@ -707,6 +714,11 @@ class Actor(ABC):
             self._hear_answers()
         if self.questions():
             await self._publish_questions()
+        # A question recorded but never sent, its sending cut short by a stop or
+        # a crash: sent now, or nobody would ever see it.
+        for question in still_open:
+            if not question.permission and not question.sent:
+                self._deliver(question)
         # Outside whatever turn started this actor: each message brings its own.
         self._tasks.append(asyncio.create_task(outside_any_turn(self._message_loop, self.name)))
         self._tasks.append(asyncio.create_task(outside_any_turn(self._heartbeat_loop, self.name)))
@@ -2140,6 +2152,7 @@ class Actor(ABC):
         timeout: float | None = None,
         label: Mapping[str, Any] | None = None,
         context: str = "",
+        id: str | None = None,
     ) -> str:
         """Ask the person ``text``, offer ``options``, and return the one they pick.
 
@@ -2170,18 +2183,32 @@ class Actor(ABC):
         answer will change. It is shown with the question in the dashboard's
         Inbox, and is not sent to chat channels.
 
+        ``id`` names the question, for an agent that asks again after a
+        restart and must not ask twice: when this agent's book already holds a
+        question by that id asking the same thing (the words, options, channel,
+        person, label and context), its answer is returned, or waited for while
+        it is open, and it is sent again only if its sending never finished.
+        Without it, the question gets an id of its own.
+
+        The question is in the book before it is sent, and sending it is a task
+        of its own, which goes on when the call that asked is cancelled. One
+        whose sending was cut short by a stop or a crash is sent when the agent
+        starts. So a question reaches the person at least once: twice, under
+        the same id, if the agent stops between sending it and recording that
+        it did.
+
         Raises ``ValueError`` for no options, options or a channel the channels
-        cannot show, or a ``label`` that cannot be used -- before anything is
+        cannot show, a ``label`` that cannot be used, or an ``id`` that is not
+        one or names another question already asked
+        (:class:`~wactorz.core.questions.QuestionIdError`) -- before anything is
         sent.
         """
         if not options:
             raise OptionsError.none()
         checked = check_options(options)
         spec = None if label is None else LabelSpec.parse(label, checked)
-        self._hear_answers()
-        question_id = await self.notify_user(text, options=options, channel=channel, user=user)
         question = Question(
-            id=question_id,
+            id=uuid.uuid4().hex if id is None else checked_id(id),
             text=str(text),
             options=checked,
             channel=check_channel(channel),
@@ -2190,7 +2217,22 @@ class Actor(ABC):
             label=None if spec is None else spec.to_dict(),
             context=context_text(context),
         )
-        await self._write_question(question)
+        question_id = question.id
+        # Looked up and recorded with no await between, so two calls naming one
+        # id make one question, and the second waits on the first's.
+        asked = self.questions().get(question_id)
+        if asked is not None:
+            if not same_question(asked, question):
+                raise QuestionIdError.taken(question_id)
+            self._hear_answers()
+            if asked.open and not asked.sent:
+                await asyncio.shield(self._deliver(asked))
+            return await self.wait_for_answer(question_id, timeout=timeout)
+        self._record_question(dataclasses.replace(question, sent=False))
+        self._hear_answers()
+        # Shielded: a caller cancelled now leaves the question to be sent all
+        # the same, so a later call naming it, or a restart, finds it shown.
+        await asyncio.shield(self._deliver(question))
         try:
             return await self.wait_for_answer(question_id, timeout=timeout)
         except TimeoutError:
@@ -2298,18 +2340,19 @@ class Actor(ABC):
         pick with :meth:`permission_answered`, and ends a wait with no pick by
         :meth:`close_permission`.
         """
-        question_id = await self.notify_user(text, options=options)
-        await self._write_question(
-            Question(
-                id=question_id,
-                text=str(text),
-                options=check_options(options),
-                channel=DASHBOARD,
-                asked_at=time.time(),
-                permission=True,
-            )
+        # In the book before it is sent, as every question is: an answer can only
+        # come once it is, and the book is what it is checked against.
+        question = Question(
+            id=uuid.uuid4().hex,
+            text=str(text),
+            options=check_options(options),
+            channel=DASHBOARD,
+            asked_at=time.time(),
+            permission=True,
         )
-        return question_id
+        await self._write_question(question)
+        await self.notify_user(text, options=options, id=question.id)
+        return question.id
 
     async def permission_answered(self, answer: Answer) -> None:
         """Record ``answer`` in the book, for a question still open."""
@@ -2348,12 +2391,61 @@ class Actor(ABC):
             question.answer_channel,
         )
 
+    def _deliver(self, question: Question) -> asyncio.Task[None]:
+        """The task sending ``question`` to the person: one per question while it runs.
+
+        Kept with the actor's tasks, so a stop ends it; the question then stays
+        unsent in the book, and is sent when the agent starts again.
+        """
+        task = self._deliveries.get(question.id)
+        if task is None:
+            task = asyncio.create_task(self._send_question(question))
+            self._deliveries[question.id] = task
+            self._tasks.append(task)
+            task.add_done_callback(self._delivery_ended)
+        return task
+
+    def _delivery_ended(self, task: asyncio.Task[None]) -> None:
+        """Forget ``task`` once it has ended, sent or not."""
+        for question_id, running in list(self._deliveries.items()):
+            if running is task:
+                del self._deliveries[question_id]
+        if task in self._tasks:
+            self._tasks.remove(task)
+
+    async def _send_question(self, question: Question) -> None:
+        """Publish the book, send ``question``, then record that it was sent.
+
+        The book is in the dashboard's Inbox before the message goes, and the
+        question can be answered there meanwhile. One answered by then is not
+        sent: its message would arrive after the answer, and offer as open a
+        question already settled.
+        """
+        await self._publish_questions()
+        settled = self.questions().get(question.id)
+        if settled is None or not settled.open:
+            return
+        await self.notify_user(
+            question.text,
+            options=question.options,
+            channel=question.channel,
+            user=question.user,
+            id=question.id,
+        )
+        current = self.questions().get(question.id)
+        if current is not None and not current.sent:
+            await self._write_question(dataclasses.replace(current, sent=True))
+
     async def _write_question(self, question: Question) -> None:
         """Put ``question`` in the book, replacing its earlier record, and say so."""
+        self._record_question(question)
+        await self._publish_questions()
+
+    def _record_question(self, question: Question) -> None:
+        """Put ``question`` in the book, replacing its earlier record, without saying so yet."""
         book = self.questions()
         book[question.id] = question
         self.persist(QUESTIONS_KEY, book_of(book))
-        await self._publish_questions()
 
     async def _publish_questions(self) -> None:
         """Publish the book, retained, for whoever shows a person what is waiting.

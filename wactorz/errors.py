@@ -32,6 +32,7 @@ from .core.integrations.ag2 import AG2Error
 from .core.labels import LabelError
 from .core.models import ModelError
 from .core.outbound import OptionsError, UnknownChannelError
+from .core.questions import QuestionIdError
 from .core.subscriptions import ConcurrencyError
 from .llm_factory import ProviderUnavailableError
 from .pipelines import NotAPipelineError, PipelineError
@@ -55,6 +56,7 @@ __all__ = [
     "OptionsError",
     "PipelineError",
     "ProviderUnavailableError",
+    "QuestionIdError",
     "ReplyError",
     "RuleError",
     "StartupError",

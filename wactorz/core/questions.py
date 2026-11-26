@@ -47,6 +47,42 @@ MAX_CONTEXT_CHARS = 1000
 CUT_SHORT = "The server restarted first"
 
 
+#: The longest id a caller may give a question (`ask_operator(..., id=...)`).
+MAX_ID_CHARS = 128
+
+
+class QuestionIdError(ValueError):
+    """An ``id=`` for a question that cannot be used: not one, or another question's."""
+
+    @classmethod
+    def unusable(cls, question_id: object) -> QuestionIdError:
+        """Not printable text of at most :data:`MAX_ID_CHARS` characters."""
+        return cls(
+            f"A question's id is printable text of 1 to {MAX_ID_CHARS} characters, "
+            f"not {str(question_id)[:40]!r}"
+        )
+
+    @classmethod
+    def taken(cls, question_id: str) -> QuestionIdError:
+        """The id names a question already asked that is not this one."""
+        return cls(
+            f"The question {question_id!r} was already asked with other words, options, "
+            "channel, person, label or context; give this one an id of its own"
+        )
+
+
+def checked_id(question_id: object) -> str:
+    """``question_id`` as a question's id, or :class:`QuestionIdError` saying why it cannot be one."""
+    if (
+        not isinstance(question_id, str)
+        or not question_id
+        or len(question_id) > MAX_ID_CHARS
+        or not question_id.isprintable()
+    ):
+        raise QuestionIdError.unusable(question_id)
+    return question_id
+
+
 def context_text(raw: str) -> str:
     """``raw`` as a question's context: redacted, trimmed and cut to `MAX_CONTEXT_CHARS`.
 
@@ -107,6 +143,11 @@ class Question:
     label: dict[str, Any] | None = None
     context: str = ""
     permission: bool = False
+    #: Whether the question was sent to the person. An agent records it first
+    #: and sends it after, so a record whose sending was cut short says so, and
+    #: is sent when the agent starts or asks it again. A record from before this
+    #: field was sent before it was recorded.
+    sent: bool = True
 
     @property
     def open(self) -> bool:
@@ -144,6 +185,7 @@ class Question:
                 label=dict(record["label"]) if isinstance(record.get("label"), dict) else None,
                 context=str(record.get("context") or ""),
                 permission=bool(record.get("permission", False)),
+                sent=bool(record.get("sent", True)),
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -171,6 +213,33 @@ def book_of(questions: Sequence[Question] | dict[str, Question]) -> dict[str, di
     answered = sorted((q for q in items if not q.open), key=lambda q: q.answered_at)
     dropped = {q.id for q in answered[: max(0, len(answered) - ANSWERED_KEPT)]}
     return {q.id: q.to_dict() for q in items if q.id not in dropped}
+
+
+def same_question(one: Question, other: Question) -> bool:
+    """Whether ``one`` and ``other`` ask the same thing, so one id may name both.
+
+    What was asked, as it is kept: the words, the options, where and to whom,
+    the label its answer makes, the context and whether it is a permission. Not
+    when it was asked, nor its answer, nor ``fallen_back`` and ``sent``, which
+    say how it was delivered, not what it is.
+    """
+    return (
+        one.text,
+        one.options,
+        one.channel,
+        one.user,
+        one.label,
+        one.context,
+        one.permission,
+    ) == (
+        other.text,
+        other.options,
+        other.channel,
+        other.user,
+        other.label,
+        other.context,
+        other.permission,
+    )
 
 
 def answered(question: Question, option: str, index: int, channel: str, note: str = "") -> Question:

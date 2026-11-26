@@ -230,6 +230,7 @@ class MessagingMixin(_Host):
         timeout: float | None = None,
         label: dict[str, Any] | None = None,
         context: str = "",
+        id: str | None = None,
     ) -> str:
         """Ask the person ``text`` with ``options`` and return the one picked (see Actor.ask_operator).
 
@@ -240,6 +241,8 @@ class MessagingMixin(_Host):
         ``{"source": "sensors/ahu-1", "start": ts, "values": {"Maintenance":
         "maintenance", "Real problem": "fault"}}``, an option left out making
         none. ``context`` says why it is being asked, for the dashboard's Inbox.
+        ``id`` names the question, so a program that asks again after a restart
+        is given the answer, or waits for it, rather than asking twice.
         """
         return await self._actor.ask_operator(
             text,
@@ -249,6 +252,7 @@ class MessagingMixin(_Host):
             timeout=timeout,
             label=label,
             context=context,
+            id=id,
         )
 
     async def label(
@@ -278,6 +282,14 @@ class MessagingMixin(_Host):
     def open_questions(self) -> list[dict[str, Any]]:
         """The questions still waiting for an answer, oldest first, as dicts (SYNC, no await)."""
         return [q.to_dict() for q in self._actor.open_questions()]
+
+    def question(self, question_id: str) -> dict[str, Any] | None:
+        """The question ``question_id`` as a dict, answered or not, or None (SYNC, no await).
+
+        Its ``answer_note`` is what the person wrote with the pick.
+        """
+        found = self._actor.questions().get(question_id)
+        return None if found is None else found.to_dict()
 
     async def _send_to_remote(
         self, address: Address, payload: Any, timeout: float, topic: str

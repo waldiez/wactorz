@@ -13,11 +13,12 @@ delivered by calling the subscription's callback the way the hub would.
 """
 
 import asyncio
+import dataclasses
 import json
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -30,8 +31,10 @@ from wactorz.core.questions import (
     ANSWERED_KEPT,
     CUT_SHORT,
     MAX_CONTEXT_CHARS,
+    MAX_ID_CHARS,
     QUESTIONS_KEY,
     Question,
+    QuestionIdError,
     answered,
     book_of,
     questions_in,
@@ -227,7 +230,7 @@ class TestAskingAndAnswering:
         await wired.answer("a")
         await first
         second = asyncio.create_task(wired.actor.ask_operator("Two?", options=["a", "b"]))
-        await asyncio.sleep(0)
+        await until(lambda: len(wired.chat_frames) == 2, what="the second question sent")
         await wired.answer("b", index=1)
         await second
         assert wired.subscribed == [answer_topic(wired.actor.actor_id)]
@@ -657,6 +660,391 @@ class TestTheBook:
         (record,) = book.values()
         assert record["options"] == ["yes", "no"]
         assert record["answer"] == "no"
+
+
+class TestAQuestionsOwnId:
+    """``id=`` names the question, so an agent that asks again never asks twice.
+
+    A repeat that asks the same thing is given the answer, or waits for it; one
+    that asks something else under the same id is refused before anything goes.
+    """
+
+    #: What one asking of the question says, as `ask_operator` takes it.
+    ASKED: ClassVar[dict[str, Any]] = {
+        "options": ["yes", "no"],
+        "channel": "telegram",
+        "user": "42",
+        "context": "Flow rose after the valve was last reported closed.",
+        "label": {
+            "source": "sensors/ahu-1",
+            "start": 1_700_000_000.0,
+            "values": {"yes": "closed", "no": "open"},
+        },
+    }
+
+    async def _ask(self, wired: Wired, **over: Any) -> "asyncio.Task[str]":
+        asking = asyncio.create_task(
+            wired.actor.ask_operator(
+                "Is the valve closed?", **{**self.ASKED, "id": "run-7-step-3", **over}
+            )
+        )
+        await wired.settle()
+        return asking
+
+    async def test_the_question_goes_out_under_the_id_given(self, wired: Wired) -> None:
+        asking = await self._ask(wired)
+
+        (frame,) = wired.chat_frames
+        assert frame["id"] == "run-7-step-3"
+        (asked,) = wired.book
+        assert asked.id == "run-7-step-3"
+        await wired.answer("yes")
+        assert await asking == "yes"
+
+    @pytest.mark.parametrize("given", [None, "run-7-step-3"])
+    async def test_the_book_holds_it_before_it_is_sent(
+        self, wired: Wired, given: str | None
+    ) -> None:
+        # An answer can only come once it is sent; the book is what checks it.
+        asking = asyncio.create_task(
+            wired.actor.ask_operator("Changed?", options=["yes", "no"], id=given)
+        )
+        await wired.settle()
+
+        topics = [t for t, _ in wired.frames]
+        book_topic = questions_topic(wired.actor.actor_id)
+        assert topics.index(book_topic) < next(
+            i for i, t in enumerate(topics) if t.endswith("/chat")
+        )
+        asking.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asking
+
+    async def test_asked_again_once_answered_it_is_answered_at_once(self, wired: Wired) -> None:
+        asking = await self._ask(wired)
+        await wired.answer("no", index=1)
+        assert await asking == "no"
+        sent = len(wired.frames)
+
+        assert (
+            await wired.actor.ask_operator("Is the valve closed?", **self.ASKED, id="run-7-step-3")
+            == "no"
+        )
+        assert len(wired.frames) == sent, "nothing is sent again"
+
+    async def test_asked_again_while_open_it_waits_on_the_same_question(self, wired: Wired) -> None:
+        first = await self._ask(wired)
+        again = asyncio.create_task(
+            wired.actor.ask_operator("Is the valve closed?", **self.ASKED, id="run-7-step-3")
+        )
+        await asyncio.sleep(0)
+
+        await wired.answer("yes")
+
+        assert (await first, await again) == ("yes", "yes")
+        assert len(wired.chat_frames) == 1
+        assert len(wired.actor.questions()) == 1
+
+    async def test_two_asking_at_once_make_one_question(self, wired: Wired) -> None:
+        both = [
+            asyncio.create_task(
+                wired.actor.ask_operator("Is the valve closed?", **self.ASKED, id="run-7-step-3")
+            )
+            for _ in range(2)
+        ]
+        await wired.settle()
+
+        await wired.answer("yes")
+
+        assert await asyncio.gather(*both) == ["yes", "yes"]
+        assert len(wired.chat_frames) == 1
+        assert list(wired.actor.questions()) == ["run-7-step-3"]
+
+    @pytest.mark.parametrize(
+        "other",
+        [
+            pytest.param({"text": "Is the pump on?"}, id="other words"),
+            pytest.param({"options": ["yes", "no", "not sure"]}, id="other options"),
+            pytest.param({"channel": "dashboard", "user": ""}, id="another channel"),
+            pytest.param({"user": "43"}, id="another person"),
+            pytest.param({"context": "Something else."}, id="other context"),
+            pytest.param({"label": None}, id="no label"),
+            pytest.param(
+                {"label": {**ASKED["label"], "values": {"yes": "open", "no": "closed"}}},
+                id="another label",
+            ),
+        ],
+    )
+    async def test_something_else_under_the_same_id_is_refused(
+        self, wired: Wired, other: dict[str, Any]
+    ) -> None:
+        asking = await self._ask(wired)
+        sent = len(wired.frames)
+        text = other.pop("text", "Is the valve closed?")
+
+        with pytest.raises(QuestionIdError, match="run-7-step-3"):
+            await wired.actor.ask_operator(text, **{**self.ASKED, **other, "id": "run-7-step-3"})
+
+        assert len(wired.frames) == sent, "refused before anything is sent"
+        assert isinstance(QuestionIdError("x"), ValueError)
+        asking.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asking
+
+    async def test_how_it_was_delivered_is_not_what_it_asks(self, wired: Wired) -> None:
+        # Shown again on the dashboard after a quiet chat channel: the same question.
+        asking = await self._ask(wired)
+        (asked,) = wired.actor.questions().values()
+        await wired.actor._write_question(dataclasses.replace(asked, fallen_back=True))
+
+        again = asyncio.create_task(
+            wired.actor.ask_operator("Is the valve closed?", **self.ASKED, id="run-7-step-3")
+        )
+        await asyncio.sleep(0)
+        await wired.answer("yes")
+
+        assert (await asking, await again) == ("yes", "yes")
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            pytest.param("", id="empty"),
+            pytest.param("x" * (MAX_ID_CHARS + 1), id="too long"),
+            pytest.param("run-7\nstep-3", id="a line break"),
+            pytest.param(7, id="not text"),
+        ],
+    )
+    async def test_an_id_that_is_not_one_is_refused_before_anything_is_sent(
+        self, wired: Wired, bad: Any
+    ) -> None:
+        with pytest.raises(QuestionIdError):
+            await wired.actor.ask_operator("Changed?", options=["yes", "no"], id=bad)
+
+        assert wired.frames == []
+        assert wired.actor.questions() == {}
+
+    async def test_after_a_restart_it_is_not_asked_again(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = spec_of(hvac_watch)
+        assert spec is not None
+        before = Wired(spec.build(persistence_dir=str(tmp_path)), monkeypatch)
+        asking = await self._ask(before)
+        asking.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asking
+
+        # A new instance over the same state, started as the supervisor starts
+        # one, asks again, as a replay would.
+        after = Wired(spec.build(persistence_dir=str(tmp_path)), monkeypatch)
+        try:
+            await after.actor.start()
+            again = asyncio.create_task(
+                after.actor.ask_operator("Is the valve closed?", **self.ASKED, id="run-7-step-3")
+            )
+            for _ in range(20):
+                await asyncio.sleep(0)
+            assert after.chat_frames == [], "asked once, before the restart"
+
+            await after.answer("no", index=1, id="run-7-step-3")
+
+            assert await again == "no"
+        finally:
+            await after.actor.stop()
+        assert after.actor.questions()["run-7-step-3"].answer == "no"
+
+
+class Gate:
+    """Holds the actor's publishes on one topic until released, as a slow broker would."""
+
+    def __init__(self, wired: Wired, monkeypatch: pytest.MonkeyPatch, topic: str) -> None:
+        self.reached = asyncio.Event()
+        self.open = asyncio.Event()
+        passing = wired.actor._mqtt_publish
+
+        async def _publish(
+            published: str, payload: Any, retain: bool = False, qos: int = 0
+        ) -> None:
+            if published == topic and not self.open.is_set():
+                self.reached.set()
+                await self.open.wait()
+            await passing(published, payload, retain=retain, qos=qos)
+
+        monkeypatch.setattr(wired.actor, "_mqtt_publish", _publish)
+
+
+class TestAQuestionIsSentAtLeastOnce:
+    """Recorded first and sent after, a question whose sending is cut short is sent later.
+
+    Sending is a task of its own: a caller cancelled while it runs leaves it to
+    finish, one cut short by a stop leaves the question unsent in the book, and
+    the next call naming it, or the agent's next start, sends it.
+    """
+
+    @staticmethod
+    async def _held(
+        wired: Wired, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[Gate, "asyncio.Task[str]"]:
+        gate = Gate(wired, monkeypatch, questions_topic(wired.actor.actor_id))
+        asking = asyncio.create_task(
+            wired.actor.ask_operator("Changed?", options=["yes", "no"], id="step-1")
+        )
+        await asyncio.wait_for(gate.reached.wait(), PATIENCE_S)
+        return gate, asking
+
+    async def test_a_caller_cancelled_while_it_is_sent_leaves_it_sent(
+        self, wired: Wired, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        gate, asking = await self._held(wired, monkeypatch)
+        asking.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asking
+
+        gate.open.set()
+
+        await until(lambda: len(wired.chat_frames) == 1, what="the question sent all the same")
+        await until(lambda: wired.actor.questions()["step-1"].sent, what="it recorded as sent")
+
+    async def test_one_answered_in_the_inbox_before_it_is_sent_is_not_sent(
+        self, wired: Wired, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The book is in the Inbox while it goes out; the person answers there first.
+        gate, asking = await self._held(wired, monkeypatch)
+        answering = asyncio.create_task(wired.answer("yes", channel="dashboard", id="step-1"))
+        await asyncio.sleep(0)
+        gate.open.set()
+
+        await answering
+        assert await asking == "yes"
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert wired.chat_frames == [], "no message offers a question already answered"
+        assert wired.actor.questions()["step-1"].answer == "yes"
+
+    async def test_two_asking_when_the_first_is_cancelled_the_second_still_gets_it(
+        self, wired: Wired, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        gate, first = await self._held(wired, monkeypatch)
+        second = asyncio.create_task(
+            wired.actor.ask_operator("Changed?", options=["yes", "no"], id="step-1")
+        )
+        await asyncio.sleep(0)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+        gate.open.set()
+        await until(lambda: len(wired.chat_frames) == 1, what="the question sent once")
+        await wired.answer("yes")
+
+        assert await second == "yes"
+        assert len(wired.chat_frames) == 1
+
+    async def _cut_short(self, wired: Wired, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Leave ``step-1`` in the book unsent, as a stop during its sending does."""
+        gate, asking = await self._held(wired, monkeypatch)
+        wired.actor._deliveries["step-1"].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asking
+        gate.open.set()
+        assert wired.chat_frames == []
+        assert not wired.actor.questions()["step-1"].sent
+
+    async def test_one_cut_short_is_sent_when_asked_again(
+        self, wired: Wired, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await self._cut_short(wired, monkeypatch)
+
+        again = asyncio.create_task(
+            wired.actor.ask_operator("Changed?", options=["yes", "no"], id="step-1")
+        )
+        await until(lambda: len(wired.chat_frames) == 1, what="the question sent at last")
+        await wired.answer("no", index=1)
+
+        assert await again == "no"
+
+    async def test_one_cut_short_is_sent_when_the_agent_starts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = spec_of(hvac_watch)
+        assert spec is not None
+        await self._cut_short(
+            Wired(spec.build(persistence_dir=str(tmp_path)), monkeypatch), monkeypatch
+        )
+
+        after = Wired(spec.build(persistence_dir=str(tmp_path)), monkeypatch)
+        try:
+            await after.actor.start()
+            await until(lambda: len(after.chat_frames) == 1, what="the question sent on start")
+            assert after.chat_frames[0]["id"] == "step-1"
+            await until(lambda: after.actor.questions()["step-1"].sent, what="it recorded as sent")
+        finally:
+            await after.actor.stop()
+
+    async def test_a_sent_one_is_not_sent_again_on_start(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = spec_of(hvac_watch)
+        assert spec is not None
+        before = Wired(spec.build(persistence_dir=str(tmp_path)), monkeypatch)
+        asking = asyncio.create_task(
+            before.actor.ask_operator("Changed?", options=["yes", "no"], id="step-1")
+        )
+        await until(
+            lambda: (
+                before.actor.questions().get("step-1") is not None
+                and before.actor.questions()["step-1"].sent
+            ),
+            what="sent",
+        )
+        asking.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asking
+
+        after = Wired(spec.build(persistence_dir=str(tmp_path)), monkeypatch)
+        try:
+            await after.actor.start()
+            for _ in range(20):
+                await asyncio.sleep(0)
+            assert after.chat_frames == []
+        finally:
+            await after.actor.stop()
+
+    def test_a_record_from_before_reads_as_sent(self) -> None:
+        # Recorded after it was sent, as every question was before.
+        record = {"id": "q1", "text": "x", "options": ["a"], "channel": "dashboard"}
+        question = Question.from_dict(record)
+        assert question is not None and question.sent
+
+    async def test_a_permission_is_in_the_book_before_it_is_sent(self, wired: Wired) -> None:
+        await wired.actor.ask_permission("Install acme?", ["Install", "Refuse"])
+
+        topics = [t for t, _ in wired.frames]
+        assert topics.index(questions_topic(wired.actor.actor_id)) < next(
+            i for i, t in enumerate(topics) if t.endswith("/chat")
+        )
+
+
+class TestAGeneratedAgentsQuestions:
+    async def test_it_names_its_question_and_reads_it_back_with_the_note(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        actor = DynamicAgent(code="", name="asker", persistence_dir=str(tmp_path))
+        wired = Wired(actor, monkeypatch)
+        assert actor._api is not None
+
+        asking = asyncio.create_task(
+            actor._api.ask_operator("Changed?", options=["yes", "no"], id="step-1")
+        )
+        await wired.settle()
+        assert wired.chat_frames[-1]["id"] == "step-1"
+        await wired.answer("no", index=1, id="step-1", note="swapped the filter")
+
+        assert await asking == "no"
+        record = actor._api.question("step-1")
+        assert record is not None
+        assert (record["answer"], record["answer_note"]) == ("no", "swapped the filter")
+        assert actor._api.question("never-asked") is None
 
 
 class TestAGeneratedAgentsHook:

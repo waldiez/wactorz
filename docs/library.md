@@ -905,6 +905,7 @@ except NoAnswerError:
 | `wait_for_answer` | `NotFoundError` | `LookupError` | a question this agent did not ask |
 | `ask_operator`, `wait_for_answer` | `NoAnswerError` | `asyncio.TimeoutError` | no answer within `timeout`; `ask_operator` waits once more on the dashboard first, for a question asked on a chat channel, and the question stays open |
 | `ask_operator` | `LabelError` | `ValueError` | a `label=` that cannot be used, before anything is sent |
+| `ask_operator` | `QuestionIdError` | `ValueError` | an `id=` that is not printable text of up to 128 characters, or that names a question this agent already asked about something else, before anything is sent |
 | `label` | `LabelError` | `ValueError` | a label that cannot be taken as written, or from an agent that cannot reach main's database |
 | `FunctionAgent.llm_for` | `ProviderUnavailableError` | `ValueError` | a provider that cannot be built here: unknown, no model named, no key, its extra not installed, or on a node |
 | `artifact_path`, `load_model` | `UnnamedModelError` | `KeyError` | a key the agent's `models` does not declare |
@@ -952,7 +953,7 @@ What this guide uses is the surface you can rely on:
 | `wactorz.errors` | every exception a call above raises, in one module (see *What to catch*) |
 | `wactorz.Actor` with `subscribe`, `window`, `publish`, `persist`, `recall`, `send`, `notify_user`, `on_start`, `on_stop`, `handle_message`, `state_dir`, `record_llm_cost` | the base class |
 | `notify_user(text, options=[...], channel=..., user=...)` and `agents/<id>/answer` | a message to the person on a chat channel, with a choice; the pick comes back on the agent's topic (see *Messages from an agent* in the interfaces guide) |
-| `ask_operator(text, options=[...], channel=..., user=..., timeout=..., label=..., context=...)`, `wait_for_answer`, `open_questions`, `on_operator_answer` | the same, waiting for the pick; a question outlives a restart, and with `label=` its answer becomes a label |
+| `ask_operator(text, options=[...], channel=..., user=..., timeout=..., label=..., context=..., id=...)`, `wait_for_answer`, `questions`, `open_questions`, `on_operator_answer` | the same, waiting for the pick; a question outlives a restart, with `id=` is never asked twice, and with `label=` its answer becomes a label |
 | `label(source, value, start=..., end=...)` | a label written as the agent's own, on main (see *Answers that become labels* in the interfaces guide) |
 | `models=` on `wactorz.agent`, `MODELS` on an `Actor`, with `artifact_path`, `load_model` and `artifacts` | the models an agent loads |
 | `concurrency=` on `wactorz.agent` and `Actor.subscribe` | messages and tasks at once |

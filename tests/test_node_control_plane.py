@@ -36,6 +36,7 @@ CONTROL_HANDLERS = [
     ("reset", "_on_reset"),
     ("swap_model", "_on_swap_model"),
     ("data_ack", "_on_data_ack"),
+    ("answer", "_on_answer"),
 ]
 
 
@@ -222,6 +223,7 @@ class TestTheControlConnection:
             "nodes/rpi/reset",
             "nodes/rpi/swap_model",
             "nodes/rpi/data_ack",
+            "nodes/rpi/answer",
             "nodes/rpi/reply/#",
             "nodes/rpi/blob/+",
             "agents/at/rpi/+/task",

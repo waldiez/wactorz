@@ -168,6 +168,17 @@ SCRIPT = {
         capabilities=["counting"],
         code=COUNTER,
     ),
+    # On the node, which enforces main's signature: its answer comes from main, signed.
+    "start a typist on the node": _starts(
+        "Starting it there.",
+        name="far-typist",
+        type="dynamic",
+        node=NODE_NAME,
+        description="Asks the person for a few words, from the node",
+        capabilities=["asking"],
+        poll_interval=1,
+        code=ASKS_FOR_WORDS,
+    ),
     "start an asker on the node": _starts(
         "Starting it there.",
         name="asker",

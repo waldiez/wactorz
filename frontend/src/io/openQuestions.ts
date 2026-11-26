@@ -32,6 +32,12 @@ export function questionMessage(question: LedgerQuestion, from = question.agent)
     return typeof question.answer === "string" ? { ...msg, answer: question.answer } : msg;
 }
 
+/** Words the server took for a question, and whether they went on to the agent's node. */
+export interface SentWords {
+    text: string;
+    forwarded: boolean;
+}
+
 /** The questions the ledger lists: those still open, oldest first, and the newest answered. */
 export interface QuestionLedger {
     open: ChatMessage[];
@@ -85,11 +91,15 @@ export class QuestionsApi {
         return got.ok ? { ok: true, value: null } : got;
     }
 
-    /** Answer `question`, one asked for words, with `text`; gives the words as the server kept them. */
-    async answerText(question: LedgerQuestion, text: string): Promise<Answer<string>> {
+    /**
+     * Answer `question`, one asked for words, with `text`. Gives the words as the
+     * server kept them, and whether they were only sent on to the agent's node,
+     * where the agent has yet to take them.
+     */
+    async answerText(question: LedgerQuestion, text: string): Promise<Answer<SentWords>> {
         const agent = encodeURIComponent(question.agent_id);
         const id = encodeURIComponent(question.id);
-        const got = await requestJson<{ answer?: { option?: unknown } }>(
+        const got = await requestJson<{ answer?: { option?: unknown }; forwarded?: unknown }>(
             `${this.apiBase}/api/questions/${agent}/${id}/answer`,
             posting({ text }),
         );
@@ -97,6 +107,9 @@ export class QuestionsApi {
             return got;
         }
         const kept = got.value.answer?.option;
-        return { ok: true, value: typeof kept === "string" ? kept : text };
+        return {
+            ok: true,
+            value: { text: typeof kept === "string" ? kept : text, forwarded: got.value.forwarded === true },
+        };
     }
 }

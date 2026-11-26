@@ -16,7 +16,10 @@ function asked(id: string, over: Partial<LedgerQuestion> = {}): LedgerQuestion {
 
 function inboxAnswering(
     result: { ok: true; value: null } | { ok: false; error: string },
-    typed: { ok: true; value: string } | { ok: false; error: string } = { ok: true, value: "" },
+    typed: { ok: true; value: { text: string; forwarded: boolean } } | { ok: false; error: string } = {
+        ok: true,
+        value: { text: "", forwarded: false },
+    },
 ) {
     const answer = vi.fn(async () => result);
     const answerText = vi.fn(async () => typed);

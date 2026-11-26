@@ -18,6 +18,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from tests.test_ask_operator import Wired, wired_fixture  # noqa: F401  # the fixture, by its name
+from tests.test_free_text_on_nodes import _Main as NodeMain
 from tests.waiting import until
 from wactorz.agents.dynamic import DynamicAgent
 from wactorz.core import outbound
@@ -83,13 +84,25 @@ class TestAsking:
         assert wired.frames == []
         assert wired.actor.questions() == {}
 
-    async def test_an_agent_on_a_node_cannot_ask_one_yet(self, wired: Wired) -> None:
-        wired.actor._node = "rpi"
+    async def test_on_a_node_that_does_not_enforce_main_signature_it_is_refused(
+        self, wired: Wired
+    ) -> None:
+        # The node's runner says so (`_inject`): the answer would come by a topic
+        # anything on the broker could write to.
+        wired.actor._node, wired.actor._takes_words = "rpi", False
 
-        with pytest.raises(OptionsError, match="node"):
+        with pytest.raises(OptionsError, match="does not enforce main's signature"):
             await wired.actor.ask_operator(QUESTION, free_text=True)
 
         assert wired.frames == []
+
+    async def test_on_a_node_that_enforces_it_it_is_asked(self, wired: Wired) -> None:
+        wired.actor._node, wired.actor._takes_words = "rpi", True
+
+        asking = await _asked(wired)
+
+        assert wired.chat_frames[-1]["free_text"] is True
+        asking.cancel()
 
     async def test_no_options_without_free_text_is_still_no_question(self, wired: Wired) -> None:
         with pytest.raises(OptionsError, match="free_text"):
@@ -245,6 +258,9 @@ class _Registry:
     def get(self, actor_id: str) -> Any:
         return self._actors.get(actor_id)
 
+    def find_by_name(self, name: str) -> Any:
+        return next((a for a in self._actors.values() if a.name == name), None)
+
 
 @pytest.fixture(name="client")
 async def client_fixture() -> AsyncIterator[TestClient[web.Request, web.Application]]:
@@ -338,6 +354,82 @@ class TestTheDashboardRoute:
         assert response.status == 503
         assert "process" in (await response.json())["error"]
         assert sent == [], "nothing goes on the broker for the agent to hear"
+        asking.cancel()
+
+    async def test_for_an_agent_on_a_node_the_words_go_through_main(
+        self,
+        client: TestClient[web.Request, web.Application],
+        wired: Wired,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Not in this process: main sends them, signed, to the node it places the agent on.
+        main = NodeMain(agent=wired.actor.name)
+        monkeypatch.setattr(runtime, "registry", _Registry())
+        monkeypatch.setattr(answers, "find_main_actor", lambda _registry: main)
+        asking = await _asked(wired)
+        _ledger_hears(wired)
+
+        response = await self._post(client, wired, {"text": "  Swapped it.  "})
+
+        assert response.status == 200
+        assert (await response.json())["forwarded"] is True
+        ((topic, payload),) = main.published
+        assert topic == "nodes/rpi/answer"
+        assert payload["answer"]["option"] == "Swapped it."
+        assert not asking.done(), "answered once the node's agent records it, not before"
+        asking.cancel()
+
+    @pytest.mark.parametrize(
+        "move",
+        [
+            pytest.param({"from_node": "rpi", "target_node": ""}, id="node to main"),
+            pytest.param({"from_node": "rpi", "target_node": "nuc"}, id="node to node"),
+            pytest.param({"from_node": "local", "target_node": "rpi"}, id="main to node"),
+        ],
+    )
+    async def test_while_the_agent_is_being_moved_it_is_refused_to_retry(
+        self,
+        client: TestClient[web.Request, web.Application],
+        wired: Wired,
+        monkeypatch: pytest.MonkeyPatch,
+        move: dict[str, Any],
+    ) -> None:
+        # Also for an agent here: one being moved from main is stopped, and its
+        # state taken, so words recorded now would stay in the copy left behind.
+        main = NodeMain(agent=wired.actor.name)
+        main.migration.pending_spawns["t1"] = {"agent_name": wired.actor.name, **move}
+        here = move["from_node"] == "local"
+        monkeypatch.setattr(runtime, "registry", _Registry(wired.actor) if here else _Registry())
+        monkeypatch.setattr(answers, "find_main_actor", lambda _registry: main)
+        asking = await _asked(wired)
+        _ledger_hears(wired)
+
+        response = await self._post(client, wired, {"text": "Swapped it."})
+
+        assert response.status == 409
+        body = await response.json()
+        assert body["retry"] is True and "being moved" in body["error"]
+        assert main.published == []
+        assert wired.actor.questions()[wired.chat_frames[-1]["id"]].open
+        asking.cancel()
+
+    async def test_for_an_agent_on_a_node_that_cannot_take_them_it_is_refused(
+        self,
+        client: TestClient[web.Request, web.Application],
+        wired: Wired,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        main = NodeMain(agent=wired.actor.name, signing="warn")
+        monkeypatch.setattr(runtime, "registry", _Registry())
+        monkeypatch.setattr(answers, "find_main_actor", lambda _registry: main)
+        asking = await _asked(wired)
+        _ledger_hears(wired)
+
+        response = await self._post(client, wired, {"text": "Swapped it."})
+
+        assert response.status == 503
+        assert "does not enforce" in (await response.json())["error"]
+        assert main.published == []
         asking.cancel()
 
     async def test_an_answered_one_is_refused(

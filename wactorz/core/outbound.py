@@ -70,10 +70,11 @@ class OptionsError(ValueError):
 
     @classmethod
     def free_text_on_node(cls) -> OptionsError:
-        """The error for a question asking for words from an agent on a node."""
+        """The error for asking for words on a node that cannot take the answer safely."""
         return cls(
-            "a free_text question cannot be asked from an agent on a node yet: "
-            "its answer reaches agents on main only"
+            "a free_text question cannot be asked here: its answer reaches an agent on a node "
+            "from main over a signed topic, and this node does not enforce main's signature "
+            "(WACTORZ_NODE_SIGNING=enforce, with the key a deploy gives it)"
         )
 
     @classmethod

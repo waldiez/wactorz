@@ -186,6 +186,9 @@
   border-color: transparent;
   cursor: default;
 }
+.af-inbox-refusal.af-inbox-sent {
+  color: rgba(255, 255, 255, 0.65);
+}
 .af-inbox-refusal {
   margin-top: 8px;
   font-size: 13px;

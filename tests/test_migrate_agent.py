@@ -1392,6 +1392,43 @@ class TestAnAgentWaitingForWords:
         assert not main.actor.migration.pending_spawns
         assert [config["name"] for config in main.spawned_local] == ["collector"]
 
+    async def test_to_a_node_that_takes_words_it_moves_with_the_question(
+        self, tmp_path: Path
+    ) -> None:
+        # The answer reaches it there from main, signed; the node says it takes
+        # them and its heartbeat says it enforces the signature.
+        main, _actor = self._main(tmp_path, _words("q1"))
+        main.actor.nodes.node_manifests["nuc"] = {"free_text_answers": True}
+        main.actor.nodes.known["nuc"]["signing"] = "enforce"
+
+        result = await main.migrate("collector", "nuc")
+
+        assert "waits for an answer in words" not in result.get("message", "")
+        assert [node for _config, node, _save in main.spawned_remote] == ["nuc"]
+
+    @pytest.mark.parametrize(
+        ("manifest", "signing", "why"),
+        [
+            pytest.param({}, "enforce", "deploy it again", id="an older node"),
+            pytest.param(
+                {"free_text_answers": True}, "warn", "does not enforce", id="signing warn"
+            ),
+            pytest.param({"free_text_answers": True}, "off", "does not enforce", id="no key"),
+        ],
+    )
+    async def test_to_one_that_cannot_it_stays_saying_why(
+        self, tmp_path: Path, manifest: dict[str, Any], signing: str, why: str
+    ) -> None:
+        main, _actor = self._main(tmp_path, _words("q1"))
+        main.actor.nodes.node_manifests["nuc"] = manifest  # pyright: ignore[reportArgumentType]  # a manifest as a node sends it
+        main.actor.nodes.known["nuc"]["signing"] = signing
+
+        result = await main.migrate("collector", "nuc")
+
+        assert result["success"] is False
+        assert why in result["message"]
+        assert not main.spawned_remote
+
     async def test_once_it_is_answered_the_agent_may_move(self, tmp_path: Path) -> None:
         main, _actor = self._main(tmp_path, _words("q1", answer="Swapped it."))
 

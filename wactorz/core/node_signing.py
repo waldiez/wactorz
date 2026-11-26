@@ -75,6 +75,8 @@ CONTROL_LEAVES = frozenset(
         "reset",
         "swap_model",
         "data_ack",
+        # A person's answer in words, which the agent takes from main alone.
+        "answer",
     }
 )
 

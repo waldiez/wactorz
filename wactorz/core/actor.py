@@ -528,8 +528,10 @@ def born_stopped() -> Iterator[None]:
         _BORN_STOPPED.reset(token)
 
 
-def _check_asking(options: Sequence[str], *, free_text: bool, label: object, node: str) -> None:
-    """Refuse what cannot be asked together: words with options or a label, or from a node.
+def _check_asking(
+    options: Sequence[str], *, free_text: bool, label: object, takes_words: bool
+) -> None:
+    """Refuse what cannot be asked together: words with options or a label, or where none reach.
 
     Without ``free_text`` a question needs options. Raised before anything is
     recorded or sent.
@@ -542,7 +544,7 @@ def _check_asking(options: Sequence[str], *, free_text: bool, label: object, nod
         raise OptionsError.free_text_with_options()
     if label is not None:
         raise LabelError.free_text()
-    if node:
+    if not takes_words:
         raise OptionsError.free_text_on_node()
 
 
@@ -618,6 +620,11 @@ class Actor(ABC):
         #: claimed it. The empty string is what the rest of the framework means
         #: by local — see main's `is_target_local`.
         self._node: str = ""
+        #: Whether a person's answer in words can reach this actor, so it may ask
+        #: for one (`ask_operator(free_text=True)`). Here the server hands it
+        #: over in this process; on a node the runner sets it, true only while
+        #: the node enforces main's signature on the topic the answer comes by.
+        self._takes_words: bool = True
 
         #: The one broker connection this actor's subscriptions share, made on
         #: the first `subscribe`. None until then, so an actor that never
@@ -2229,7 +2236,8 @@ class Actor(ABC):
         channel the question is sent with word that it is answered there. The
         answer is taken only from the dashboard, handed over in this process,
         never from the answer topic, which anything on the broker can write to;
-        so an agent on a node cannot ask one yet.
+        main forwards it to an agent on a node over the node's signed control
+        topic, so one there can ask only while its node enforces that signature.
 
         Raises ``ValueError`` for no options, options or a channel the channels
         cannot show, a ``label`` that cannot be used, ``free_text`` with options
@@ -2238,7 +2246,7 @@ class Actor(ABC):
         (:class:`~wactorz.core.questions.QuestionIdError`) -- before anything is
         sent.
         """
-        _check_asking(options, free_text=free_text, label=label, node=self._node)
+        _check_asking(options, free_text=free_text, label=label, takes_words=self._takes_words)
         checked = check_options(options)
         spec = None if label is None else LabelSpec.parse(label, checked)
         question = Question(

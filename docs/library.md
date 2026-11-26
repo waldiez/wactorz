@@ -900,7 +900,7 @@ except NoAnswerError:
 | `Actor.subscribe` | `NotCallableError` | `TypeError` | a callback that cannot be called with a payload |
 | `wactorz.pipeline` | `PipelineError` | `ValueError` | no name, neither steps nor rules, or steps that do not connect, each problem named |
 | `wactorz.pipeline` with rules as dicts, `RuleConfig.from_dict` and its parts' | `RuleError` | `ValueError` | a rule that cannot run as written |
-| `notify_user`, `ask_operator` | `OptionsError` | `ValueError` | options a chat channel cannot show, a question with none and no `free_text=True`, one asked for words that offers options too, or one asked for words from an agent on a node |
+| `notify_user`, `ask_operator` | `OptionsError` | `ValueError` | options a chat channel cannot show, a question with none and no `free_text=True`, one asked for words that offers options too, or one asked for words on a node that does not enforce main's signature |
 | `notify_user`, `ask_operator` | `UnknownChannelError` | `ValueError` | a channel no interface is called |
 | `wait_for_answer` | `NotFoundError` | `LookupError` | a question this agent did not ask |
 | `ask_operator`, `wait_for_answer` | `NoAnswerError` | `asyncio.TimeoutError` | no answer within `timeout`; `ask_operator` waits once more on the dashboard first, for a question asked on a chat channel, and the question stays open |

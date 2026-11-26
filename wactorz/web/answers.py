@@ -32,6 +32,8 @@ from typing import Any
 
 from aiohttp import web
 
+from ..agents.lookup import find_main_actor
+from ..agents.main.typed_answers import BEING_MOVED, forward_words
 from ..core.labels import vouch
 from ..core.outbound import Answer, TakesDashboardAnswers, check_options, note_text
 from ..core.questions import MAX_TEXT_CHARS, typed_text
@@ -126,18 +128,6 @@ async def _free_text_answer(agent_id: str, question_id: str, body: dict[str, Any
     question = questions.find(agent_id, question_id)
     if question is not None and not question.open:
         return web.json_response({"error": "This question was already answered."}, status=409)
-    agent = runtime.registry.get(agent_id) if runtime.registry is not None else None
-    # The registry holds this process's actors only; an agent on a node is not among them.
-    if agent is None:
-        return web.json_response(
-            {
-                "error": (
-                    "The agent that asked does not run in this server's process, so a typed "
-                    "answer cannot reach it."
-                )
-            },
-            status=503,
-        )
     answer = Answer(
         id=question_id,
         agent_id=agent_id,
@@ -146,6 +136,14 @@ async def _free_text_answer(agent_id: str, question_id: str, body: dict[str, Any
         channel="dashboard",
         timestamp=time.time(),
     )
+    main = find_main_actor(runtime.registry) if runtime.registry is not None else None
+    if main is not None and main.migration.being_moved(questions.name_of(agent_id)):
+        # Here or on a node: the copy being stopped would keep words no one runs.
+        return web.json_response({"error": BEING_MOVED, "retry": True}, status=409)
+    agent = runtime.registry.get(agent_id) if runtime.registry is not None else None
+    # The registry holds this process's actors only; an agent on a node is not among them.
+    if agent is None:
+        return await _words_to_a_node(agent_id, answer)
     refused = await agent.take_free_text(answer)
     if refused is not None:
         return web.json_response({"error": refused}, status=409)
@@ -157,6 +155,26 @@ async def _free_text_answer(agent_id: str, question_id: str, body: dict[str, Any
     await broadcast_mqtt_msg(answer.topic, json.dumps(answer.to_payload()))
     logger.info("[answers] dashboard answered %s's question in words", agent_id[:8])
     return web.json_response({"answer": answer.to_payload()})
+
+
+async def _words_to_a_node(agent_id: str, answer: Answer) -> web.Response:
+    """Send the words to the agent ``agent_id`` on a node, through main; or say why not.
+
+    Main checks where the agent runs and whether that node may be given them,
+    each time (`typed_answers.forward_words`), and sends them signed. The node's
+    agent records them and publishes them, which closes the question on every
+    dashboard; this answers once they are on their way.
+    """
+    main = find_main_actor(runtime.registry) if runtime.registry is not None else None
+    if main is None:
+        return web.json_response(
+            {"error": "The agent that asked does not run in this server's process."}, status=503
+        )
+    refused = await forward_words(main, questions.name_of(agent_id), answer)
+    if refused is not None:
+        return web.json_response({"error": refused}, status=503)
+    logger.info("[answers] dashboard answered %s's question in words, through main", agent_id[:8])
+    return web.json_response({"answer": answer.to_payload(), "forwarded": True})
 
 
 async def answer_handler(request: web.Request) -> web.Response:

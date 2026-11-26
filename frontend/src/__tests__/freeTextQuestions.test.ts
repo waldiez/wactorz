@@ -9,7 +9,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 
 import { normaliseChat, normaliseQuestion } from "../io/ServerEventRouter";
 import { questionMessage, QuestionsApi } from "../io/openQuestions";
-import { QuestionInbox } from "../questions/QuestionInbox";
+import { QuestionInbox, SENT_TO_NODE } from "../questions/QuestionInbox";
 import type { ChatMessage, LedgerQuestion } from "../types/agent";
 import { buildWordsLink } from "../ui/chat/chatThread";
 import { QuestionCard, type CardHost } from "../ui/inbox/questionCard";
@@ -153,6 +153,17 @@ describe("the Inbox card", () => {
         expect(send(card).disabled).toBe(false);
     });
 
+    it("says the words were sent on, not refused, and may be sent again", async () => {
+        const card = new QuestionCard(asked, host({ answerText: vi.fn(async () => SENT_TO_NODE) }));
+        box(card).value = "Swapped it.";
+
+        send(card).click();
+        await vi.waitFor(() => expect(card.element.querySelector(".af-inbox-sent")).not.toBeNull());
+
+        expect(card.element.querySelector(".af-inbox-refusal")!.textContent).toBe(SENT_TO_NODE);
+        expect(send(card).disabled).toBe(false);
+    });
+
     it("keeps what is half typed across a redraw", () => {
         const card = new QuestionCard(asked, host());
         box(card).value = "Swapped the";
@@ -181,7 +192,7 @@ describe("the answer's way to the server", () => {
 
         expect(await new QuestionsApi("/base").answerText(asked, "Swapped it.\u0007")).toEqual({
             ok: true,
-            value: "Swapped it.",
+            value: { text: "Swapped it.", forwarded: false },
         });
         const calls = fake.mock.calls as unknown as [string, RequestInit][];
         expect(calls[0]?.[0]).toBe("/base/api/questions/agent-1/q-1/answer");
@@ -192,7 +203,7 @@ describe("the answer's way to the server", () => {
         globalThis.fetch = vi.fn(async () => Response.json({})) as unknown as typeof fetch;
         expect(await new QuestionsApi("").answerText(asked, "Swapped.")).toEqual({
             ok: true,
-            value: "Swapped.",
+            value: { text: "Swapped.", forwarded: false },
         });
 
         globalThis.fetch = vi.fn(async () =>
@@ -205,12 +216,26 @@ describe("the answer's way to the server", () => {
     });
 
     it("answers the Inbox's question with the server's words", async () => {
-        const answerText = vi.fn(async () => ({ ok: true as const, value: "Swapped it." }));
+        const answerText = vi.fn(async () => ({
+            ok: true as const,
+            value: { text: "Swapped it.", forwarded: false },
+        }));
         const inbox = new QuestionInbox({ answer: vi.fn(), answerText });
         inbox.heard({ agentId: "agent-1", questions: [asked] });
 
         expect(await inbox.answerText(asked, "  Swapped it. ")).toBe("");
         expect(inbox.state.answered[0]).toMatchObject({ id: "q-1", answer: "Swapped it." });
+    });
+
+    it("says when the words only went on to a node, and keeps the question waiting", async () => {
+        globalThis.fetch = vi.fn(async () =>
+            Response.json({ answer: { option: "Swapped it." }, forwarded: true }),
+        ) as unknown as typeof fetch;
+        const inbox = new QuestionInbox(new QuestionsApi(""));
+        inbox.heard({ agentId: "agent-1", questions: [asked] });
+
+        expect(await inbox.answerText(asked, "Swapped it.")).toBe(SENT_TO_NODE);
+        expect(inbox.state.open.map(q => q.id)).toEqual(["q-1"]);
     });
 
     it("passes the Inbox a refusal, and keeps the question waiting", async () => {

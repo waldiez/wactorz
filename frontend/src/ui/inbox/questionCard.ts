@@ -11,6 +11,7 @@
  */
 import { formatRoute } from "../../router";
 import { timeLabel, toMs } from "../../time";
+import { SENT_TO_NODE } from "../../questions/QuestionInbox";
 import type { LedgerQuestion } from "../../types/agent";
 import { button, el, labelled, listItem, named } from "../dom";
 
@@ -183,14 +184,16 @@ export class QuestionCard {
         this._refusal.hidden = true;
         const refused = await send();
         if (refused) {
-            this._say(refused);
+            // Sent on to a node is no refusal, but the card stays: it may be sent again.
+            this._say(refused, refused === SENT_TO_NODE);
             this._buttons.forEach(pick => (pick.disabled = false));
         }
     }
 
-    /** Show `why` where a refusal is said. */
-    private _say(why: string): void {
+    /** Show `why` where a refusal is said; `sent` says it went, and is not a refusal. */
+    private _say(why: string, sent = false): void {
         this._refusal.textContent = why;
+        this._refusal.classList.toggle("af-inbox-sent", sent);
         this._refusal.hidden = false;
     }
 }

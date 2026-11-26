@@ -69,6 +69,7 @@ from ..core.mqtt import (
 )
 from ..core.mqtt_tls import tls_enabled
 from ..core.node_signing import CONTROL_LEAVES
+from ..core.outbound import Answer
 from ..core.paths import agent_state_dir
 from ..core.pip import install_command, install_destination, is_installable_name
 from ..core.registry import ActorRegistry, Supervisor
@@ -219,6 +220,10 @@ class NodeRunner:
         actor._mqtt_broker = self.broker
         actor._mqtt_port = self.port
         actor._node = self.node_name
+        # Whether an agent here may ask a person for words: their answer reaches
+        # it from main over a signed control topic, and a node that does not
+        # enforce the signature would take one from anything on the broker.
+        actor._takes_words = self.takes_words
 
     # ── Publishing ────────────────────────────────────────────────────────────
 
@@ -812,6 +817,10 @@ class NodeRunner:
                 # it sends the agent's code with the spawn, which this node takes.
                 "agents": plugins.targets(),
                 "code_bundles": True,
+                # That it takes a person's answer in words for its agents, on
+                # nodes/<node>/answer from main; main forwards one only while
+                # this node also enforces main's signature (its heartbeat says).
+                "free_text_answers": True,
                 # That an agent sent here runs under the id its spawn names,
                 # rather than one derived from its name.
                 "actor_ids": True,
@@ -925,6 +934,7 @@ class NodeRunner:
             node_topic(self.node_name, "reset"): self._on_reset,
             node_topic(self.node_name, "swap_model"): self._on_swap_model,
             node_topic(self.node_name, "data_ack"): self._on_data_ack,
+            node_topic(self.node_name, "answer"): self._on_answer,
         }
         handler = exact.get(topic_str)
         if handler is not None:
@@ -1219,6 +1229,41 @@ class NodeRunner:
     async def _answer_swap(self, answer: dict[str, Any]) -> None:
         await self.publish(node_topic(self.node_name, "swap_ack"), answer)
 
+    @property
+    def takes_words(self) -> bool:
+        """Whether a person's answer in words may reach an agent here: only when signed by main."""
+        return self._control.mode == "enforce"
+
+    async def _on_answer(self, topic_str: str, data: Any, msg: Any) -> None:
+        """Hand an agent here a person's answer in words, which main forwarded.
+
+        Its signature was checked with every control message's, and is checked
+        again here: a node that enforces none would act on one from anything on
+        the broker, so it takes none, whatever was checked when it was asked.
+        """
+        if not self.takes_words:
+            logger.warning(
+                "[runner] Refused an answer in words: this node does not enforce main's "
+                "signature (WACTORZ_NODE_SIGNING=%s).",
+                self._control.mode,
+            )
+            return
+        if not isinstance(data, dict):
+            return
+        agent = self.hosted(str(data.get("agent") or ""))
+        actor_id = str(data.get("actor_id") or "")
+        if agent is None or agent.actor_id != actor_id:
+            logger.warning(
+                "[runner] An answer in words for an agent not here: %r", data.get("agent")
+            )
+            return
+        answer = Answer.from_payload(actor_id, data.get("answer"))
+        if answer is None:
+            return
+        refused = await agent.take_free_text(answer)
+        if refused is not None:
+            logger.warning("[runner] %s did not take an answer in words: %s", agent.name, refused)
+
     async def _on_data_ack(self, topic_str: str, data: Any, msg: Any) -> None:
         """Main says whether it kept a recorded file this node sent; see `DataShipper`."""
         if not isinstance(data, dict) or not isinstance(data.get("sha256"), str):
@@ -1382,6 +1427,7 @@ class NodeRunner:
             node_topic(self.node_name, "reset"),
             node_topic(self.node_name, "swap_model"),  # serve another version of a model
             node_topic(self.node_name, "data_ack"),  # main took a recorded file
+            node_topic(self.node_name, "answer"),  # a person's words for an agent here
             node_topic(self.node_name, "reply", "#"),
             node_topic(self.node_name, "blob", "+"),  # an agent's blobs, as main places it here
             # Tasks for the agents here: on this node's own topic, and by name

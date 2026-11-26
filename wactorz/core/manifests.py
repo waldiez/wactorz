@@ -107,6 +107,9 @@ class NodeManifest(TypedDict, total=False):
     agents: list[str]
     code_bundles: bool
     actor_ids: bool
+    #: That this node takes a person's answer in words for its agents, from main
+    #: over its signed control topic (`NodeRunner._on_answer`).
+    free_text_answers: bool
     tasks_by_node: bool
     resets: bool
     timestamp: float

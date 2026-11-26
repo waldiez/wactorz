@@ -204,6 +204,11 @@ def forget(agent_id: str) -> None:
     _admitted.pop(agent_id, None)
 
 
+def name_of(agent_id: str) -> str:
+    """The name of the agent ``agent_id`` as its book gives it, or "" when the ledger has no book."""
+    return _books.get(agent_id, ("", []))[0]
+
+
 def find(agent_id: str, question_id: str) -> Question | None:
     """The question ``question_id`` in ``agent_id``'s book, or None when the ledger has none."""
     if runtime.is_deleted(agent_id):

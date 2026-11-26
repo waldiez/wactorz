@@ -653,6 +653,10 @@ properties, so the payload is unchanged.</p>
 </ul>
 <p>A node takes the mode at its next <code>/deploy</code>: one deployed while the default was
 <code>warn</code> keeps warning until then.</p>
+<p>A person's answer in words to an agent on a node (<code>ask_operator(free_text=True)</code>)
+comes the same way, signed, on <code>nodes/&lt;node&gt;/answer</code>, so only a node that
+enforces takes one: on a <code>warn</code> node, or one with no key, an agent cannot ask for
+words, main sends none there, and an agent waiting for words is not moved there.</p>
 <p>A node deployed before signing holds no key and acts on everything, as it always
 did; deploy it again to give it one. A node remembers the commands it has
 accepted, so a captured one cannot be replayed, and refuses one published before

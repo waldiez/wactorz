@@ -1117,6 +1117,12 @@ NotFoundError</code> does. The message always says what went wrong.</p>
 <td>a <code>label=</code> that cannot be used, before anything is sent</td>
 </tr>
 <tr>
+<td><code>ask_operator</code></td>
+<td><code>QuestionIdError</code></td>
+<td><code>ValueError</code></td>
+<td>an <code>id=</code> that is not printable text of up to 128 characters, or that names a question this agent already asked about something else, before anything is sent</td>
+</tr>
+<tr>
 <td><code>label</code></td>
 <td><code>LabelError</code></td>
 <td><code>ValueError</code></td>
@@ -1237,8 +1243,8 @@ it refuses in its reply in the same way.</p>
 <td>a message to the person on a chat channel, with a choice; the pick comes back on the agent's topic (see <em>Messages from an agent</em> in the interfaces guide)</td>
 </tr>
 <tr>
-<td><code>ask_operator(text, options=[...], channel=..., user=..., timeout=..., label=..., context=...)</code>, <code>wait_for_answer</code>, <code>open_questions</code>, <code>on_operator_answer</code></td>
-<td>the same, waiting for the pick; a question outlives a restart, and with <code>label=</code> its answer becomes a label</td>
+<td><code>ask_operator(text, options=[...], channel=..., user=..., timeout=..., label=..., context=..., id=...)</code>, <code>wait_for_answer</code>, <code>questions</code>, <code>open_questions</code>, <code>on_operator_answer</code></td>
+<td>the same, waiting for the pick; a question outlives a restart, with <code>id=</code> is never asked twice, and with <code>label=</code> its answer becomes a label</td>
 </tr>
 <tr>
 <td><code>label(source, value, start=..., end=...)</code></td>

@@ -160,7 +160,7 @@ class TestTheNode:
 
         runner._inject(actor)
 
-        assert actor._takes_words is takes
+        assert actor.takes_words is takes
 
     async def test_an_agent_on_a_node_that_does_not_enforce_it_cannot_ask(
         self, tmp_path: Path

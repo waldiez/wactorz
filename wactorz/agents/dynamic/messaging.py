@@ -280,12 +280,23 @@ class MessagingMixin(_Host):
         return written.to_dict()
 
     async def wait_for_answer(self, question_id: str, *, timeout: float | None = None) -> str:
-        """The option picked for an earlier question, waiting up to ``timeout`` seconds."""
+        """The answer to an earlier question, waiting up to ``timeout`` seconds.
+
+        The option picked, or for a ``free_text`` question the words typed.
+        """
         return await self._actor.wait_for_answer(question_id, timeout=timeout)
 
     def open_questions(self) -> list[dict[str, Any]]:
         """The questions still waiting for an answer, oldest first, as dicts (SYNC, no await)."""
         return [q.to_dict() for q in self._actor.open_questions()]
+
+    @property
+    def takes_words(self) -> bool:
+        """Whether this agent may ask a person for words, ``ask_operator(free_text=True)``.
+
+        True on main; on a node, only while the node enforces main's signature.
+        """
+        return self._actor.takes_words
 
     def question(self, question_id: str) -> dict[str, Any] | None:
         """The question ``question_id`` as a dict, answered or not, or None (SYNC, no await).

@@ -1395,6 +1395,17 @@ class Actor(ABC):
             await self._registry.broadcast(self.actor_id, msg_type, payload)
 
     @property
+    def takes_words(self) -> bool:
+        """Whether this actor may ask a person for words, ``ask_operator(free_text=True)``.
+
+        True on main, where the server hands the answer over in this process;
+        on a node, only while the node enforces main's signature on the topic
+        the answer comes by. A program that will ask for words can check it
+        before it starts the work, rather than be refused at the question.
+        """
+        return self._takes_words
+
+    @property
     def handling_seconds(self) -> float:
         """How long this actor has been on the message it is handling; 0 when idle.
 
@@ -2241,8 +2252,8 @@ class Actor(ABC):
 
         Raises ``ValueError`` for no options, options or a channel the channels
         cannot show, a ``label`` that cannot be used, ``free_text`` with options
-        or a label or from an agent on a node, or an ``id`` that is not one or
-        names another question already asked
+        or a label or where :attr:`takes_words` is false, or an ``id`` that is
+        not one or names another question already asked
         (:class:`~wactorz.core.questions.QuestionIdError`) -- before anything is
         sent.
         """
@@ -2331,7 +2342,9 @@ class Actor(ABC):
         )
 
     async def wait_for_answer(self, question_id: str, *, timeout: float | None = None) -> str:
-        """The option picked for the question ``question_id``, waiting up to ``timeout`` seconds.
+        """The answer to the question ``question_id``, waiting up to ``timeout`` seconds.
+
+        The option picked, or for a ``free_text`` question the words typed.
 
         Returns at once for a question already answered. ``LookupError`` for a
         question this actor never asked, ``asyncio.TimeoutError`` when the time

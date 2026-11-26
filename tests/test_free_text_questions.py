@@ -84,6 +84,9 @@ class TestAsking:
         assert wired.frames == []
         assert wired.actor.questions() == {}
 
+    def test_an_agent_on_main_takes_words(self, wired: Wired) -> None:
+        assert wired.actor.takes_words is True
+
     async def test_on_a_node_that_does_not_enforce_main_signature_it_is_refused(
         self, wired: Wired
     ) -> None:

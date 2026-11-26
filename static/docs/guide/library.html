@@ -1244,7 +1244,7 @@ it refuses in its reply in the same way.</p>
 </tr>
 <tr>
 <td><code>ask_operator(text, options=[...], channel=..., user=..., timeout=..., label=..., context=..., id=..., free_text=...)</code>, <code>wait_for_answer</code>, <code>questions</code>, <code>open_questions</code>, <code>on_operator_answer</code></td>
-<td>the same, waiting for the pick, or with <code>free_text=True</code> for words typed in the Inbox; a question outlives a restart, with <code>id=</code> is never asked twice, and with <code>label=</code> its answer becomes a label</td>
+<td>the same, waiting for the pick, or with <code>free_text=True</code> for words typed in the Inbox; a question outlives a restart, with <code>id=</code> is never asked twice, and with <code>label=</code> its answer becomes a label; <code>takes_words</code> says whether <code>free_text=True</code> may be asked here</td>
 </tr>
 <tr>
 <td><code>label(source, value, start=..., end=...)</code></td>

@@ -312,6 +312,18 @@ class TestConvenienceTopics:
         assert chat["task"] == "backup"
 
 
+class TestTakesWords:
+    def test_it_says_what_the_actor_says(self, tmp_path: Path) -> None:
+        actor = DynamicAgent(name="asker", code="", persistence_dir=str(tmp_path))
+        api = AgentAPI(actor)
+        assert api.takes_words is True
+
+        # As a node's runner sets it when the node does not enforce main's signature.
+        actor._takes_words = False
+
+        assert api.takes_words is False
+
+
 class TestSendToLocal:
     async def test_without_a_registry_nothing_is_sent(self, tmp_path: Path) -> None:
         api = AgentAPI(DynamicAgent(name="alone", code="", persistence_dir=str(tmp_path)))

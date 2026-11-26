@@ -14,13 +14,16 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
 from wactorz import app as app_module
+from wactorz.agents.main import MainActor
 from wactorz.agents.main import manifests as main_manifests
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.core import node_env
+from wactorz.core.mqtt import install_id
 from wactorz.core.topics import OWN_ROOTS, WORLD_ROOTS, namespace_error
 from wactorz.errors import StartupError
 from wactorz.node import cli as node_cli
@@ -237,16 +240,54 @@ class TestWhatAnEarlierNamespaceLeftBehind:
         monkeypatch.setattr(main_manifests, "NAMESPACE", "lab")
         assert main_manifests.leftover_manifest_topic("m1") == "agents/m1/manifest"
 
-    def test_it_is_said_once_and_a_cleared_one_not_at_all(
+    def test_this_installs_own_is_said_once_with_how_to_clear_it(
         self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        registry = ManifestRegistry()
+        ours = json.dumps({"install": install_id()}).encode()
+
+        with caplog.at_level("WARNING"):
+            registry.say_leftover("agents/m1/manifest", b"")
+            registry.say_leftover("agents/m1/manifest", ours)
+            registry.say_leftover("agents/m1/manifest", ours)
+
+        said = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert len(said) == 1, "a cleared one is not said, and the rest only once"
+        assert "still retained on agents/m1/manifest" in said[0]
+        assert "mosquitto_pub -r -n" in said[0]
+
+    def test_another_installs_live_main_is_not_taken_for_this_ones(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Main's id is the same in every install, so a second install's main is on this topic.
+        registry = ManifestRegistry()
+
+        with caplog.at_level("WARNING"):
+            registry.say_leftover("agents/m1/manifest", json.dumps({"install": "other"}).encode())
+
+        assert [r for r in caplog.records if r.levelname == "WARNING"] == []
+
+    @pytest.mark.parametrize("payload", [b"{}", b"not json", json.dumps({"install": 7}).encode()])
+    def test_one_that_names_no_install_is_said_without_how_to_clear_it(
+        self, caplog: pytest.LogCaptureFixture, payload: bytes
     ) -> None:
         registry = ManifestRegistry()
 
         with caplog.at_level("WARNING"):
-            registry.say_leftover("agents/m1/manifest", b"")
-            registry.say_leftover("agents/m1/manifest", b"{}")
-            registry.say_leftover("agents/m1/manifest", b"{}")
+            registry.say_leftover("agents/m1/manifest", payload)
 
-        said = [r for r in caplog.records if "still retained" in r.getMessage()]
-        assert len(said) == 1
-        assert "agents/m1/manifest" in said[0].getMessage()
+        (said,) = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert "or another install's" in said
+        assert "mosquitto_pub" not in said, "it may be another install's, live"
+
+    async def test_mains_manifest_names_its_install(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = MainActor(persistence_dir=str(tmp_path))
+        publish = AsyncMock()
+        monkeypatch.setattr(main, "_mqtt_publish", publish)
+
+        await main._send_manifest({"description": "I coordinate agents."})
+
+        (_topic, sent), _kwargs = publish.call_args
+        assert sent["install"] == install_id()

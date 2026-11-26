@@ -724,10 +724,14 @@ is no namespace.
 **Changing it is a deploy.** After setting, renaming or clearing a namespace, run
 `/deploy` for every node: a node is told its namespace in its `.env`, and one on
 another namespace than main's publishes where main does not listen. Main says in chat
-when it hears one of its own nodes on another namespace. Retained topics from before
-are left on the broker, since another install may own what is under them; main logs
-once when it finds its own manifest there, and one can be cleared with
-`mosquitto_pub -r -n -t <topic>`.
+when it hears one of its own nodes on another namespace. The namespace is part of
+the name of every connection main and a node open, so a session the broker kept from
+before is not resumed, and nothing subscribed under the old namespace is heard under
+the new one. Retained topics from before are left on the broker, since another install
+may own what is under them; main logs once when it finds its own manifest there, and
+one can be cleared with `mosquitto_pub -r -n -t <topic>`. Main has the same id in every
+install, and its manifest names the install that sent it, so another install's main
+under no namespace is not taken for this one's.
 
 **It is enforced where Wactorz writes the access list:** the compose broker and the
 add-ons' embedded broker. On a broker Wactorz does not run (the official Mosquitto

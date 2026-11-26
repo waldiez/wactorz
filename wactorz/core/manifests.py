@@ -39,6 +39,10 @@ class AgentManifest(TypedDict, total=False):
     Added only when a remote manifest is admitted for a node main did not
     place it on itself (``ManifestRegistry._trusted``):
         node
+    Added only by main (``agents.main.actor.MainActor``), since main's actor id
+    is the same in every install and its manifest topic is shared by every
+    install with no namespace on a broker:
+        install
     Added only for an agent a node hosts (``node.hosted.NodeHosted``), so a
     directory built from manifests alone knows a task reaches it on the
     node's own topic:
@@ -69,6 +73,7 @@ class AgentManifest(TypedDict, total=False):
     spawnable: bool
     catalog: str
     tasks_by_node: bool
+    install: str
 
 
 class NodeManifest(TypedDict, total=False):

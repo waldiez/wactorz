@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from wactorz.agents.dynamic.listener import SubscriptionHub
-from wactorz.core import mqtt
+from wactorz.core import mqtt, topics
 from wactorz.core.actor import Actor, Message, derive_actor_id, has_stable_id
 from wactorz.core.mqtt import (
     AGENT_SESSION_EXPIRY_SECONDS,
@@ -120,6 +120,64 @@ class TestClientId:
         # by the install id, because several nodes share one install.
         assert client_id("node", "rpi") != client_id("nodepub", "rpi")
         assert client_id("node", "rpi") != client_id("node", "nuc")
+
+
+class TestANamespacedInstall:
+    """A session is resumed by its id, subscriptions and all.
+
+    Under one id across a namespace change, an install would resume the old
+    namespace's subscriptions and go on hearing its topics: the bare ones of
+    another install on the broker, say. The namespace is part of every id, so a
+    session made under one namespace is never resumed under another.
+    """
+
+    def test_every_id_carries_the_namespace(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(topics, "NAMESPACE", "dev")
+
+        assert client_id("srv", "abc123", "llm") == "wactorz3.dev-srv-abc123-llm"
+        assert client_id("node", "rpi") == "wactorz3.dev-node-rpi"
+        assert agent_client_id("a1", purpose="sub") == f"wactorz3.dev-agent-{install_id()}-a1-sub"
+
+    def test_two_namespaces_never_share_a_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        ids = []
+        for namespace in ("", "dev", "staging"):
+            monkeypatch.setattr(topics, "NAMESPACE", namespace)
+            ids.append(client_id("srv", "abc123", "manifests"))
+
+        assert len(set(ids)) == len(ids)
+
+    @pytest.mark.parametrize(
+        ("first", "second"),
+        [
+            # A namespace's hyphen read as a node name's, either way round.
+            (("dev", "rpi"), ("", "rpi-dev")),
+            (("dev", "rpi"), ("", "dev-rpi")),
+            # Two namespaces, each with a node whose name holds the other's tail.
+            (("a", "x-node-y"), ("a-node-x", "y")),
+            (("a.b", "c"), ("a", "b-c")),
+        ],
+    )
+    def test_no_namespace_and_name_read_as_another(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        first: tuple[str, str],
+        second: tuple[str, str],
+    ) -> None:
+        # Two nodes on one broker under one id would disconnect each other in a loop.
+        ids = []
+        for namespace, node in (first, second):
+            monkeypatch.setattr(topics, "NAMESPACE", namespace)
+            ids.append(
+                (client_id("node", node), client_id("nodepub", node), agent_client_id("a1", node))
+            )
+
+        assert set(ids[0]).isdisjoint(ids[1])
+
+    def test_with_no_namespace_the_ids_are_unchanged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # An install without one resumes its sessions across the upgrade.
+        monkeypatch.setattr(topics, "NAMESPACE", "")
+
+        assert client_id("srv", "abc123", "llm") == "wactorz-srv-abc123-llm"
 
 
 class TestAnAgentsConnections:

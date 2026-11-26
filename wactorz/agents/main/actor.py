@@ -22,6 +22,7 @@ from ...config import (
 from ...core.actor import Actor, Message, MessageType
 from ...core.addresses import Address, Resolution
 from ...core.manifests import AgentManifest
+from ...core.mqtt import install_id
 from ...core.node_signing import node_control_properties
 from ...core.outbound import Answer
 from ...core.persistence import chat_turn_recorded
@@ -350,6 +351,15 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return history[0]["content"]
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
+
+    async def _send_manifest(self, manifest: AgentManifest) -> None:
+        """Send main's manifest naming the install it is from.
+
+        Main's id is derived from its name, so it is the same in every install:
+        a manifest on main's topic may be another install's, and the install
+        that published it is the only way to tell (`ManifestRegistry.say_leftover`).
+        """
+        await super()._send_manifest({**manifest, "install": install_id()})
 
     async def on_start(self) -> None:
         """Restore the agents main spawned, start the listeners that follow nodes, manifests,

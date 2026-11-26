@@ -293,7 +293,7 @@ terminal also takes <code>/deploy-pkg &lt;node&gt; &lt;package&gt; …</code> an
 <tr>
 <td><code>POST</code></td>
 <td><code>/chat</code></td>
-<td>Send a message. Body: <code>{"message": "..."}</code>. Returns a buffered JSON response.</td>
+<td>Send a message. Body: <code>{"message": "..."}</code>. Returns a buffered JSON response; a turn that fails, a model provider's error among them, is answered <code>502</code> with its reason in <code>error</code>.</td>
 </tr>
 <tr>
 <td><code>GET</code></td>

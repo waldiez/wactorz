@@ -187,6 +187,27 @@ class TestChat:
 
         assert orchestrator.channels == ["rest"]
 
+    async def test_a_turn_that_fails_is_answered_with_its_reason(
+        self, actor: _Actor, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # As a model provider refuses: the exception leaves `handle_turn` as it is.
+        class Failing(_Orchestrator):
+            async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
+                raise RuntimeError("Error code: 404 - model: no-such-model")
+
+        iface = RESTInterface(Failing(), _Main(_Registry(actor)), port=0)  # pyright: ignore[reportArgumentType]
+
+        async with TestClient(TestServer(iface.build_app())) as client:
+            resp = await client.post("/chat", json={"message": "hi", "agent_name": "main"})
+
+            assert resp.status == 502
+            assert await resp.json() == {
+                "error": "The turn failed: RuntimeError: Error code: 404 - model: no-such-model",
+                "agent": "main",
+            }
+        (record,) = [r for r in caplog.records if "chat turn" in r.getMessage()]
+        assert record.exc_info is not None, "the traceback is logged"
+
     async def test_an_empty_message_is_refused(
         self, client: TestClient[web.Request, web.Application]
     ) -> None:

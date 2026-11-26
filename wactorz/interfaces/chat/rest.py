@@ -225,9 +225,18 @@ class RESTInterface:
             return web.json_response({"error": parsed}, status=400)
         agent_name, message = parsed
 
-        response = await self.orchestrator.handle_turn(
-            addressed_to(agent_name, message), channel=REST
-        )
+        try:
+            response = await self.orchestrator.handle_turn(
+                addressed_to(agent_name, message), channel=REST
+            )
+        except Exception as exc:
+            # A model provider's refusal, a timeout, anything the turn raised: the
+            # caller is told it failed and why, rather than handed aiohttp's bare 500.
+            logger.exception("[rest] A chat turn for %r failed", agent_name)
+            return web.json_response(
+                {"error": f"The turn failed: {type(exc).__name__}: {exc}", "agent": agent_name},
+                status=502,
+            )
         return web.json_response({"status": "sent", "agent": agent_name, "response": response})
 
     async def _command_endpoint(self, request: Request) -> Response:

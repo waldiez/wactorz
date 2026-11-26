@@ -64,7 +64,7 @@ wactorz --interface rest --port 8000
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/chat` | Send a message. Body: `{"message": "..."}`. Returns a buffered JSON response. |
+| `POST` | `/chat` | Send a message. Body: `{"message": "..."}`. Returns a buffered JSON response; a turn that fails, a model provider's error among them, is answered `502` with its reason in `error`. |
 | `GET` | `/agents` | List all registered agents with their status. |
 | `GET` | `/health`, `/healthz`, `/livez` | Liveness: 200 whenever the process can answer. |
 | `GET` | `/ready`, `/readyz` | Readiness: 200 once agents, broker and database are up, 503 naming what is not. |

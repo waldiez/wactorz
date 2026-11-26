@@ -189,8 +189,11 @@ the broker. Anything that can publish to it can drive Wactorz.
   other nodes' requests. A spending cap over all calls is `LLM_COST_LIMIT_USD`.
 - **An operator's answer is not authenticated.** The pick an agent receives from
   `ask_operator` or `notify_user` arrives on its `agents/<id>/answer` topic, where
-  any node, and anything else holding broker access, can publish one. It says what
-  someone answered, never that you did: do not make it the approval for anything
+  any node, and anything else holding broker access, can publish one.
+  `ask_operator` takes only one of the question's own options, so its answer is
+  never anything else; an agent that reads the topic itself after `notify_user`
+  gets the frame as it was sent, and checks the option against its own. Either way
+  it says what someone answered, never that you did: do not make it the approval for anything
   you would not let the agent do unasked. Packages are the exception: they are
   approved through the dashboard itself, never the broker.
 - **Main's deploy credentials open every node.** The SSH key or password a

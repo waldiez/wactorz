@@ -157,6 +157,70 @@ class TestAskingAndAnswering:
         await wired.answer("no", index=1)
         assert await asking == "no"
 
+    @pytest.mark.parametrize(
+        "pick",
+        [
+            pytest.param("maybe", id="not an option"),
+            pytest.param("x" * 10_000, id="far longer than an option may be"),
+            pytest.param("YES", id="an option in another case"),
+        ],
+    )
+    async def test_a_pick_it_did_not_offer_answers_nothing(
+        self, wired: Wired, caplog: pytest.LogCaptureFixture, pick: str
+    ) -> None:
+        # Whatever may write the answer topic may send anything: a node's account
+        # may, and on a broker with no node deployed every client may.
+        asking = asyncio.create_task(wired.actor.ask_operator("Changed?", options=["yes", "no"]))
+        await wired.settle()
+
+        with caplog.at_level(logging.DEBUG):
+            await wired.answer(pick, index=0)
+
+        assert not asking.done()
+        (question,) = wired.actor.questions().values()
+        assert question.open, "the question waits for a pick it offered"
+        await wired.answer("no", index=1)
+        assert await asking == "no"
+
+    async def test_the_index_is_the_options_own_not_the_frames(self, wired: Wired) -> None:
+        asking = asyncio.create_task(wired.actor.ask_operator("Changed?", options=["yes", "no"]))
+        await wired.settle()
+
+        await wired.answer("no", index=7)
+
+        assert await asking == "no"
+        (question,) = wired.actor.questions().values()
+        assert question.answer_index == 1
+
+    async def test_what_a_frame_names_is_bounded(self, wired: Wired) -> None:
+        asking = asyncio.create_task(wired.actor.ask_operator("Changed?", options=["yes", "no"]))
+        await wired.settle()
+
+        await wired.answer("yes", channel="c" * 10_000, user="u" * 10_000, note="n" * 10_000)
+
+        assert await asking == "yes"
+        (question,) = wired.actor.questions().values()
+        assert len(question.answer_channel) <= 128
+        assert len(question.answer_note) <= 500
+
+    async def test_a_later_pick_it_did_not_offer_does_not_reach_on_operator_answer(
+        self, wired: Wired, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Nothing waits once the wait has timed out; a pick then goes to the hook.
+        heard: list[str] = []
+
+        async def on_operator_answer(question: Question, option: str) -> None:
+            heard.append(option)
+
+        monkeypatch.setattr(wired.actor, "on_operator_answer", on_operator_answer)
+        with pytest.raises(NoAnswerError):
+            await wired.actor.ask_operator("Changed?", options=["yes", "no"], timeout=0.01)
+
+        await wired.answer("anything at all")
+        await wired.answer("yes")
+
+        assert heard == ["yes"]
+
     async def test_listening_starts_once(self, wired: Wired) -> None:
         first = asyncio.create_task(wired.actor.ask_operator("One?", options=["a", "b"]))
         await wired.settle()

@@ -172,7 +172,7 @@ async def _dispatch(topic: str, payload: str) -> None:
     event: dict[str, Any] | None = events.parse_topic(topic, payload)
     # State first, and for every message: the filter below decides only whether a
     # browser is shown the raw frame, not whether the server takes it in.
-    if relay.is_relayed(topic):
+    if relay.is_relayed(topic) and not events.refused_answer(topic, payload):
         push = (event or {}).get("_push_chat") or {}
         await broadcast_mqtt_msg(topic, payload, push.get("thread_id", ""))
     if not event or runtime.hard_resetting:

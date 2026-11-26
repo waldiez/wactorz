@@ -17,7 +17,7 @@ export const PANEL_API_VERSION = 1;
 export type PanelSettingValue = boolean | string | number;
 
 /** What every setting of a panel says of itself. */
-interface PanelSettingBase {
+export interface PanelSettingBase {
     /** What the panel asks for it by. */
     key: string;
     /** The row's name. */

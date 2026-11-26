@@ -50,6 +50,7 @@ from .persistence.pickle_store import encode_state, read_state_file
 from .persistence.stores import get_db
 from .questions import (
     CUT_SHORT,
+    MAX_TEXT_CHARS,
     QUESTIONS_KEY,
     Question,
     QuestionIdError,
@@ -525,6 +526,29 @@ def born_stopped() -> Iterator[None]:
         yield
     finally:
         _BORN_STOPPED.reset(token)
+
+
+def _check_asking(options: Sequence[str], *, free_text: bool, label: object, node: str) -> None:
+    """Refuse what cannot be asked together: words with options or a label, or from a node.
+
+    Without ``free_text`` a question needs options. Raised before anything is
+    recorded or sent.
+    """
+    if not free_text:
+        if not options:
+            raise OptionsError.none()
+        return
+    if options:
+        raise OptionsError.free_text_with_options()
+    if label is not None:
+        raise LabelError.free_text()
+    if node:
+        raise OptionsError.free_text_on_node()
+
+
+def _free_text_flag(question: Question) -> dict[str, Any]:
+    """What a question's chat message carries to say it is answered in words: nothing, or that."""
+    return {"free_text": True} if question.free_text else {}
 
 
 class Actor(ABC):
@@ -2146,13 +2170,14 @@ class Actor(ABC):
         self,
         text: str,
         *,
-        options: Sequence[str],
+        options: Sequence[str] = (),
         channel: str = DASHBOARD,
         user: str = "",
         timeout: float | None = None,
         label: Mapping[str, Any] | None = None,
         context: str = "",
         id: str | None = None,
+        free_text: bool = False,
     ) -> str:
         """Ask the person ``text``, offer ``options``, and return the one they pick.
 
@@ -2197,14 +2222,23 @@ class Actor(ABC):
         the same id, if the agent stops between sending it and recording that
         it did.
 
+        ``free_text=True`` asks for words instead of a pick: no options, and the
+        person answers in the dashboard's Inbox with what they type, which is
+        returned trimmed, cleaned of control characters, redacted best-effort
+        and cut to :data:`~wactorz.core.questions.MAX_TEXT_CHARS`. On a chat
+        channel the question is sent with word that it is answered there. The
+        answer is taken only from the dashboard, handed over in this process,
+        never from the answer topic, which anything on the broker can write to;
+        so an agent on a node cannot ask one yet.
+
         Raises ``ValueError`` for no options, options or a channel the channels
-        cannot show, a ``label`` that cannot be used, or an ``id`` that is not
-        one or names another question already asked
+        cannot show, a ``label`` that cannot be used, ``free_text`` with options
+        or a label or from an agent on a node, or an ``id`` that is not one or
+        names another question already asked
         (:class:`~wactorz.core.questions.QuestionIdError`) -- before anything is
         sent.
         """
-        if not options:
-            raise OptionsError.none()
+        _check_asking(options, free_text=free_text, label=label, node=self._node)
         checked = check_options(options)
         spec = None if label is None else LabelSpec.parse(label, checked)
         question = Question(
@@ -2216,6 +2250,8 @@ class Actor(ABC):
             asked_at=time.time(),
             label=None if spec is None else spec.to_dict(),
             context=context_text(context),
+            free_text=free_text,
+            max_chars=MAX_TEXT_CHARS if free_text else 0,
         )
         question_id = question.id
         # Looked up and recorded with no await between, so two calls naming one
@@ -2244,6 +2280,7 @@ class Actor(ABC):
             f"Still waiting for an answer (asked on {question.channel}): {text}",
             options=options,
             id=question_id,
+            **_free_text_flag(question),
         )
         await self._write_question(
             Question(**{**question.to_dict(), "options": question.options, "fallen_back": True})
@@ -2431,6 +2468,7 @@ class Actor(ABC):
             channel=question.channel,
             user=question.user,
             id=question.id,
+            **_free_text_flag(question),
         )
         current = self.questions().get(question.id)
         if current is not None and not current.sent:
@@ -2485,19 +2523,50 @@ class Actor(ABC):
             return
         if answer.option not in question.options:
             # Whatever may write this agent's answer topic may send anything; an
-            # answer is one of the options offered, or it answers nothing.
+            # answer is one of the options offered, or it answers nothing. A
+            # question asked for words offers none, so nothing here answers it:
+            # its words come from the dashboard alone (`take_free_text`).
             logger.debug(
                 "[%s] %r is not an option of %r; ignored", self.name, answer.option, question.id
             )
             return
         index = question.options.index(answer.option)
-        settled = answered(question, answer.option, index, answer.channel, answer.note)
+        await self._settle(answered(question, answer.option, index, answer.channel, answer.note))
+
+    async def take_free_text(self, answer: Answer) -> str | None:
+        """Take the words the dashboard took for a question asked with ``free_text``.
+
+        Handed over in this process by the web server, the one way such an
+        answer is taken; ``answer.option`` is the text, already cleaned
+        (`questions.typed_text`). It is recorded in the book, then published on
+        this agent's answer topic, so the other dashboards close the question,
+        then returned to whoever waits. Returns why it was not taken, or None.
+        """
+        question = self.questions().get(answer.id)
+        if question is None:
+            return "This agent asked no such question."
+        if not question.free_text:
+            return "This question is answered by picking one of its options."
+        if not question.open:
+            return "This question was already answered."
+        settled = answered(question, answer.option, None, answer.channel)
         await self._write_question(settled)
-        waiting = self._answer_waiters.pop(answer.id, None)
+        # After the book: a dashboard shows an answer to such a question only as
+        # the book has recorded it.
+        await self._mqtt_publish(answer.topic, answer.to_payload(), qos=1)
+        await self._settle(settled, recorded=True)
+        return None
+
+    async def _settle(self, settled: Question, *, recorded: bool = False) -> None:
+        """Record ``settled`` unless it is, and hand its answer to whoever waits, or the hook."""
+        if not recorded:
+            await self._write_question(settled)
+        option = settled.answer or ""
+        waiting = self._answer_waiters.pop(settled.id, None)
         if waiting is not None and not waiting[0].done():
-            waiting[0].set_result(answer.option)
+            waiting[0].set_result(option)
             return
-        await self.on_operator_answer(settled, answer.option)
+        await self.on_operator_answer(settled, option)
 
     # ─── Status ───────────────────────────────────────────────────────────────
 

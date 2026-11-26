@@ -25,6 +25,7 @@ export function questionMessage(question: LedgerQuestion, from = question.agent)
             timestamp: question.asked_at,
             options: question.options,
             channel: question.channel,
+            ...(question.free_text && { free_text: true }),
         },
         question.agent_id,
     );
@@ -82,5 +83,20 @@ export class QuestionsApi {
             posting(note ? { option, note } : { option }),
         );
         return got.ok ? { ok: true, value: null } : got;
+    }
+
+    /** Answer `question`, one asked for words, with `text`; gives the words as the server kept them. */
+    async answerText(question: LedgerQuestion, text: string): Promise<Answer<string>> {
+        const agent = encodeURIComponent(question.agent_id);
+        const id = encodeURIComponent(question.id);
+        const got = await requestJson<{ answer?: { option?: unknown } }>(
+            `${this.apiBase}/api/questions/${agent}/${id}/answer`,
+            posting({ text }),
+        );
+        if (!got.ok) {
+            return got;
+        }
+        const kept = got.value.answer?.option;
+        return { ok: true, value: typeof kept === "string" ? kept : text };
     }
 }

@@ -246,11 +246,16 @@ def picks_an_option(answer: Answer) -> bool:
     (`CLOSED_INDEX`) names the reason it closed rather than an option, so it
     passes only as the book has already recorded it: `close_permission` publishes
     the book first. Anything else claiming to close one is shown to nobody.
-    A question with no book here is checked against the options its chat
+    A free-text question's answer passes only as its book recorded it. A
+    question with no book here is checked against the options its chat
     message offered. One this server never saw asked is shown to nobody.
     """
     question = find(answer.agent_id, answer.id)
     if question is not None:
+        if question.free_text:
+            # Words cannot be checked against options; the agent publishes them
+            # once its book holds them, so they pass only as the book recorded.
+            return question.answer is not None and question.answer == answer.option
         if answer.index == CLOSED_INDEX:
             return (
                 question.permission

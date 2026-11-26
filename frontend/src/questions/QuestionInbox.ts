@@ -53,6 +53,7 @@ export class QuestionInbox {
     constructor(
         private readonly api: {
             answer(question: LedgerQuestion, option: string, note: string): Promise<Answer<null>>;
+            answerText(question: LedgerQuestion, text: string): Promise<Answer<string>>;
         },
     ) {}
 
@@ -106,6 +107,24 @@ export class QuestionInbox {
             answer_channel: "dashboard",
             answered_at: Date.now() / 1000,
             ...(note && { answer_note: note }),
+        });
+        return "";
+    }
+
+    /**
+     * Answer `question`, one asked for words, with `text`. Returns the server's
+     * refusal, or "" once it is taken; the question is then answered here with
+     * the words as the server kept them.
+     */
+    async answerText(question: LedgerQuestion, text: string): Promise<string> {
+        const got = await this.api.answerText(question, text);
+        if (!got.ok) {
+            return got.error;
+        }
+        this._settle(question, {
+            answer: got.value,
+            answer_channel: "dashboard",
+            answered_at: Date.now() / 1000,
         });
         return "";
     }

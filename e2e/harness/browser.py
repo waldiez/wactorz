@@ -807,6 +807,13 @@ class Dashboard:
         card.get_by_role("button", name=option, exact=True).click()
         return self
 
+    def answer_in_inbox_in_words(self, question: str, words: str) -> Dashboard:
+        """Type ``words`` into the card of ``question``, one asked for words, and send them."""
+        card = self._inbox_card(question)
+        card.get_by_role("textbox", name="Your answer").fill(words)
+        card.get_by_role("button", name="Send", exact=True).click()
+        return self
+
     def open_answered(self) -> Dashboard:
         """Follow the Inbox's link to what was answered."""
         self.page.get_by_role("link", name=re.compile(r"^Answered")).click()

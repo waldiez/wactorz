@@ -13,6 +13,7 @@
  * is not to be granted by the button the eye lands on first.
  */
 import type { QuestionLedger } from "../io/openQuestions";
+import { formatRoute } from "../router";
 import type { ChatMessage } from "../types/agent";
 import { toast, type ToastOptions } from "./ToastManager";
 import { emit } from "../events";
@@ -40,11 +41,32 @@ export class QuestionNotices {
     }
 }
 
+/** What a question asked for words offers where it is shown: the way to where it is answered. */
+export const ANSWER_IN_INBOX = "Answer in the Inbox";
+
 /** The toast asking `msg`'s question, or null when `msg` asks nothing still open. */
 export function questionToast(msg: ChatMessage): ToastOptions | null {
     const options = msg.options ?? [];
-    if (!options.length || msg.answer !== undefined) {
+    if ((!options.length && !msg.freeText) || msg.answer !== undefined) {
         return null;
+    }
+    if (msg.freeText) {
+        // Answered in words, which a toast has no room for: it leads to the Inbox.
+        return {
+            type: "chat",
+            title: msg.from,
+            message: msg.content,
+            sticky: true,
+            key: msg.id,
+            actions: [
+                {
+                    label: ANSWER_IN_INBOX,
+                    onClick: () => {
+                        location.hash = formatRoute({ view: "inbox", path: [] });
+                    },
+                },
+            ],
+        };
     }
     return {
         type: "chat",

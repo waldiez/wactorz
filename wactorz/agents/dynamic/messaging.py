@@ -224,13 +224,14 @@ class MessagingMixin(_Host):
         self,
         text: str,
         *,
-        options: Sequence[str],
+        options: Sequence[str] = (),
         channel: str = "dashboard",
         user: str = "",
         timeout: float | None = None,
         label: dict[str, Any] | None = None,
         context: str = "",
         id: str | None = None,
+        free_text: bool = False,
     ) -> str:
         """Ask the person ``text`` with ``options`` and return the one picked (see Actor.ask_operator).
 
@@ -243,6 +244,8 @@ class MessagingMixin(_Host):
         none. ``context`` says why it is being asked, for the dashboard's Inbox.
         ``id`` names the question, so a program that asks again after a restart
         is given the answer, or waits for it, rather than asking twice.
+        ``free_text=True`` asks for words, typed in the dashboard's Inbox, instead
+        of a pick; no options then.
         """
         return await self._actor.ask_operator(
             text,
@@ -253,6 +256,7 @@ class MessagingMixin(_Host):
             label=label,
             context=context,
             id=id,
+            free_text=free_text,
         )
 
     async def label(

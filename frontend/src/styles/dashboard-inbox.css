@@ -139,6 +139,53 @@
   border-radius: 8px;
   resize: vertical;
 }
+/* A question asked for words: the box at the card's width, the one action under it on the right. */
+.af-inbox-words {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+.af-inbox-words-input {
+  display: block;
+  width: 100%;
+  min-height: 96px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 16px; /* below this a phone zooms the page on focus */
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  resize: vertical;
+}
+.af-inbox-words-input:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 1px;
+}
+.af-inbox-send {
+  align-self: flex-end;
+  min-height: 44px;
+  padding: 8px 22px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: #2563eb;
+  border: 1px solid #2563eb;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.af-inbox-send:hover:not(:disabled) {
+  background: #3b82f6;
+  border-color: #3b82f6;
+}
+.af-inbox-send:disabled {
+  background: rgba(37, 99, 235, 0.3);
+  border-color: transparent;
+  cursor: default;
+}
 .af-inbox-refusal {
   margin-top: 8px;
   font-size: 13px;

@@ -17,6 +17,7 @@ import { button, clickable, el, externalLink, pressed, testId } from "../dom";
 import { emit } from "../../events";
 import { formatRoute } from "../../router";
 import { showSender, type SenderAvatar } from "./chatAvatars";
+import { ANSWER_IN_INBOX } from "../questionToast";
 
 /** Where a url is about to be used. The allow-list differs by destination, and
  *  a single list for both is what let `data:` reach an anchor href. */
@@ -132,6 +133,19 @@ export function buildOptions(msg: ChatMessage): HTMLElement {
     return wrap;
 }
 
+/** For a question asked for words: the way to the Inbox, where it is answered, or the answer. */
+export function buildWordsLink(msg: ChatMessage): HTMLElement {
+    const wrap = el("div", "af-chat-options");
+    if (msg.answer !== undefined) {
+        wrap.appendChild(el("span", "af-chat-option-picked af-chat-option-note", `✓ ${msg.answer}`));
+        return wrap;
+    }
+    const link = el("a", "af-chat-option", ANSWER_IN_INBOX);
+    link.href = formatRoute({ view: "inbox", path: [] });
+    wrap.appendChild(link);
+    return wrap;
+}
+
 /** The buttons for the addresses a name fits, or the pick once one is made.
  *  A press fires `af-pick-address`; the chat re-sends the message that used the name. */
 export function buildAddressChoices(msg: ChatMessage): HTMLElement {
@@ -164,8 +178,8 @@ function buildMsgBubble(msg: ChatMessage, isUser: boolean): HTMLElement {
     if (msg.attachments?.length) {
         bubble.appendChild(buildAttachments(msg.attachments));
     }
-    if (!isUser && msg.options?.length) {
-        bubble.appendChild(buildOptions(msg));
+    if (!isUser && (msg.options?.length || msg.freeText)) {
+        bubble.appendChild(msg.freeText ? buildWordsLink(msg) : buildOptions(msg));
     }
     if (!isUser && msg.addressChoice?.addresses.length) {
         bubble.appendChild(buildAddressChoices(msg));
@@ -215,7 +229,7 @@ function buildMsgFooter(msg: ChatMessage, isUser: boolean): HTMLElement | null {
     }
     // A question also sent on a chat channel says so, since the answer may
     // come from there rather than from these buttons.
-    const via = msg.channel && msg.options?.length ? ` · also on ${msg.channel}` : "";
+    const via = msg.channel && (msg.options?.length || msg.freeText) ? ` · also on ${msg.channel}` : "";
     return el("div", "af-chat-msg-time", `${timeLabel(msg.timestampMs)}${via}`);
 }
 

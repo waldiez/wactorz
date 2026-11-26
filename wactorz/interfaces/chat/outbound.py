@@ -171,6 +171,15 @@ class PendingChoices:
         return len(self._latest)
 
 
+#: What a question asked for words says on a chat channel, which takes picks only.
+WHERE_TO_ANSWER = "Answer this in the dashboard's Inbox."
+
+
+def _with_where_to_answer(message: OutboundMessage) -> str:
+    """``message``'s text, saying where to answer it when it asks for words."""
+    return f"{message.text}\n\n{WHERE_TO_ANSWER}" if message.free_text else message.text
+
+
 class Outbox:
     """The channels that are running, and the broker link that feeds them.
 
@@ -237,7 +246,7 @@ class Outbox:
         try:
             await sender.send(
                 message.user,
-                message.text,
+                _with_where_to_answer(message),
                 message.options,
                 message_id=message.id,
                 agent_id=message.agent_id,

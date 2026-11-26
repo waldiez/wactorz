@@ -58,7 +58,23 @@ class OptionsError(ValueError):
     @classmethod
     def none(cls) -> OptionsError:
         """The error for a question asked with no options."""
-        return cls("ask_operator needs options for the person to pick from")
+        return cls(
+            "ask_operator needs options for the person to pick from, or free_text=True to "
+            "ask for words"
+        )
+
+    @classmethod
+    def free_text_with_options(cls) -> OptionsError:
+        """The error for a question asking for words that offers options as well."""
+        return cls("a free_text question is answered in words, so it offers no options")
+
+    @classmethod
+    def free_text_on_node(cls) -> OptionsError:
+        """The error for a question asking for words from an agent on a node."""
+        return cls(
+            "a free_text question cannot be asked from an agent on a node yet: "
+            "its answer reaches agents on main only"
+        )
 
     @classmethod
     def not_a_string(cls, option: Any) -> OptionsError:
@@ -152,6 +168,9 @@ class OutboundMessage:
     channel: str = DASHBOARD
     user: str = ""
     timestamp: float = 0.0
+    #: A question answered in words, in the dashboard's Inbox, rather than by
+    #: picking an option: with no options it would read as a plain message.
+    free_text: bool = False
 
     @classmethod
     def from_chat_frame(cls, agent_id: str, payload: Any) -> OutboundMessage | None:
@@ -186,6 +205,7 @@ class OutboundMessage:
             channel=str(payload.get("channel") or DASHBOARD).strip().lower(),
             user=str(payload.get("user") or "").strip(),
             timestamp=timestamp,
+            free_text=payload.get("free_text") is True,
         )
 
     @property

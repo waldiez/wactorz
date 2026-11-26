@@ -36,6 +36,18 @@ describe("which thread a message is in", () => {
         expect(isOpenQuestion(question("q", { answer: "Yes" }))).toBe(false);
         expect(isOpenQuestion(msg({}))).toBe(false);
     });
+
+    it("takes a question asked for words for a question, open until answered", () => {
+        const words = question("w", { options: [], freeText: true });
+
+        expect(isOpenQuestion(words)).toBe(true);
+        const log = new ChatLog();
+        log.add(words);
+        expect(log.answer("w", "Swapped the filter.")?.answer).toBe("Swapped the filter.");
+        expect(isOpenQuestion(log.get("w")!)).toBe(false);
+        expect(log.add(msg({ id: "plain" }))).toBe(true);
+        expect(log.answer("plain", "x")).toBeNull();
+    });
 });
 
 describe("taking messages as they arrive", () => {

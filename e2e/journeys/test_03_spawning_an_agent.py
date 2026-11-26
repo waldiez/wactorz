@@ -2,13 +2,18 @@
 """Asked for an agent, main starts one; it gets a card, and it answers for itself."""
 
 import json
+import re
 import time
 
 from harness import backend, browser, waiting
 from harness.probe import Broker
 from harness.run import Run
+from model import WORDS_QUESTION
 
 from wactorz.core.actor import derive_actor_id
+
+#: What the person types for the typist.
+TYPED = "Swapped the filter, and reset the damper."
 
 
 def test_main_starts_the_agent_it_was_asked_for(
@@ -41,6 +46,37 @@ def test_main_knows_nothing_of_that_conversation(dashboard: browser.Dashboard) -
     # said to another.
     assert all(said.sender == "greeter" for said in dashboard.read_thread_of("greeter").said())
     assert "good morning" not in dashboard.read_thread_of("main").sent()
+
+
+def test_an_agent_asks_for_words_and_is_answered_from_the_inbox(
+    dashboard: browser.Dashboard, app: backend.Backend
+) -> None:
+    # On main, as the journey's agents are: one on a node cannot ask for words yet.
+    dashboard.say("start a typist here", to="main")
+    dashboard.expect_like(
+        "main", r"Starting it\.\n+ℹ️ Spawned 'typist' — will auto-restore on restart"
+    )
+    waiting.until(
+        lambda: WORDS_QUESTION in dashboard.question_from("typist"),
+        what="the typist's question in a notice",
+        timeout=60,
+    )
+
+    # The notice has no answers of its own: it leads to the Inbox.
+    dashboard.answer_notice("typist", "Answer in the Inbox")
+    assert WORDS_QUESTION in dashboard.inbox_card_text(WORDS_QUESTION)
+    dashboard.assert_accessible("the Inbox, with a question asked for words")
+    dashboard.answer_in_inbox_in_words(WORDS_QUESTION, TYPED)
+
+    # In the typist's thread: the question, with the words under it, then what it said of them.
+    dashboard.open_from_list("typist")
+    dashboard.expect_like("typist", rf"{re.escape(WORDS_QUESTION)}\s*✓ {re.escape(TYPED)}")
+    dashboard.expect("typist", f"typed: {TYPED}")
+    waiting.until(
+        lambda: app.rest.state_of("typist") is None,
+        what="the typist to end itself once it has its answer",
+        timeout=60,
+    )
 
 
 def test_an_agent_that_ends_itself_leaves_the_dashboard_once(

@@ -16,6 +16,13 @@ Before either, the server's question ledger (`wactorz.web.questions`) checks
 the pick against the question: still open, and one of its options. The same
 pick can come as ``POST /api/questions/{agent_id}/{question_id}/answer`` with
 ``{"option": "..."}``, for a question the ledger knows.
+
+A question asked for words (``free_text``) is answered on that route alone,
+with ``{"text": "..."}``. Words cannot be checked against options, so they are
+never sent on the broker for the agent to hear: the text is cleaned once
+(`questions.typed_text`) and handed to the agent in this process
+(`Actor.take_free_text`), which records it and publishes it for the other
+dashboards. An agent not in this process cannot be answered so, and is refused.
 """
 
 import json
@@ -27,6 +34,7 @@ from aiohttp import web
 
 from ..core.labels import vouch
 from ..core.outbound import Answer, TakesDashboardAnswers, check_options, note_text
+from ..core.questions import MAX_TEXT_CHARS, typed_text
 from ..core.topics import topic_name_error
 from . import questions, runtime
 
@@ -107,14 +115,66 @@ async def _send(answer: Answer) -> str | None:
     return None
 
 
+async def _free_text_answer(agent_id: str, question_id: str, body: dict[str, Any]) -> web.Response:
+    """Answer the free-text question ``question_id`` with the words ``body`` carries."""
+    text = typed_text(body.get("text"))
+    if not text:
+        return web.json_response(
+            {"error": f"This question is answered in words: up to {MAX_TEXT_CHARS} characters."},
+            status=400,
+        )
+    question = questions.find(agent_id, question_id)
+    if question is not None and not question.open:
+        return web.json_response({"error": "This question was already answered."}, status=409)
+    agent = runtime.registry.get(agent_id) if runtime.registry is not None else None
+    # The registry holds this process's actors only; an agent on a node is not among them.
+    if agent is None:
+        return web.json_response(
+            {
+                "error": (
+                    "The agent that asked does not run in this server's process, so a typed "
+                    "answer cannot reach it."
+                )
+            },
+            status=503,
+        )
+    answer = Answer(
+        id=question_id,
+        agent_id=agent_id,
+        option=text,
+        index=0,
+        channel="dashboard",
+        timestamp=time.time(),
+    )
+    refused = await agent.take_free_text(answer)
+    if refused is not None:
+        return web.json_response({"error": refused}, status=409)
+    # The agent took the words: this server's browsers close the question now,
+    # on what this route knows, rather than on the agent's echo, which the
+    # broker may bring them before the book that lets it through.
+    from .mqtt import broadcast_mqtt_msg  # a genuine circular import: ws imports this module
+
+    await broadcast_mqtt_msg(answer.topic, json.dumps(answer.to_payload()))
+    logger.info("[answers] dashboard answered %s's question in words", agent_id[:8])
+    return web.json_response({"answer": answer.to_payload()})
+
+
 async def answer_handler(request: web.Request) -> web.Response:
-    """``POST /api/questions/{agent_id}/{question_id}/answer``: pick an option, as the button does."""
+    """``POST /api/questions/{agent_id}/{question_id}/answer``: pick an option, as the button does.
+
+    A question asked for words takes ``{"text": ...}`` instead (`_free_text_answer`).
+    """
     try:
         body = await request.json()
     except (ValueError, UnicodeDecodeError):
         return web.json_response({"error": "the body is not JSON"}, status=400)
     if not isinstance(body, dict):
         return web.json_response({"error": "the body is a JSON object"}, status=400)
+    asked = questions.find(request.match_info["agent_id"], request.match_info["question_id"])
+    if asked is not None and asked.free_text:
+        return await _free_text_answer(
+            request.match_info["agent_id"], request.match_info["question_id"], body
+        )
     answer = answer_from_frame(
         {
             "agent_id": request.match_info["agent_id"],

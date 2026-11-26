@@ -118,6 +118,7 @@ def with_question(row: dict[str, Any]) -> dict[str, Any]:
             "text": question.text,
             "options": list(question.options),
             "answer": question.answer,
+            **({"free_text": True} if question.free_text else {}),
         },
     }
 

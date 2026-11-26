@@ -381,7 +381,9 @@ the broker. Anything that can publish to it can drive Wactorz.</p>
   (<code>password=</code>, <code>"api_key": …</code>), a <code>Bearer</code> header, credentials in a URL, a
   private key, and tokens recognisable by their shape alone — a Telegram bot
   token in the Bot API's URLs, a JSON web token such as Home Assistant's, and
-  <code>sk-</code>, <code>ghp_</code>, <code>github_pat_</code> and <code>xox?-</code> keys. This is a floor, not a
+  <code>sk-</code>, <code>ghp_</code>, <code>github_pat_</code> and <code>xox?-</code> keys, and GitHub App installation
+  tokens (<code>ghs_</code>, the Actions <code>GITHUB_TOKEN</code> among them) in the classic format
+  and in the longer JWT one. This is a floor, not a
   guarantee: a log can carry a secret nobody chose to write into it. Treat the
   log view as shareable with care.</li>
 <li><strong>Raising a library to <code>DEBUG</code></strong> puts request bodies and headers into that same

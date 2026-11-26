@@ -249,6 +249,23 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
     return None
 
 
+def refused_answer(topic: str, payload: str) -> bool:
+    """Whether ``topic`` is an agent's answer topic and ``payload`` no pick its agent takes.
+
+    Such a frame is not relayed to the browsers, since a dashboard closes a
+    question's card on any answer it is shown.
+    """
+    parts = own_topic_parts(topic)
+    if parts is None or len(parts) != 3 or parts[0] != AGENTS or parts[2] != outbound.ANSWER_LEAF:
+        return False
+    try:
+        data = json.loads(payload)
+    except ValueError:
+        return True
+    answer = outbound.Answer.from_payload(parts[1], data)
+    return answer is None or not question_ledger.picks_an_option(answer)
+
+
 def _name_of(agent_id: str) -> str:
     """The agent's name as live state knows it, or the start of its id when it knows none."""
     return runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
@@ -474,6 +491,9 @@ def _on_chat(agent_id: str, data: Any) -> dict[str, Any]:
     # Usually an agent notification; voice agents may also publish the
     # recognized user turn so it appears in the same dashboard thread.
     message = _chat_message(agent_id, data)
+    asked = outbound.OutboundMessage.from_chat_frame(agent_id, data)
+    if asked is not None:
+        question_ledger.offered(asked)
     frame: dict[str, Any] = {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}
     if message["content"]:
         add_log({"type": "chat", "agent_id": agent_id, **message})
@@ -502,7 +522,7 @@ def _on_answer(agent_id: str, data: Any) -> None:
     # channel showed them. The feed records the pick; the raw frame is
     # relayed so every open dashboard marks the question answered.
     answer = outbound.Answer.from_payload(agent_id, data)
-    if answer is None:
+    if answer is None or not question_ledger.picks_an_option(answer):
         return
     add_log(
         {

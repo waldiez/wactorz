@@ -34,7 +34,15 @@ from .heartbeats import AgentHeartbeat
 from .identity import derive_actor_id
 from .labels import Label, LabelError, Labels, LabelSpec
 from .manifests import AgentManifest
-from .outbound import DASHBOARD, Answer, OptionsError, answer_topic, check_channel, check_options
+from .outbound import (
+    CLOSED_INDEX,
+    DASHBOARD,
+    Answer,
+    OptionsError,
+    answer_topic,
+    check_channel,
+    check_options,
+)
 from .paths import agent_state_dir, resolve_state_dir
 from .persistence.api import EPHEMERAL_KEYS, SQLITE_KEYS
 from .persistence.pickle_store import encode_state, read_state_file
@@ -2317,7 +2325,7 @@ class Actor(ABC):
             id=question_id,
             agent_id=self.actor_id,
             option=option,
-            index=-1,
+            index=CLOSED_INDEX,
             channel=self.name,
             timestamp=time.time(),
         )
@@ -2383,7 +2391,15 @@ class Actor(ABC):
                 "[%s] %r was already answered; ignoring %r", self.name, question.id, answer.option
             )
             return
-        settled = answered(question, answer.option, answer.index, answer.channel, answer.note)
+        if answer.option not in question.options:
+            # Whatever may write this agent's answer topic may send anything; an
+            # answer is one of the options offered, or it answers nothing.
+            logger.debug(
+                "[%s] %r is not an option of %r; ignored", self.name, answer.option, question.id
+            )
+            return
+        index = question.options.index(answer.option)
+        settled = answered(question, answer.option, index, answer.channel, answer.note)
         await self._write_question(settled)
         waiting = self._answer_waiters.pop(answer.id, None)
         if waiting is not None and not waiting[0].done():

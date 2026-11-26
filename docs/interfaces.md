@@ -352,7 +352,7 @@ class HvacWatch(wactorz.Actor):
         self.persist("last_answer", answer["option"])
 ```
 
-A generated agent has the same call, `await agent.notify_user(...)`, and `agent.subscribe("agents/<its id>/answer", callback)`. Every open dashboard marks the question answered once any channel has the pick, and the pick is a row on the activity feed.
+A generated agent has the same call, `await agent.notify_user(...)`, and `agent.subscribe("agents/<its id>/answer", callback)`. The frame arrives as it was sent, and anything that can publish to the broker can send one, so check that its `option` is one of the options offered before acting on it; `ask_operator`, below, does that for you. Every open dashboard marks the question answered once any channel has a pick of the options it offered, and the pick is a row on the activity feed.
 
 ### Asking and waiting: `ask_operator`
 
@@ -374,8 +374,8 @@ if answer == "maintenance":
 - A pick may come with a note, what the person added in their own words; it is kept as `question.answer_note`, empty when there is none.
 - `context="..."` says why the question is being asked: what the agent saw, what the answer will change. It is kept in the book and shown with the question in the dashboard's Inbox; chat channels are sent the question alone. It is redacted and cut to a thousand characters.
 - The agent publishes its questions, retained, on `agents/{id}/questions` whenever one is asked or answered, and again when it starts. The monitor's `GET /api/questions` lists them from there, so one asked while the monitor was down is not missed.
-- The first pick on any channel is the answer. The dashboard shows every question whatever channel it went to, in its Inbox (`#/inbox`), so the operator can answer there as well, with a note if they want; a question sent with `notify_user` alone keeps no book, so it shows as a notice and in the agent's thread but not in the Inbox.
-- The answer is not authenticated. It arrives on the agent's `agents/{id}/answer` topic, and anything that can publish to the broker, any node included, can publish one there. Read it as what someone picked, never as proof that the operator did, and do not make it the approval for an action you would not let the agent take unasked.
+- The first pick on any channel is the answer, and only one of the question's own options is one: a frame naming anything else answers nothing, and the question stays open. The dashboard shows every question whatever channel it went to, in its Inbox (`#/inbox`), so the operator can answer there as well, with a note if they want; a question sent with `notify_user` alone keeps no book, so it shows as a notice and in the agent's thread but not in the Inbox.
+- The answer is not authenticated. It arrives on the agent's `agents/{id}/answer` topic, and anything that can publish to the broker, any node included, can publish one there. `ask_operator` returns only one of the options offered, but read it as what someone picked, never as proof that the operator did, and do not make it the approval for an action you would not let the agent take unasked.
 - `timeout` is seconds; `None` waits for as long as the agent runs. When it passes on a question sent to a chat channel, the question is shown again on the dashboard, saying where it was asked, and waited for once more for the same time. Then `asyncio.TimeoutError` is raised, and the question stays open: a later pick still reaches `on_operator_answer`.
 
 #### Answers that become labels

@@ -310,6 +310,18 @@ def _no_leaked_start(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_questions_seen_asked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test with no question seen asked, so no answer is known by chance.
+
+    The server keeps the options each chat message offered, process-wide, and
+    checks an answer to a question with no book against them. A chat message one
+    test parsed would otherwise make an answer in a later test on the same worker
+    pass or fail by the order the tests ran in.
+    """
+    monkeypatch.setattr(web_questions, "_offered", OrderedDict())
+
+
+@pytest.fixture(autouse=True)
 def _no_leaked_node_state_writes() -> Iterator[None]:
     """Write what a test left queued for a node's state files before the next starts.
 

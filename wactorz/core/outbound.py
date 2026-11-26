@@ -265,12 +265,20 @@ class Answer:
             agent_id=agent_id,
             option=option,
             index=index,
-            channel=str(payload.get("channel") or "").strip().lower(),
-            user=str(payload.get("user") or "").strip(),
+            channel=str(payload.get("channel") or "").strip().lower()[:_MAX_NAME_CHARS],
+            user=str(payload.get("user") or "").strip()[:_MAX_NAME_CHARS],
             timestamp=timestamp,
             note=note_text(payload.get("note")),
         )
 
+
+#: The ``index`` of an answer that closes a permission rather than picks one of its
+#: options (`Actor.close_permission`): its ``option`` says why it closed.
+CLOSED_INDEX = -1
+
+#: The longest channel or user name an answer frame keeps. Both are names, and a
+#: frame from the broker may say anything in them.
+_MAX_NAME_CHARS = 128
 
 #: The longest note an answer carries. A note is a sentence or two beside a pick.
 MAX_NOTE_CHARS = 500

@@ -534,12 +534,14 @@ class TestTheDashboardShowsTheQuestion:
         assert "channel" not in event["_push_chat"]
 
     def test_an_answer_goes_on_the_feed_and_to_the_browsers(self, quiet_monitor: list[Any]) -> None:
+        # Asked first: an answer to a question the server never saw asked is shown to nobody.
+        events.parse_topic("agents/agent-1/chat", _telegram_frame())
         answer = Answer(
             id="m1", agent_id="agent-1", option="no", index=1, channel="telegram", user="42"
         )
         event = events.parse_topic(answer.topic, json.dumps(answer.to_payload()))
         assert event is not None
-        entry = runtime.state["log_feed"][-1]
+        (entry,) = [e for e in runtime.state["log_feed"] if e.get("type") == "answer"]
         assert (entry["type"], entry["name"], entry["option"], entry["channel"]) == (
             "answer",
             "hvac",

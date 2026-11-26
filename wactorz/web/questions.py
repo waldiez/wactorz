@@ -36,7 +36,7 @@ from aiohttp import web
 
 from ..agents.lookup import find_main_actor
 from ..agents.main.labels import admit_book
-from ..core.outbound import Answer, numbered
+from ..core.outbound import CLOSED_INDEX, Answer, OutboundMessage, numbered
 from ..core.questions import ANSWERED_KEPT, QUESTIONS_LEAF, Question, questions_in_frame
 from ..core.topics import AGENTS, own_topic_parts, owner_of
 from ..monitoring.log_redaction import redact
@@ -210,6 +210,58 @@ def find(agent_id: str, question_id: str) -> Question | None:
         return None
     _, questions = _books.get(agent_id, ("", []))
     return next((q for q in questions if q.id == question_id), None)
+
+
+#: The options of each question this server has seen asked on an agent's chat
+#: topic, by agent and message id, newest last: what an answer to a question with
+#: no book (`notify_user`'s), or one whose book has not arrived yet, is checked
+#: against. The oldest go first past `OFFERS_KEPT`.
+_offered: OrderedDict[tuple[str, str], tuple[str, ...]] = OrderedDict()
+
+#: How many asked questions' options are kept for checking their answers.
+OFFERS_KEPT = 1000
+
+
+def offered(message: OutboundMessage) -> None:
+    """Keep the options ``message`` offers, if it offers any, to check its answers against."""
+    if not message.options or not message.id:
+        return
+    key = (message.agent_id, message.id)
+    _offered.pop(key, None)
+    _offered[key] = message.options
+    while len(_offered) > OFFERS_KEPT:
+        _offered.popitem(last=False)
+
+
+def picks_an_option(answer: Answer) -> bool:
+    """Whether ``answer`` is one the dashboard shows: a pick of what its question offered.
+
+    An agent that asks with `ask_operator` takes only one of its options
+    (`Actor._on_answer_frame`), so a frame naming anything else is shown to
+    nobody either: not on the feed, and not to the browsers, which close a
+    question's card and its buttons on any answer they are shown.
+
+    The question's book says what it offered; the pick already recorded passes,
+    since the book saying so may arrive before the frame. A permission's closing
+    (`CLOSED_INDEX`) names the reason it closed rather than an option, so it
+    passes only as the book has already recorded it: `close_permission` publishes
+    the book first. Anything else claiming to close one is shown to nobody.
+    A question with no book here is checked against the options its chat
+    message offered. One this server never saw asked is shown to nobody.
+    """
+    question = find(answer.agent_id, answer.id)
+    if question is not None:
+        if answer.index == CLOSED_INDEX:
+            return (
+                question.permission
+                and question.answer_index == CLOSED_INDEX
+                and question.answer == answer.option
+            )
+        if answer.option not in question.options:
+            return False
+        return question.answer is None or question.answer == answer.option
+    options = _offered.get((answer.agent_id, answer.id))
+    return options is not None and answer.option in options
 
 
 def stored_forms(question: Question) -> tuple[str, ...]:

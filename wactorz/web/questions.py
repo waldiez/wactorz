@@ -204,6 +204,11 @@ def forget(agent_id: str) -> None:
     _admitted.pop(agent_id, None)
 
 
+def name_of(agent_id: str) -> str:
+    """The name of the agent ``agent_id`` as its book gives it, or "" when the ledger has no book."""
+    return _books.get(agent_id, ("", []))[0]
+
+
 def find(agent_id: str, question_id: str) -> Question | None:
     """The question ``question_id`` in ``agent_id``'s book, or None when the ledger has none."""
     if runtime.is_deleted(agent_id):
@@ -246,11 +251,16 @@ def picks_an_option(answer: Answer) -> bool:
     (`CLOSED_INDEX`) names the reason it closed rather than an option, so it
     passes only as the book has already recorded it: `close_permission` publishes
     the book first. Anything else claiming to close one is shown to nobody.
-    A question with no book here is checked against the options its chat
+    A free-text question's answer passes only as its book recorded it. A
+    question with no book here is checked against the options its chat
     message offered. One this server never saw asked is shown to nobody.
     """
     question = find(answer.agent_id, answer.id)
     if question is not None:
+        if question.free_text:
+            # Words cannot be checked against options; the agent publishes them
+            # once its book holds them, so they pass only as the book recorded.
+            return question.answer is not None and question.answer == answer.option
         if answer.index == CLOSED_INDEX:
             return (
                 question.permission

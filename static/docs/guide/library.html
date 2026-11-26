@@ -1090,7 +1090,7 @@ NotFoundError</code> does. The message always says what went wrong.</p>
 <td><code>notify_user</code>, <code>ask_operator</code></td>
 <td><code>OptionsError</code></td>
 <td><code>ValueError</code></td>
-<td>options a chat channel cannot show, or a question with none</td>
+<td>options a chat channel cannot show, a question with none and no <code>free_text=True</code>, one asked for words that offers options too, or one asked for words on a node that does not enforce main's signature</td>
 </tr>
 <tr>
 <td><code>notify_user</code>, <code>ask_operator</code></td>
@@ -1114,7 +1114,7 @@ NotFoundError</code> does. The message always says what went wrong.</p>
 <td><code>ask_operator</code></td>
 <td><code>LabelError</code></td>
 <td><code>ValueError</code></td>
-<td>a <code>label=</code> that cannot be used, before anything is sent</td>
+<td>a <code>label=</code> that cannot be used, or one on a question asked for words, before anything is sent</td>
 </tr>
 <tr>
 <td><code>ask_operator</code></td>
@@ -1243,8 +1243,8 @@ it refuses in its reply in the same way.</p>
 <td>a message to the person on a chat channel, with a choice; the pick comes back on the agent's topic (see <em>Messages from an agent</em> in the interfaces guide)</td>
 </tr>
 <tr>
-<td><code>ask_operator(text, options=[...], channel=..., user=..., timeout=..., label=..., context=..., id=...)</code>, <code>wait_for_answer</code>, <code>questions</code>, <code>open_questions</code>, <code>on_operator_answer</code></td>
-<td>the same, waiting for the pick; a question outlives a restart, with <code>id=</code> is never asked twice, and with <code>label=</code> its answer becomes a label</td>
+<td><code>ask_operator(text, options=[...], channel=..., user=..., timeout=..., label=..., context=..., id=..., free_text=...)</code>, <code>wait_for_answer</code>, <code>questions</code>, <code>open_questions</code>, <code>on_operator_answer</code></td>
+<td>the same, waiting for the pick, or with <code>free_text=True</code> for words typed in the Inbox; a question outlives a restart, with <code>id=</code> is never asked twice, and with <code>label=</code> its answer becomes a label</td>
 </tr>
 <tr>
 <td><code>label(source, value, start=..., end=...)</code></td>

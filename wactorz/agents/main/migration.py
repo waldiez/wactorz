@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 from ... import plugins
 from ...config import MIGRATION_MAX_BLOB_BYTES, MIGRATION_MAX_STATE_BYTES
 from ...core import topic_bus
+from ...core.actor import Actor
 from ...core.addresses import MAIN_NODE
 from ...core.blob_transfer import (
     INBOX_DIRNAME,
@@ -68,6 +69,7 @@ from ...core.mqtt import (
     session_kwargs,
 )
 from ...core.paths import resolve_state_dir
+from ...core.questions import QUESTIONS_KEY, Question, questions_in
 from ...core.state_snapshot import json_safe, why_it_cannot_travel
 from ...core.topics import NODES, node_topic, own_topic_parts
 from ...plugins import MODULE_TYPE, is_module_config
@@ -161,6 +163,45 @@ def _move_of(pending: Mapping[str, Any]) -> Move:
         str(pending.get("agent_name") or ""),
         _place(pending.get("from_node")),
         _place(pending.get("target_node")),
+    )
+
+
+def waits_for_words(registry: Any, agent_name: str, refused: str | None) -> str | None:
+    """Why ``agent_name`` cannot move to its target: a question it waits on in words; or None.
+
+    ``refused`` is why the target cannot be given an answer in words
+    (`NodeManager.why_no_words`), None when it can. Such an answer reaches an
+    agent on a node from main over the node's signed control topic; on one
+    that cannot take it, the question would stay open with nothing able to
+    answer it. Read from the agent here, running or stopped, whose book holds
+    what it waits on.
+    """
+    local = registry.find_by_name(agent_name) if registry is not None and agent_name else None
+    return words_waited_for(local, refused)
+
+
+def words_waited_for(agent: object, refused: str | None) -> str | None:
+    """Why ``agent`` cannot move to a target that is ``refused`` words; or None."""
+    if not isinstance(agent, Actor):
+        return None
+    return _waiting_on_words(agent.open_questions(), refused)
+
+
+def words_in_state(state: object, refused: str | None) -> str | None:
+    """The same for an agent handed back by a node, from the state it came with."""
+    book = state.get(QUESTIONS_KEY) if isinstance(state, dict) else None
+    return _waiting_on_words([q for q in questions_in(book).values() if q.open], refused)
+
+
+def _waiting_on_words(open_questions: list[Question], refused: str | None) -> str | None:
+    if refused is None:
+        return None
+    asked = next((q for q in open_questions if q.free_text), None)
+    if asked is None:
+        return None
+    return (
+        f"it waits for an answer in words to {asked.text[:60]!r}, and {refused}; "
+        "answer it in the Inbox first"
     )
 
 
@@ -393,13 +434,21 @@ class Migration:
 
         A library agent's code goes as the bundle main makes from its own copy,
         every model the agent names is pinned, and the packages it installs are
-        cleared, which may ask the operator. Done before the agent stops
+        cleared, which may ask the operator. One that waits for an answer in
+        words stays (`waits_for_words`). Done before the agent stops
         wherever it is: a node handed a config with no program starts an empty
         agent and confirms it, and a model that is not stored would otherwise be
         found by the spawn, with the agent running nowhere.
         """
         if self.host is None or self.host_nodes is None:
             return config, "main is not running"
+        waiting = waits_for_words(
+            self.host._registry,
+            str(config.get("name", "")),
+            self.host_nodes.why_no_words(target_node),
+        )
+        if waiting:
+            return config, waiting
         targets = self.host_nodes.targets_of(target_node)
         config, problem = await with_code_for(
             config, targets, self.host_nodes.takes_bundles(target_node)
@@ -510,6 +559,21 @@ class Migration:
             "",
         )
 
+    def being_moved(self, agent_name: str) -> bool:
+        """Whether a move of ``agent_name`` is under way, from its asking until it is settled.
+
+        Meanwhile no copy of it is sure to be the one that will run: the source
+        has stopped it, or is about to, and the target has not confirmed it.
+        """
+        return any(move[0] == agent_name for move in self._moves_under_way())
+
+    def _moves_under_way(self) -> list[Move]:
+        return [
+            *(_move_of(p) for p in self.pending_returns.values()),
+            *(_move_of(p) for p in self.pending_spawns.values()),
+            *(m for m, held in self._in_hand.items() if held > 0),
+        ]
+
     def move_under_way(self, move: Move) -> Move | None:
         """The move under way that ``move`` would cross, or None.
 
@@ -520,11 +584,7 @@ class Migration:
         hosts move apart.
         """
         name, leaving, going = move
-        under_way = [
-            *(_move_of(p) for p in self.pending_returns.values()),
-            *(_move_of(p) for p in self.pending_spawns.values()),
-            *(m for m, held in self._in_hand.items() if held > 0),
-        ]
+        under_way = self._moves_under_way()
         return next(
             (
                 other
@@ -577,6 +637,11 @@ class Migration:
             # Sent on as a move from main is: the bundle main makes from its
             # own copy of the code, never the one the node handed back.
             ready, problem = await self._ready_for(cfg, target_node)
+            # Its book came with it: main could not read it before the source
+            # stopped it, and the target may be one that cannot be given words.
+            problem = problem or words_in_state(
+                state, self.host_nodes.why_no_words(target_node) if self.host_nodes else None
+            )
             if problem:
                 await self._restart_on_source(agent_name, from_node, cfg, problem)
                 return
@@ -1431,6 +1496,14 @@ class Migration:
                 )
             stopped = local
 
+        # Asked again now it is stopped: it was asked before the preparation,
+        # which can wait a long time, and the agent ran meanwhile; a question it
+        # asked in words since would go with it and never be answered there.
+        refused = self.host_nodes.why_no_words(target_node) if self.host_nodes else None
+        waiting = words_waited_for(local, refused)
+        if waiting:
+            return await self._keep_local(agent_name, config, waiting)
+
         # Taken after the stop: `on_stop` and the save that follows it are the
         # agent's last writes, and a snapshot taken before them would leave
         # them in the local copy that is purged once the target confirms.
@@ -1549,10 +1622,11 @@ class Migration:
     ) -> dict[str, Any]:
         """Start a stopped local agent again, and say why it did not move.
 
-        Reached only when the agent's last writes while stopping took its state
-        over the limit, since the size was checked before the stop. Nothing has
-        been sent and nothing purged, so starting it from its config brings it
-        back with everything it wrote.
+        For what is found only once the agent is stopped, though it was checked
+        before: its last writes while stopping took its state over the limit, or
+        it asked for words while the move was prepared (`words_waited_for`).
+        Nothing has been sent and nothing purged, so starting it from its config
+        brings it back with everything it wrote.
         """
         if self.host is None:
             return {}

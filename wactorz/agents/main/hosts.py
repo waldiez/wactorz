@@ -475,6 +475,10 @@ class NodeReaders(Protocol):
         """Whether ``node_name`` builds a library agent from code sent with its spawn."""
         ...
 
+    def why_no_words(self, node_name: str) -> str | None:
+        """Why a person's answer in words cannot go to ``node_name`` now; None when it can."""
+        ...
+
 
 class MigrationHost(NodeHost, Protocol):
     """What moving an agent between machines needs.

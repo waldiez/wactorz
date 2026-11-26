@@ -14,7 +14,7 @@ import re
 
 from harness import browser, waiting
 from harness.run import NODE_NAME
-from model import QUESTION
+from model import QUESTION, WORDS_QUESTION
 
 #: How long the question may take to reach the page: the spawn on the node, the
 #: agent's first round, and its book over the broker.
@@ -53,3 +53,31 @@ def test_a_question_waiting_when_the_page_opens_is_shown_with_its_answers(
         lambda: dashboard.question_from("asker") == "" and dashboard.options_in_thread() == [],
         what="the notice gone and the buttons closed once answered",
     )
+
+
+#: What the person types for the typist on the node.
+TYPED_THERE = "Reset the damper on the roof unit."
+
+
+def test_an_agent_on_the_node_asks_for_words_and_is_answered_from_the_inbox(
+    dashboard: browser.Dashboard,
+) -> None:
+    # The answer reaches it from main over the node's signed control topic.
+    dashboard.say("please start a typist on the node", to="main")
+    dashboard.expect_like(
+        "main", rf"Starting it there\.\n+ℹ️ Spawned 'far-typist' on node '{NODE_NAME}'"
+    )
+    waiting.until(
+        lambda: WORDS_QUESTION in dashboard.question_from("far-typist"),
+        what="the typist's question in a notice",
+        timeout=ASKED_WITHIN_S,
+    )
+
+    dashboard.answer_notice("far-typist", "Answer in the Inbox")
+    dashboard.answer_in_inbox_in_words(WORDS_QUESTION, TYPED_THERE)
+
+    dashboard.open_from_list("far-typist")
+    dashboard.expect_like(
+        "far-typist", rf"{re.escape(WORDS_QUESTION)}\s*✓ {re.escape(TYPED_THERE)}"
+    )
+    dashboard.expect("far-typist", f"typed: {TYPED_THERE}")

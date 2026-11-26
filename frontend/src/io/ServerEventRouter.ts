@@ -350,14 +350,19 @@ function optionsOf(raw: unknown): string[] | undefined {
     return options.length ? options : undefined;
 }
 
-/** What a chat frame says about the question it asks: who asked, the options,
- *  and the channel it also went to. Each only when the frame carries it. */
-function questionFields(o: RawObj, agentId: string): Pick<ChatMessage, "agentId" | "options" | "channel"> {
+/** What a chat frame says about the question it asks: who asked, the options or
+ *  that it is answered in words, and the channel it also went to. Each only when
+ *  the frame carries it. */
+function questionFields(
+    o: RawObj,
+    agentId: string,
+): Pick<ChatMessage, "agentId" | "options" | "freeText" | "channel"> {
     const options = optionsOf(o["options"]);
     const channel = optStr(o["channel"]);
     return {
         ...(agentId && { agentId }),
         ...(options !== undefined && { options }),
+        ...(o["free_text"] === true && { freeText: true }),
         ...(channel !== undefined && channel !== "dashboard" && { channel }),
     };
 }
@@ -415,6 +420,7 @@ export function normaliseQuestion(p: unknown, agentId: string, agent: string): L
     const answerNote = optStr(o["answer_note"]);
     const answeredAt = num(o["answered_at"]);
     const context = optStr(o["context"]);
+    const maxChars = num(o["max_chars"]);
     return {
         id,
         agent_id: agentId,
@@ -428,6 +434,8 @@ export function normaliseQuestion(p: unknown, agentId: string, agent: string): L
         ...(answerNote && { answer_note: answerNote }),
         ...(answeredAt && { answered_at: answeredAt }),
         ...(context && { context }),
+        ...(o["free_text"] === true && { free_text: true }),
+        ...(maxChars && { max_chars: maxChars }),
     };
 }
 

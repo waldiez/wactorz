@@ -490,6 +490,11 @@ What a node does with a command that is not signed for it is set by
 A node takes the mode at its next `/deploy`: one deployed while the default was
 `warn` keeps warning until then.
 
+A person's answer in words to an agent on a node (`ask_operator(free_text=True)`)
+comes the same way, signed, on `nodes/<node>/answer`, so only a node that
+enforces takes one: on a `warn` node, or one with no key, an agent cannot ask for
+words, main sends none there, and an agent waiting for words is not moved there.
+
 A node deployed before signing holds no key and acts on everything, as it always
 did; deploy it again to give it one. A node remembers the commands it has
 accepted, so a captured one cannot be replayed, and refuses one published before

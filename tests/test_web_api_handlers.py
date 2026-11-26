@@ -255,6 +255,25 @@ class TestChatLogAndFeed:
             "answer": None,
         }
 
+    async def test_a_question_asked_for_words_comes_back_saying_so(
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The thread draws it from this row after a reload: a link to the Inbox, not buttons.
+        monkeypatch.setattr(questions, "_books", {})
+        words = {**_asked("q-1", at=100.0), "options": [], "free_text": True, "max_chars": 4000}
+        questions.record("agent-1", _book(words))
+        db.write_chat_log(
+            100.5, "triage", "assistant", _ASKED[0], agent_id=derive_actor_id("triage")
+        )
+
+        (row,) = await (await client.get("/api/chats", params={"agent": "triage"})).json()
+
+        assert row["question"]["free_text"] is True
+        assert row["question"]["options"] == []
+
     async def test_an_answered_question_carries_its_pick(
         self,
         client: TestClient[web.Request, web.Application],

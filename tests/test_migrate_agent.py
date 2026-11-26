@@ -39,8 +39,10 @@ from wactorz.agents.main.migration import BRIDGE_CODE_MARKER, Migration
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.core.actor import Actor
 from wactorz.core.artifacts import ArtifactStore
 from wactorz.core.manifests import AgentManifest
+from wactorz.core.questions import Question
 from wactorz.core.registry import ActorRegistry, Supervisor
 
 #: The id an agent on main and its registry entry share.
@@ -1330,6 +1332,136 @@ class TestAnAgentANodeCannotRun:
         assert not agent.stopped
         assert not main.spawned_remote
         assert not main.actor.migration.pending_spawns
+
+
+class TestAnAgentWaitingForWords:
+    """An agent with an open question asked for words stays on main.
+
+    Such an answer is handed to the agent in the server's process; on a node the
+    question would stay open with nothing able to answer it, and asking it
+    again would be refused. So the move is refused before the agent stops.
+    """
+
+    @staticmethod
+    def _main(tmp_path: Path, *questions: Question) -> tuple[_Main, Actor]:
+        main = _Main(spawn_registry={"collector": with_code()}, nodes={"nuc": online()})
+        actor = _Asker(name="collector", persistence_dir=str(tmp_path))
+        for question in questions:
+            actor._record_question(question)
+        main.registry._by["collector"] = actor  # pyright: ignore[reportArgumentType]  # a real actor among the fakes
+        return main, actor
+
+    async def test_it_is_refused_with_the_reason_and_nothing_stops(self, tmp_path: Path) -> None:
+        main, actor = self._main(tmp_path, _words("q1"))
+
+        result = await main.migrate("collector", "nuc")
+
+        assert result["success"] is False
+        assert "waits for an answer in words" in result["message"]
+        assert "stays on 'local'" in result["message"]
+        assert actor.state.value != "stopped"
+        assert not main.spawned_remote
+        assert not main.actor.migration.pending_spawns
+
+    async def test_one_asked_while_the_move_is_prepared_keeps_it_here(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The first check passes; the agent runs on while the move is prepared,
+        # which can wait a long time, and asks for words meanwhile.
+        main, actor = self._main(tmp_path)
+        preparing, carry_on = asyncio.Event(), asyncio.Event()
+        pinned_for = main.actor.spawns.pinned_for
+
+        async def slow(config: dict[str, Any], node: str) -> Any:
+            preparing.set()
+            await carry_on.wait()
+            return await pinned_for(config, node)
+
+        monkeypatch.setattr(main.actor.spawns, "pinned_for", slow)
+        moving = asyncio.create_task(main.migrate("collector", "nuc"))
+        await asyncio.wait_for(preparing.wait(), 5)
+        actor._record_question(_words("q3"))
+        carry_on.set()
+
+        result = await moving
+
+        assert result["success"] is False
+        assert "waits for an answer in words" in result["message"]
+        assert "running on 'local' again" in result["message"]
+        assert not main.spawned_remote, "nothing goes to the node"
+        assert not main.actor.migration.pending_spawns
+        assert [config["name"] for config in main.spawned_local] == ["collector"]
+
+    async def test_to_a_node_that_takes_words_it_moves_with_the_question(
+        self, tmp_path: Path
+    ) -> None:
+        # The answer reaches it there from main, signed; the node says it takes
+        # them and its heartbeat says it enforces the signature.
+        main, _actor = self._main(tmp_path, _words("q1"))
+        main.actor.nodes.node_manifests["nuc"] = {"free_text_answers": True}
+        main.actor.nodes.known["nuc"]["signing"] = "enforce"
+
+        result = await main.migrate("collector", "nuc")
+
+        assert "waits for an answer in words" not in result.get("message", "")
+        assert [node for _config, node, _save in main.spawned_remote] == ["nuc"]
+
+    @pytest.mark.parametrize(
+        ("manifest", "signing", "why"),
+        [
+            pytest.param({}, "enforce", "deploy it again", id="an older node"),
+            pytest.param(
+                {"free_text_answers": True}, "warn", "does not enforce", id="signing warn"
+            ),
+            pytest.param({"free_text_answers": True}, "off", "does not enforce", id="no key"),
+        ],
+    )
+    async def test_to_one_that_cannot_it_stays_saying_why(
+        self, tmp_path: Path, manifest: dict[str, Any], signing: str, why: str
+    ) -> None:
+        main, _actor = self._main(tmp_path, _words("q1"))
+        main.actor.nodes.node_manifests["nuc"] = manifest  # pyright: ignore[reportArgumentType]  # a manifest as a node sends it
+        main.actor.nodes.known["nuc"]["signing"] = signing
+
+        result = await main.migrate("collector", "nuc")
+
+        assert result["success"] is False
+        assert why in result["message"]
+        assert not main.spawned_remote
+
+    async def test_once_it_is_answered_the_agent_may_move(self, tmp_path: Path) -> None:
+        main, _actor = self._main(tmp_path, _words("q1", answer="Swapped it."))
+
+        result = await main.migrate("collector", "nuc")
+
+        assert "waits for an answer in words" not in result.get("message", "")
+
+    async def test_a_question_with_options_does_not_hold_it(self, tmp_path: Path) -> None:
+        main, _actor = self._main(
+            tmp_path, Question(id="q2", text="Changed?", options=("yes", "no"), channel="dashboard")
+        )
+
+        result = await main.migrate("collector", "nuc")
+
+        assert "waits for an answer in words" not in result.get("message", "")
+
+
+class _Asker(Actor):
+    async def handle_message(self, msg: Any) -> None:
+        return None
+
+
+def _words(question_id: str, answer: str | None = None) -> Question:
+    """A question asked for words, open or answered."""
+    return Question(
+        id=question_id,
+        text="What did you change on the AHU?",
+        options=(),
+        channel="dashboard",
+        free_text=True,
+        max_chars=4000,
+        answer=answer,
+    )
 
 
 class TestAnAgentWhosePackagesAreNotCleared:

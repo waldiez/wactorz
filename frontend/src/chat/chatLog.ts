@@ -49,7 +49,12 @@ function ownerName(msg: ChatMessage): string {
 
 /** Whether `msg` asks something still open: options offered, none picked. */
 export function isOpenQuestion(msg: ChatMessage): boolean {
-    return (msg.options?.length ?? 0) > 0 && msg.answer === undefined;
+    return asksSomething(msg) && msg.answer === undefined;
+}
+
+/** Whether `msg` is a question: one offering options, or one asked for words. */
+export function asksSomething(msg: ChatMessage): boolean {
+    return (msg.options?.length ?? 0) > 0 || msg.freeText === true;
 }
 
 /** What a reconcile with the ledger did, for the views to follow: the ids whose
@@ -185,7 +190,7 @@ export class ChatLog {
      *  null when there is no such question here. */
     answer(id: string, option: string): ChatMessage | null {
         const found = this.get(id);
-        if (!found || (found.options?.length ?? 0) === 0) {
+        if (!found || !asksSomething(found)) {
             return null;
         }
         return this.update(id, m => ({ ...m, answer: option }));

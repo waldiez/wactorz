@@ -271,6 +271,7 @@ describe("an Inbox card", () => {
             label: () => "weather",
             face: () => avatar(weather, "running", "small"),
             answer: () => Promise.resolve(""),
+            answerText: () => Promise.resolve(""),
         });
         const who = waiting.element.querySelector<HTMLElement>(".af-inbox-who")!;
         expect(who.firstElementChild).toBe(face(who));

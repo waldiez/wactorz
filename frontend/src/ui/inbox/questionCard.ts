@@ -11,6 +11,7 @@
  */
 import { formatRoute } from "../../router";
 import { timeLabel, toMs } from "../../time";
+import { SENT_TO_NODE } from "../../questions/QuestionInbox";
 import type { LedgerQuestion } from "../../types/agent";
 import { button, el, labelled, listItem, named } from "../dom";
 
@@ -25,6 +26,8 @@ export interface CardHost {
     face(question: LedgerQuestion): HTMLElement;
     /** Send the pick. Returns the server's refusal, or "" once it is sent. */
     answer(question: LedgerQuestion, option: string, note: string): Promise<string>;
+    /** Send the words, for a question asked for them. The server's refusal, or "" once taken. */
+    answerText(question: LedgerQuestion, text: string): Promise<string>;
 }
 
 /** The line above a question: who asked, with their avatar, a link to their thread, and when. */
@@ -72,7 +75,20 @@ export function answeredCard(question: LedgerQuestion, label: string, face: HTML
     return card;
 }
 
-/** A question waiting for an answer: its options, and a note to send with one. */
+/** The box a person types an answer in, for a question asked for words. */
+function wordsBox(question: LedgerQuestion): HTMLTextAreaElement {
+    const box = named(el("textarea", "af-inbox-words-input"), "answer", "Your answer");
+    if (question.max_chars) {
+        box.maxLength = question.max_chars;
+    }
+    box.rows = 4;
+    return box;
+}
+
+/**
+ * A question waiting for an answer: its options, and a note to send with one;
+ * or, for one asked for words, a box to type them in and a button to send.
+ */
 export class QuestionCard {
     /** The card's element. */
     readonly element: HTMLElement;
@@ -80,6 +96,8 @@ export class QuestionCard {
     private readonly _note = named(el("textarea", "af-inbox-note-input"), "note", "A note with your answer");
     private readonly _refusal = el("p", "af-inbox-refusal");
     private readonly _buttons: HTMLButtonElement[];
+    /** What the person types, for a question asked for words; null for one with options. */
+    private readonly _words: HTMLTextAreaElement | null;
     private _question: LedgerQuestion;
 
     constructor(
@@ -92,25 +110,49 @@ export class QuestionCard {
         this._note.rows = 2;
         this._refusal.setAttribute("role", "alert");
         this._refusal.hidden = true;
-        this._buttons = question.options.map(option => {
+        this._words = question.free_text ? wordsBox(question) : null;
+        this._buttons = this._words ? [this._sendButton()] : this._optionButtons(question);
+        this.element.append(
+            this._who,
+            el("p", "af-inbox-text", question.text),
+            ...why(question),
+            ...(this._words ? [this._wordsArea(this._words)] : this._options()),
+            this._refusal,
+        );
+        this.refresh(question);
+    }
+
+    /** The box and, under it on the right, the button that sends what was typed. */
+    private _wordsArea(box: HTMLTextAreaElement): HTMLElement {
+        const area = el("div", "af-inbox-words");
+        area.append(box, ...this._buttons);
+        return area;
+    }
+
+    /** The button that sends what was typed: the card's one action. */
+    private _sendButton(): HTMLButtonElement {
+        const send = button("af-inbox-send", "Send");
+        send.addEventListener("click", () => void this._send());
+        return send;
+    }
+
+    /** A button per option, each sending its pick. */
+    private _optionButtons(question: LedgerQuestion): HTMLButtonElement[] {
+        return question.options.map(option => {
             const pick = button("af-inbox-option", option);
             pick.addEventListener("click", () => void this._pick(option));
             return pick;
         });
+    }
+
+    /** The option buttons as a group, and the note to send with one. */
+    private _options(): HTMLElement[] {
         const options = labelled(el("div", "af-inbox-options"), "Answers");
         options.setAttribute("role", "group");
         options.append(...this._buttons);
         const noting = el("details", "af-inbox-noting");
         noting.append(el("summary", "", "Add a note"), this._note);
-        this.element.append(
-            this._who,
-            el("p", "af-inbox-text", question.text),
-            ...why(question),
-            options,
-            noting,
-            this._refusal,
-        );
-        this.refresh(question);
+        return [options, noting];
     }
 
     /** Show `question` as it now stands, keeping what was typed. */
@@ -123,13 +165,35 @@ export class QuestionCard {
 
     /** Send `option` with the note; on a refusal, say why and offer the options again. */
     private async _pick(option: string): Promise<void> {
+        await this._sending(() => this.host.answer(this._question, option, this._note.value.trim()));
+    }
+
+    /** Send what was typed; nothing to send says so, and a refusal keeps the words. */
+    private async _send(): Promise<void> {
+        const text = this._words?.value.trim() ?? "";
+        if (!text) {
+            this._say("Type an answer first.");
+            return;
+        }
+        await this._sending(() => this.host.answerText(this._question, text));
+    }
+
+    /** Run `send` with the buttons off; on a refusal, say why and turn them on again. */
+    private async _sending(send: () => Promise<string>): Promise<void> {
         this._buttons.forEach(pick => (pick.disabled = true));
         this._refusal.hidden = true;
-        const refused = await this.host.answer(this._question, option, this._note.value.trim());
+        const refused = await send();
         if (refused) {
-            this._refusal.textContent = refused;
-            this._refusal.hidden = false;
+            // Sent on to a node is no refusal, but the card stays: it may be sent again.
+            this._say(refused, refused === SENT_TO_NODE);
             this._buttons.forEach(pick => (pick.disabled = false));
         }
+    }
+
+    /** Show `why` where a refusal is said; `sent` says it went, and is not a refusal. */
+    private _say(why: string, sent = false): void {
+        this._refusal.textContent = why;
+        this._refusal.classList.toggle("af-inbox-sent", sent);
+        this._refusal.hidden = false;
     }
 }

@@ -50,6 +50,27 @@ CUT_SHORT = "The server restarted first"
 #: The longest id a caller may give a question (`ask_operator(..., id=...)`).
 MAX_ID_CHARS = 128
 
+#: The longest answer a person may type to a question asked for words
+#: (`ask_operator(..., free_text=True)`). A turn in a conversation, not a note.
+MAX_TEXT_CHARS = 4000
+
+#: Control characters kept in a typed answer: the ones that shape a text.
+_KEPT_CONTROLS = frozenset("\n\t")
+
+
+def typed_text(raw: object) -> str:
+    """``raw`` as a person's typed answer: trimmed, cleaned, redacted and bounded.
+
+    Control characters but line breaks and tabs are dropped; then the text is
+    redacted as a log line is, best-effort, so a key pasted by mistake is not
+    kept or published as it was typed; then cut to :data:`MAX_TEXT_CHARS`.
+    Empty for anything not text, or nothing left.
+    """
+    if not isinstance(raw, str):
+        return ""
+    printable = "".join(c for c in raw if c.isprintable() or c in _KEPT_CONTROLS)
+    return redact(printable.strip())[:MAX_TEXT_CHARS].strip()
+
 
 class QuestionIdError(ValueError):
     """An ``id=`` for a question that cannot be used: not one, or another question's."""
@@ -148,6 +169,11 @@ class Question:
     #: is sent when the agent starts or asks it again. A record from before this
     #: field was sent before it was recorded.
     sent: bool = True
+    #: A question answered in words rather than by picking one of its options,
+    #: which it has none of, and the longest answer it takes (`MAX_TEXT_CHARS`),
+    #: for whoever draws the box the person types in.
+    free_text: bool = False
+    max_chars: int = 0
 
     @property
     def open(self) -> bool:
@@ -186,6 +212,8 @@ class Question:
                 context=str(record.get("context") or ""),
                 permission=bool(record.get("permission", False)),
                 sent=bool(record.get("sent", True)),
+                free_text=record.get("free_text") is True,
+                max_chars=int(record.get("max_chars") or 0),
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -219,7 +247,8 @@ def same_question(one: Question, other: Question) -> bool:
     """Whether ``one`` and ``other`` ask the same thing, so one id may name both.
 
     What was asked, as it is kept: the words, the options, where and to whom,
-    the label its answer makes, the context and whether it is a permission. Not
+    the label its answer makes, the context, whether it is a permission and
+    whether it is answered in words. Not
     when it was asked, nor its answer, nor ``fallen_back`` and ``sent``, which
     say how it was delivered, not what it is.
     """
@@ -231,6 +260,7 @@ def same_question(one: Question, other: Question) -> bool:
         one.label,
         one.context,
         one.permission,
+        one.free_text,
     ) == (
         other.text,
         other.options,
@@ -239,10 +269,13 @@ def same_question(one: Question, other: Question) -> bool:
         other.label,
         other.context,
         other.permission,
+        other.free_text,
     )
 
 
-def answered(question: Question, option: str, index: int, channel: str, note: str = "") -> Question:
+def answered(
+    question: Question, option: str, index: int | None, channel: str, note: str = ""
+) -> Question:
     """``question`` with ``option`` recorded as its answer, now, with the person's ``note``."""
     return Question(
         **{

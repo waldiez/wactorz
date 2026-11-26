@@ -620,6 +620,29 @@ class NodeManager:
         manifest = self.node_manifests.get(node_name) or {}
         return manifest.get("code_bundles") is True
 
+    def why_no_words(self, node_name: str) -> str | None:
+        """Why a person's answer in words cannot go to ``node_name`` now; None when it can.
+
+        Asked before every forward and every move, not once at asking: a node's
+        release and its signing can change while a question waits. It must say
+        in its manifest that it takes them, and enforce main's signature (its
+        heartbeat says), or it would take an answer from anything on the broker.
+        """
+        manifest = self.node_manifests.get(node_name) or {}
+        if manifest.get("free_text_answers") is not True:
+            return (
+                f"node '{node_name}' runs a release that cannot take an answer in words; "
+                "deploy it again"
+            )
+        signing = (self.known.get(node_name) or {}).get("signing", "off")
+        if signing != "enforce":
+            return (
+                f"node '{node_name}' does not enforce main's signature (signing: {signing}), "
+                "so it would take an answer in words from anything on the broker; deploy it "
+                "with WACTORZ_NODE_SIGNING=enforce"
+            )
+        return None
+
     def takes_tasks_by_node(self, node_name: str) -> bool | None:
         """Whether `node_name` takes a task on its own topic, ``agents/at/<node>/<name>/task``.
 

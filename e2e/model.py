@@ -50,6 +50,26 @@ async def process(agent):
         return
 """
 
+#: What the typist asks the person, for words rather than a pick.
+WORDS_QUESTION = "What did you change on the AHU?"
+
+#: An agent that asks the person for words once, says what was typed, and ends a
+#: few ticks later: long enough for its thread to be read before it goes.
+ASKS_FOR_WORDS = f"""
+async def process(agent):
+    if agent.state.get("said"):
+        agent.state["ticks"] = agent.state.get("ticks", 0) + 1
+        if agent.state["ticks"] >= 10:
+            await agent.stop()
+        return
+    if agent.state.get("asked"):
+        return
+    agent.state["asked"] = True
+    typed = await agent.ask_operator({WORDS_QUESTION!r}, free_text=True)
+    await agent.notify_user("typed: " + typed)
+    agent.state["said"] = True
+"""
+
 #: An agent that puts what it is sent to the model, and says what came back.
 ASKS_THE_MODEL = """
 async def setup(agent):
@@ -148,6 +168,17 @@ SCRIPT = {
         capabilities=["counting"],
         code=COUNTER,
     ),
+    # On the node, which enforces main's signature: its answer comes from main, signed.
+    "start a typist on the node": _starts(
+        "Starting it there.",
+        name="far-typist",
+        type="dynamic",
+        node=NODE_NAME,
+        description="Asks the person for a few words, from the node",
+        capabilities=["asking"],
+        poll_interval=1,
+        code=ASKS_FOR_WORDS,
+    ),
     "start an asker on the node": _starts(
         "Starting it there.",
         name="asker",
@@ -174,6 +205,16 @@ SCRIPT = {
     # last few exchanges to a short planner task, and the longest key found
     # wins, so this one is longer than any that conversation could contain.
     "count the beans in the old blue jar": "There are seven beans.",
+    # Before model code goes to a node: an agent on a node cannot ask for words yet.
+    "start a typist here": _starts(
+        "Starting it.",
+        name="typist",
+        type="dynamic",
+        description="Asks the person for a few words",
+        capabilities=["asking"],
+        poll_interval=1,
+        code=ASKS_FOR_WORDS,
+    ),
     "start a finisher here": _starts(
         "Starting it.",
         name="finisher",

@@ -73,6 +73,11 @@ class LabelError(ValueError):
     """A label, or a label spec, that cannot be taken as written."""
 
     @classmethod
+    def free_text(cls) -> LabelError:
+        """The error for ``label=`` on a question answered in words, which has no options to map."""
+        return cls("a label maps options to values, and a free_text question has no options")
+
+    @classmethod
     def no_source(cls) -> LabelError:
         """The error for a label that names no source."""
         return cls("a label names the source it is about")

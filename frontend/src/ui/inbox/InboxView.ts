@@ -198,6 +198,7 @@ export class InboxView {
             label: asked => this.label(asked),
             face: asked => this.face(asked),
             answer: (asked, option, note) => this.inbox.answer(asked, option, note),
+            answerText: (asked, text) => this.inbox.answerText(asked, text),
         });
         this._cards.set(question.id, card);
         return card;

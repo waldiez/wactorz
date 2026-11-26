@@ -213,6 +213,8 @@ export interface ChatMessage {
     agentId?: string;
     /** A choice the agent offers; the person answers by picking one. */
     options?: string[];
+    /** A question answered in words, in the Inbox, rather than by picking an option. */
+    freeText?: boolean;
     /** The option picked, once the question is answered, on any channel. */
     answer?: string;
     /** A chat channel the message also went to ("telegram", "discord", "whatsapp"). */
@@ -258,6 +260,10 @@ export interface LedgerQuestion {
     answered_at?: number;
     /** Why the agent says it asks, if it said. */
     context?: string;
+    /** A question answered in words rather than by picking one of its options. */
+    free_text?: boolean;
+    /** The longest answer in words it takes, as the server keeps it. */
+    max_chars?: number;
 }
 
 /** One agent's question book: every question it still keeps, open or answered. */

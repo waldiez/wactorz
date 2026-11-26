@@ -194,7 +194,14 @@ the broker. Anything that can publish to it can drive Wactorz.
   never anything else; an agent that reads the topic itself after `notify_user`
   gets the frame as it was sent, and checks the option against its own. Either way
   it says what someone answered, never that you did: do not make it the approval for anything
-  you would not let the agent do unasked. Packages are the exception: they are
+  you would not let the agent do unasked. A question asked for words
+  (`free_text=True`) is the other way round: its answer cannot be checked against
+  options, so it is never taken from that topic, only from the dashboard, handed
+  to the agent in the server's process, or sent by main to one on a node over the
+  node's signed control topic, which a node takes only while it enforces main's
+  signature; an agent on a node that does not enforce it cannot ask for words. The
+  words are redacted before they are kept and published, as a log line is: a
+  best effort, so the Inbox is no place to type a secret. Packages are the exception: they are
   approved through the dashboard itself, never the broker.
 - **Main's deploy credentials open every node.** The SSH key or password a
   `DEPLOY_<NODE>_*` block names gives a shell on that node, as the user it names,

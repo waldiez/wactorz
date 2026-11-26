@@ -13,8 +13,11 @@
  * No DOM: the view reads `state` and is told when it changes.
  */
 import type { Answer } from "../io/api";
-import type { ListedQuestions } from "../io/openQuestions";
+import type { ListedQuestions, SentWords } from "../io/openQuestions";
 import type { LedgerQuestion, QuestionBook } from "../types/agent";
+
+/** What answering words to an agent on a node says while they are on their way to it. */
+export const SENT_TO_NODE = "Sent to the agent's node. It shows as answered once the agent has taken it.";
 
 /** How many answered questions are shown, as the server's ledger keeps. */
 export const ANSWERED_SHOWN = 100;
@@ -53,6 +56,7 @@ export class QuestionInbox {
     constructor(
         private readonly api: {
             answer(question: LedgerQuestion, option: string, note: string): Promise<Answer<null>>;
+            answerText(question: LedgerQuestion, text: string): Promise<Answer<SentWords>>;
         },
     ) {}
 
@@ -106,6 +110,28 @@ export class QuestionInbox {
             answer_channel: "dashboard",
             answered_at: Date.now() / 1000,
             ...(note && { answer_note: note }),
+        });
+        return "";
+    }
+
+    /**
+     * Answer `question`, one asked for words, with `text`. Returns the server's
+     * refusal, or "" once it is taken; the question is then answered here with
+     * the words as the server kept them.
+     */
+    async answerText(question: LedgerQuestion, text: string): Promise<string> {
+        const got = await this.api.answerText(question, text);
+        if (!got.ok) {
+            return got.error;
+        }
+        if (got.value.forwarded) {
+            // On its way to a node: answered once the agent there takes it, as its book will say.
+            return SENT_TO_NODE;
+        }
+        this._settle(question, {
+            answer: got.value.text,
+            answer_channel: "dashboard",
+            answered_at: Date.now() / 1000,
         });
         return "";
     }

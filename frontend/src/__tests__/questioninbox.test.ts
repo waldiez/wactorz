@@ -14,9 +14,16 @@ function asked(id: string, over: Partial<LedgerQuestion> = {}): LedgerQuestion {
     return { id, agent_id: "a1", agent: "asker", text: `${id}?`, options: ["Yes", "No"], ...over };
 }
 
-function inboxAnswering(result: { ok: true; value: null } | { ok: false; error: string }) {
+function inboxAnswering(
+    result: { ok: true; value: null } | { ok: false; error: string },
+    typed: { ok: true; value: { text: string; forwarded: boolean } } | { ok: false; error: string } = {
+        ok: true,
+        value: { text: "", forwarded: false },
+    },
+) {
     const answer = vi.fn(async () => result);
-    return { inbox: new QuestionInbox({ answer }), answer };
+    const answerText = vi.fn(async () => typed);
+    return { inbox: new QuestionInbox({ answer, answerText }), answer, answerText };
 }
 
 describe("QuestionInbox", () => {

@@ -8,6 +8,15 @@ useDefault = true
 # not a secret: an example, a published sample, or a fixture cut short. Listed
 # by value, not by file and line, so the entry holds when the file is edited
 # and nothing else in that file is excused with it.
+# gitleaks' own rule for a GitHub App installation token wants 36 letters and
+# digits after `ghs_`, the classic format. A token in the JWT format has a dot
+# after its header, which may come sooner, so it is looked for by its three parts.
+[[rules]]
+id = "github-app-token-jwt"
+description = "GitHub App installation token in the JWT format"
+regex = '''ghs_[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}'''
+keywords = ["ghs_"]
+
 [[allowlists]]
 description = "Example values in the documentation, and fixtures in tests"
 regexTarget = "match"

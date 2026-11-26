@@ -435,6 +435,7 @@ PREFIXED_KEYS = [
     _token("sk-", "ant-api03-", "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"),
     _token("sk-", "proj-", "AbCdEfGhIjKlMnOpQrStUvWxYz0123"),
     _token("gh", "p_", "abcdefghijklmnopqrstuvwxyz0123456789"),
+    _token("gh", "s_", "abcdefghijklmnopqrstuvwxyz0123456789"),
     _token("github", "_pat_", "11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz"),
     _token("xo", "xb-", "1234567890-", "abcdefghijklmn"),
 ]
@@ -462,6 +463,21 @@ class TestTokensWithNoKeyNameToFindThemBy:
     @pytest.mark.parametrize("key", PREFIXED_KEYS)
     def test_an_api_key_with_a_telling_prefix(self, key: str) -> None:
         assert redact(f"using {key} for this") == f"using {REDACTED} for this"
+
+    @pytest.mark.parametrize(
+        "header", ["eyJhbGciOiJSUzI1NiJ9", "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9"]
+    )
+    def test_a_github_app_token_in_the_jwt_format_is_redacted_whole(self, header: str) -> None:
+        # Several hundred characters, with the dots, dashes and underscores of a
+        # JWT, past the length and the letters-and-digits of the classic format.
+        payload = "eyJpc3MiOiJhcHAiLCJzdWIiOiJpbnN0YWxsYXRpb24tMSJ9" + "_Ab-9" * 60
+        token = _token("gh", "s_", header, ".", payload, ".", "c2lnbmF0dXJl-_" * 20)
+        assert len(token) > 520
+
+        out = redact(f"Authorization: token {token}. Next request")
+
+        assert out == f"Authorization: token {REDACTED}. Next request"
+        assert not any(part in out for part in token.split(".")), "no part of it is left"
 
     @pytest.mark.parametrize(
         "text",
@@ -531,6 +547,8 @@ class TestNoCatastrophicBacktracking:
             pytest.param("eyJ." * 5_000, id="jwt-repeated"),
             pytest.param("sk-" * 7_000, id="sk-repeated"),
             pytest.param("ghp_" + "a" * 20_000, id="github"),
+            pytest.param("ghs_" + "a." * 10_000, id="github-app-dots"),
+            pytest.param("ghs_" * 5_000, id="github-app-repeated"),
         ],
     )
     def test_completes_promptly(self, hostile: str) -> None:

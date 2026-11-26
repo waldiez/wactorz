@@ -90,9 +90,14 @@ _TELEGRAM_BOT_TOKEN = re.compile(r"(/bot)(\d{3,15}:[A-Za-z0-9_\-]{20,128})")
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_\-]{5,2048}\.eyJ[A-Za-z0-9_\-]{5,4096}\.[A-Za-z0-9_\-]{5,1024}")
 # API keys whose prefix says what they are: OpenAI and Anthropic (`sk-`), GitHub
 # (`ghp_`, `gho_`, `ghs_`, `github_pat_`), Slack (`xoxb-` and its siblings),
-# Google (`AIza`, for Gemini among others) and NVIDIA (`nvapi-`).
+# Google (`AIza`, for Gemini among others) and NVIDIA (`nvapi-`). A GitHub App
+# installation token (`ghs_`, the Actions `GITHUB_TOKEN` among them) may be a
+# JWT, several hundred characters with dots, dashes and underscores, so it has a
+# wider class than the other GitHub tokens; it ends on a character a token ends
+# on, so the full stop after one in a sentence is left.
 _PREFIXED_KEY = re.compile(
-    r"\b(?:sk-[A-Za-z0-9_\-]{20,256}|gh[pousr]_[A-Za-z0-9]{30,255}"
+    r"\b(?:sk-[A-Za-z0-9_\-]{20,256}|gh[pour]_[A-Za-z0-9]{30,255}"
+    r"|ghs_[A-Za-z0-9._\-]{29,4095}[A-Za-z0-9_\-]"
     r"|github_pat_[A-Za-z0-9_]{30,255}|xox[abprs]-[A-Za-z0-9\-]{10,255}"
     r"|AIza[A-Za-z0-9_\-]{35}|nvapi-[A-Za-z0-9_\-]{20,256})"
 )

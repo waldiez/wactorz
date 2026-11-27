@@ -26,6 +26,7 @@ import sys
 import webbrowser
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 from urllib.parse import urlencode, urlparse
@@ -40,26 +41,36 @@ from ..atomic_io import write_private_json
 # used as base classes and annotations, so the real ones are declared separately
 # for type checking and the fallbacks are confined to the runtime branch.
 if TYPE_CHECKING:
+    from httpx2 import AsyncClient
     from mcp import ClientSession
     from mcp.client.auth import OAuthClientProvider, TokenStorage
-    from mcp.client.streamable_http import streamablehttp_client
-    from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
+    from mcp.client.streamable_http import streamable_http_client
+    from mcp.shared.auth import (
+        AuthorizationCodeResult,
+        OAuthClientInformationFull,
+        OAuthClientMetadata,
+        OAuthToken,
+    )
     from pydantic import AnyUrl
 else:
     try:
+        from httpx2 import AsyncClient
         from mcp import ClientSession
         from mcp.client.auth import OAuthClientProvider, TokenStorage
-        from mcp.client.streamable_http import streamablehttp_client
+        from mcp.client.streamable_http import streamable_http_client
         from mcp.shared.auth import (
+            AuthorizationCodeResult,
             OAuthClientInformationFull,
             OAuthClientMetadata,
             OAuthToken,
         )
     except ImportError:  # pragma: no cover - optional dependency guard
+        AsyncClient = None
+        AuthorizationCodeResult = None
         ClientSession = None
         OAuthClientProvider = None
         TokenStorage = object
-        streamablehttp_client = None
+        streamable_http_client = None
         OAuthClientInformationFull = None
         OAuthClientMetadata = None
         OAuthToken = None
@@ -169,8 +180,8 @@ def format_mcp_content(result: Any) -> str:
     """An MCP tool result as text: its structured content as JSON when it has some, else each
     content item's text, joined by lines.
     """
-    if getattr(result, "structuredContent", None) is not None:
-        return json.dumps(result.structuredContent, indent=2)
+    if getattr(result, "structured_content", None) is not None:
+        return json.dumps(result.structured_content, indent=2)
     content = getattr(result, "content", None)
     if not content:
         return str(result)
@@ -285,16 +296,25 @@ def _make_redirect_handler(config: GoogleMcpConfig) -> Callable[[str], Awaitable
     return _open_oauth_browser
 
 
+@dataclass(frozen=True)
+class _AuthorizationCallback:
+    """OAuth redirect values shared by the REST and optional MCP login paths."""
+
+    code: str
+    state: str | None = None
+    iss: str | None = None
+
+
 def _make_callback_handler(
     config: GoogleMcpConfig,
-) -> Callable[[], Coroutine[Any, Any, tuple[str, str | None]]]:
-    async def _wait_for_oauth_callback() -> tuple[str, str | None]:
+) -> Callable[[], Coroutine[Any, Any, _AuthorizationCallback]]:
+    async def _wait_for_oauth_callback() -> _AuthorizationCallback:
         parsed = urlparse(config.redirect_uri())
         host = parsed.hostname or "localhost"
         port = parsed.port or 8765
         path = parsed.path or "/oauth/callback"
         loop = asyncio.get_running_loop()
-        future: asyncio.Future[tuple[str, str | None]] = loop.create_future()
+        future: asyncio.Future[_AuthorizationCallback] = loop.create_future()
 
         async def callback(request: web.Request) -> web.Response:
             if request.path != path:
@@ -302,7 +322,7 @@ def _make_callback_handler(
             code = request.query.get("code", "")
             state = request.query.get("state")
             if not future.done():
-                future.set_result((code, state))
+                future.set_result(_AuthorizationCallback(code, state, request.query.get("iss")))
             return web.Response(
                 text=f"{config.label} MCP authentication complete. You can close this window."
             )
@@ -319,6 +339,12 @@ def _make_callback_handler(
             await runner.cleanup()
 
     return _wait_for_oauth_callback
+
+
+async def _receive_mcp_authorization(config: GoogleMcpConfig) -> AuthorizationCodeResult:
+    """Keep the issuer available for the SDK's OAuth response validation."""
+    result = await _make_callback_handler(config)()
+    return AuthorizationCodeResult(code=result.code, state=result.state, iss=result.iss)
 
 
 class NeedsLoginError(RuntimeError):
@@ -359,7 +385,7 @@ def build_auth(config: GoogleMcpConfig, interactive: bool = False) -> OAuthClien
     )
     if interactive:
         redirect_handler = _make_redirect_handler(config)
-        callback_handler = _make_callback_handler(config)
+        callback_handler = partial(_receive_mcp_authorization, config)
     else:
         redirect_handler = _make_noninteractive_handler(config)
         callback_handler = _make_noninteractive_handler(config)
@@ -425,15 +451,21 @@ class GoogleMcpClient:
     async def _call_mcp(
         self, tool_name: str, arguments: dict[str, Any], interactive: bool = False
     ) -> str:
-        if ClientSession is None or streamablehttp_client is None:
+        if ClientSession is None or streamable_http_client is None or AsyncClient is None:
             return "The 'mcp' package is required. Install with: pip install wactorz[mcp]"
         try:
             auth = build_auth(self.config, interactive=interactive)
-            async with streamablehttp_client(
-                self.config.mcp_url(),
-                headers={} if auth else self.config.headers(),
-                auth=auth,
-            ) as (read, write, _):
+            async with (
+                AsyncClient(
+                    timeout=mcp_timeout(),
+                    headers={} if auth else self.config.headers(),
+                    auth=auth,
+                ) as http,
+                streamable_http_client(self.config.mcp_url(), http_client=http) as (
+                    read,
+                    write,
+                ),
+            ):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     result = await session.call_tool(tool_name, arguments)
@@ -447,15 +479,21 @@ class GoogleMcpClient:
 
         With ``interactive``, a missing OAuth token starts the browser consent flow.
         """
-        if ClientSession is None or streamablehttp_client is None:
+        if ClientSession is None or streamable_http_client is None or AsyncClient is None:
             return "The 'mcp' package is required. Install with: pip install wactorz[mcp]"
         try:
             auth = build_auth(self.config, interactive=interactive)
-            async with streamablehttp_client(
-                self.config.mcp_url(),
-                headers={} if auth else self.config.headers(),
-                auth=auth,
-            ) as (read, write, _):
+            async with (
+                AsyncClient(
+                    timeout=mcp_timeout(),
+                    headers={} if auth else self.config.headers(),
+                    auth=auth,
+                ) as http,
+                streamable_http_client(self.config.mcp_url(), http_client=http) as (
+                    read,
+                    write,
+                ),
+            ):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     tools = await session.list_tools()
@@ -525,7 +563,8 @@ class GoogleMcpClient:
         wait_task = asyncio.create_task(_make_callback_handler(self.config)())
         await asyncio.sleep(0.4)  # let the callback server bind before opening the browser
         await _make_redirect_handler(self.config)(auth_url)
-        code, returned_state = await wait_task
+        callback_result = await wait_task
+        code, returned_state = callback_result.code, callback_result.state
         if not code:
             return f"{self.config.label}: authorization was cancelled"
         # The point of `state`: the callback is an unauthenticated local URL,

@@ -102,10 +102,12 @@ curl -X POST http://localhost:8000/chat \
 |---|---|
 | **dep** | `pip install wactorz[mcp]` |
 | **transport** | stdio |
-| **class** | `FastMCP` server in `wactorz.interfaces.mcp_server` |
+| **class** | SDK 2 `MCPServer` in `wactorz.interfaces.mcp_server` |
 | **backend** | Wactorz REST API at `WACTORZ_URL` |
 
 The MCP server exposes Wactorz as tools and resources for MCP-compatible clients such as Claude Desktop, Cursor, Zed, and the MCP Inspector. It is a separate process from the Wactorz runtime: start Wactorz with the REST interface first, then start the MCP server from your MCP client.
+
+The `mcp` extra installs MCP Python SDK 2.3 or later within the 2.x series. Upgrade an existing installation with `pip install --upgrade 'wactorz[mcp]'`. The `wactorz-mcp` command, stdio transport, tool schemas, resource URIs and Wactorz environment variables keep the same configuration. SDK 2 does not read SDK-level `MCP_*` settings or `.env` files; pass the Wactorz variables below through your MCP client's environment.
 
 ```bash
 # Terminal 1: start Wactorz REST

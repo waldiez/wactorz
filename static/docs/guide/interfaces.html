@@ -384,7 +384,7 @@ terminal also takes <code>/deploy-pkg &lt;node&gt; &lt;package&gt; …</code> an
 </tr>
 <tr>
 <td><strong>class</strong></td>
-<td><code>FastMCP</code> server in <code>wactorz.interfaces.mcp_server</code></td>
+<td>SDK 2 <code>MCPServer</code> in <code>wactorz.interfaces.mcp_server</code></td>
 </tr>
 <tr>
 <td><strong>backend</strong></td>
@@ -393,6 +393,7 @@ terminal also takes <code>/deploy-pkg &lt;node&gt; &lt;package&gt; …</code> an
 </tbody>
 </table>
 <p>The MCP server exposes Wactorz as tools and resources for MCP-compatible clients such as Claude Desktop, Cursor, Zed, and the MCP Inspector. It is a separate process from the Wactorz runtime: start Wactorz with the REST interface first, then start the MCP server from your MCP client.</p>
+<p>The <code>mcp</code> extra installs MCP Python SDK 2.3 or later within the 2.x series. Upgrade an existing installation with <code>pip install --upgrade 'wactorz[mcp]'</code>. The <code>wactorz-mcp</code> command, stdio transport, tool schemas, resource URIs and Wactorz environment variables keep the same configuration. SDK 2 does not read SDK-level <code>MCP_*</code> settings or <code>.env</code> files; pass the Wactorz variables below through your MCP client's environment.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Terminal 1: start Wactorz REST</span>
 wactorz<span class="w"> </span>--interface<span class="w"> </span>rest<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 
